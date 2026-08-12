@@ -5,7 +5,6 @@ import { HttpWorkerClient } from './runtime/http-client.js';
 import { WorkerRuntime } from './runtime/client.js';
 import { ScriptedPlanner } from './runtime/planner.js';
 import { createWorkerLogger } from './runtime/logger.js';
-import { WorkerClientError } from './runtime/errors.js';
 
 export const loadWorkerConfig = (env: NodeJS.ProcessEnv = process.env) =>
   workerConfigSchema.parse({
@@ -61,14 +60,9 @@ export const runWorkerDaemon = async (
         await runtime.runOnce();
         backoff = config.pollMs;
         await sleep(config.pollMs);
-      } catch (error) {
-        if (error instanceof WorkerClientError && error.code === 'not_found') {
-          await sleep(backoff);
-          backoff = Math.min(backoff * 2, 30000);
-        } else {
-          await sleep(backoff);
-          backoff = Math.min(backoff * 2, 30000);
-        }
+      } catch {
+        await sleep(backoff);
+        backoff = Math.min(backoff * 2, 30000);
       }
     }
     await executor.close();
