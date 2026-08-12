@@ -58,7 +58,7 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
     }
     const { repository, close } = await makeHarness();
     try {
-      await repository.savePool({ id: 'pool-1', visibility: 'private', ownerUserId: 'user-1', tags: { os: 'linux' } });
+      await repository.savePool({ id: 'pool-1', visibility: 'org', ownerUserId: 'user-1', sharedWithGroups: ['eng'], tags: { os: 'linux' } });
       await repository.saveMachine({ id: 'machine-1', poolId: 'pool-1', tags: { browser: true }, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
       await repository.saveProfile({ id: 'profile-1', userId: 'user-1', machineId: 'machine-1' });
       const task = baseTask({ profileId: 'profile-1', poolId: 'pool-1' });
@@ -67,7 +67,7 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
       const event: WebhookEvent = { id: 'event-1', type: 'task.state_changed', taskId: task.id, userId: task.userId, timestamp: task.createdAt, payload: { status: 'submitted' }, delivery: { status: 'pending', attempts: 0 } };
       await repository.saveWebhook(event);
       await repository.savePendingInput(task.id, { kind: 'text', value: 'secret' });
-      expect(await repository.getPool('pool-1')).toMatchObject({ ownerUserId: 'user-1' });
+      expect(await repository.getPool('pool-1')).toMatchObject({ ownerUserId: 'user-1', sharedWithGroups: ['eng'] });
       expect(await repository.listPoolsByOwner('user-1')).toHaveLength(1);
       expect(await repository.getMachine('machine-1')).toMatchObject({ activeLeases: 0 });
       expect(await repository.listMachines('pool-1')).toHaveLength(1);

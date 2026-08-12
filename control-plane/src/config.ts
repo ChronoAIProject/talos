@@ -9,7 +9,7 @@ const configSchema = z.object({
   TALOS_DATABASE_URL: z.string().url().refine((value) => value.startsWith('mongodb://') || value.startsWith('mongodb+srv://'), 'TALOS_DATABASE_URL must use mongodb or mongodb+srv').optional(),
   TALOS_DATABASE_NAME: z.string().trim().min(1).default('talos'),
   TALOS_NYXID_JWT_PUBLIC_KEY: z.string().min(1).optional(),
-  TALOS_NYXID_JWKS_URL: z.string().url().optional(),
+  TALOS_NYXID_JWKS_URL: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'TALOS_NYXID_JWKS_URL must use http or https').optional(),
   TALOS_NYXID_ISSUER: z.string().min(1).optional(),
   TALOS_NYXID_AUDIENCE: z.string().min(1).optional()
 }).superRefine((value, context) => {
@@ -17,6 +17,7 @@ const configSchema = z.object({
   if (sourceConfigured && value.TALOS_NYXID_ISSUER === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_ISSUER'], message: 'required when NyxID JWT verification is configured' });
   if (sourceConfigured && value.TALOS_NYXID_AUDIENCE === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_AUDIENCE'], message: 'required when NyxID JWT verification is configured' });
   if (value.TALOS_NYXID_JWT_PUBLIC_KEY !== undefined && value.TALOS_NYXID_JWKS_URL !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_JWKS_URL'], message: 'configure either public key or JWKS URL, not both' });
+  if (!sourceConfigured && (value.TALOS_NYXID_ISSUER !== undefined || value.TALOS_NYXID_AUDIENCE !== undefined)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_ISSUER'], message: 'configure a public key or JWKS URL with issuer and audience' });
 });
 
 export interface TalosConfig {

@@ -46,4 +46,20 @@ describe('Scheduler eligibility', () => {
     expect(await scheduler.isEligible(task(), 'offline', 'u')).toBeUndefined();
   });
 
+  it('enforces org group sharing with closed-by-default semantics', async () => {
+    const repository = new MemoryRepository();
+    const scheduler = new Scheduler(repository);
+    await repository.savePool({ id: 'org', visibility: 'org', ownerUserId: 'owner', sharedWithGroups: ['eng'], tags: {} });
+    await repository.savePool({ id: 'closed', visibility: 'org', ownerUserId: 'owner', tags: {} });
+    await repository.saveMachine({ id: 'org-machine', poolId: 'org', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    await repository.saveMachine({ id: 'closed-machine', poolId: 'closed', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const orgTask = task({}, 'browse', undefined, 'org');
+    const closedTask = task({}, 'browse', undefined, 'closed');
+    expect(await scheduler.isEligible(orgTask, 'org-machine', 'member', ['eng'])).toBeDefined();
+    expect(await scheduler.isEligible(orgTask, 'org-machine', 'member', ['sales'])).toBeUndefined();
+    expect(await scheduler.isEligible(orgTask, 'org-machine', 'owner')).toBeDefined();
+    expect(await scheduler.isEligible(closedTask, 'closed-machine', 'member', ['eng'])).toBeUndefined();
+    expect(await scheduler.isEligible(closedTask, 'closed-machine', 'owner')).toBeDefined();
+  });
+
 });

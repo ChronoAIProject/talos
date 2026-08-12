@@ -95,3 +95,4 @@ export * from './storage/memory-repository.js';
 export * from './storage/mongo-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';
+export * from './identity.js';

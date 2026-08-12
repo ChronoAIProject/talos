@@ -17,8 +17,8 @@ export class DevIdentityResolver implements IdentityResolver {
     const [userPart = '', ...attributes] = token.split(';');
     const userId = userPart.slice(5);
     if (userId.length === 0) return undefined;
-    const groups = attributes.find((value) => value.startsWith('groups='))?.slice(7).split(',').filter(Boolean) ?? [];
-    const permissions = attributes.find((value) => value.startsWith('permissions='))?.slice(12).split(',').filter(Boolean) ?? [];
+    const groups = parseAttribute(attributes, 'groups');
+    const permissions = parseAttribute(attributes, 'permissions');
     return { userId, groups, permissions };
   }
 }
@@ -36,6 +36,7 @@ export class JwtIdentityResolver implements IdentityResolver {
 
   public constructor(options: JwtIdentityResolverOptions) {
     if ((options.publicKey === undefined) === (options.jwksUrl === undefined)) throw new Error('configure exactly one NyxID JWT public key or JWKS URL');
+    if (options.jwksUrl !== undefined && !['http:', 'https:'].includes(new URL(options.jwksUrl).protocol)) throw new Error('NyxID JWKS URL must use http or https');
     this.key = options.publicKey === undefined
       ? createRemoteJWKSet(new URL(options.jwksUrl as string))
       : createPublicKey(options.publicKey);
@@ -44,9 +45,17 @@ export class JwtIdentityResolver implements IdentityResolver {
 
   public async resolve(token: string): Promise<ResolvedIdentity | undefined> {
     try {
-      const verified = await jwtVerify(token, this.key, { algorithms: ['RS256'], issuer: this.options.issuer, audience: this.options.audience });
+      const verified = await jwtVerify(token, this.key, {
+        algorithms: ['RS256'],
+        issuer: this.options.issuer,
+        audience: this.options.audience,
+        maxTokenAge: '60s'
+      });
       const subject = typeof verified.payload.sub === 'string' ? verified.payload.sub : undefined;
       if (subject === undefined) return undefined;
+      const issuedAt = verified.payload.iat;
+      const expiresAt = verified.payload.exp;
+      if (typeof issuedAt !== 'number' || typeof expiresAt !== 'number' || issuedAt > Math.floor(Date.now() / 1000) + 60) return undefined;
       return {
         userId: subject,
         groups: stringArray(verified.payload.groups),
@@ -59,3 +68,10 @@ export class JwtIdentityResolver implements IdentityResolver {
 }
 
 const stringArray = (value: unknown): readonly string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+const parseAttribute = (attributes: readonly string[], name: string): readonly string[] => {
+  const attribute = attributes.find((value) => value.startsWith(`${name}=`) || value.startsWith(`${name}:`));
+  if (attribute === undefined) return [];
+  const separator = attribute.indexOf('=') >= 0 ? '=' : ':';
+  return attribute.slice(attribute.indexOf(separator) + 1).split(',').filter(Boolean);
+};

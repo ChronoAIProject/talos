@@ -153,7 +153,7 @@ describe('control-plane HTTP API', () => {
     const poolResponse = await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'alice-pool', visibility: 'private', tags: { region: 'local' } }) });
     expect(poolResponse.status).toBe(201);
     expect((await poolResponse.json() as { visibility: string }).visibility).toBe('private');
-    expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'bad-org', visibility: 'org' }) })).status).toBe(403);
+    expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'bad-org', visibility: 'org' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'forged-owner', owner_user_id: 'bob' }) })).status).toBe(400);
     expect((await fetch(`${base}/v1/pools/alice-pool/machines`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'alice-machine' }) })).status).toBe(403);
     const machineResponse = await fetch(`${base}/v1/pools/alice-pool/machines`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'alice-machine', tags: { os: 'macos' } }) });
@@ -224,6 +224,37 @@ describe('control-plane HTTP API', () => {
     expect(foreign.status).toBe(403);
     const unknown = await fetch(`${base}/v1/tasks`, { method: 'POST', headers, body: JSON.stringify({ kind: 'browse', goal: 'unknown', pool_id: 'missing-pool' }) });
     expect(unknown.status).toBe(404);
+    server.close();
+  });
+
+  it('shares an org pool with matching NyxID groups through claim and completion', async () => {
+    const repository = new MemoryRepository();
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const identity = (value: string) => ({ 'x-nyxid-identity-token': value, 'content-type': 'application/json' });
+    const owner = identity('user:alice');
+    const member = identity('user:bob;groups=eng');
+    await expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: owner, body: JSON.stringify({ id: 'eng-pool', visibility: 'org', shared_with_groups: ['eng'] }) })).status).toBe(201);
+    const enrolled = await fetch(`${base}/v1/pools/eng-pool/machines`, { method: 'POST', headers: owner, body: JSON.stringify({ id: 'eng-machine' }) });
+    const token = (await enrolled.json() as { worker_token: string }).worker_token;
+    const submitted = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: member, body: JSON.stringify({ kind: 'browse', goal: 'shared', pool_id: 'eng-pool' }) });
+    expect(submitted.status).toBe(201);
+    expect((await fetch(`${base}/v1/tasks`, { method: 'POST', headers: identity('user:bob;groups=sales'), body: JSON.stringify({ kind: 'browse', goal: 'denied', pool_id: 'eng-pool' }) })).status).toBe(403);
+    const task = await submitted.json() as { id: string };
+    const workerHeaders = { authorization: `Bearer ${token}`, 'x-talos-machine-id': 'eng-machine', 'x-talos-worker-id': 'worker', 'content-type': 'application/json' };
+    const claim = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ worker_id: 'worker', machine_id: 'eng-machine' }) });
+    expect(claim.status).toBe(200);
+    const lease = await claim.json() as { leaseToken: string };
+    const result = await fetch(`${base}/v1/worker/tasks/${task.id}/result`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ lease_token: lease.leaseToken, status: 'completed' }) });
+    expect(result.status).toBe(200);
+    const patch = await fetch(`${base}/v1/pools/eng-pool`, { method: 'PATCH', headers: owner, body: JSON.stringify({ shared_with_groups: ['ops'] }) });
+    expect(patch.status).toBe(200);
+    expect((await fetch(`${base}/v1/pools/eng-pool`, { method: 'PATCH', headers: member, body: JSON.stringify({ visibility: 'private' }) })).status).toBe(403);
+    expect((await fetch(`${base}/v1/pools/eng-pool`, { method: 'PATCH', headers: owner, body: JSON.stringify({ visibility: 'platform' }) })).status).toBe(400);
     server.close();
   });
 

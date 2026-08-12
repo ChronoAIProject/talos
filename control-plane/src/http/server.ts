@@ -24,7 +24,7 @@ import type { TaskService } from '../services/task-service.js';
 import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
 import { newId } from '../util/id.js';
-import type { IdentityResolver, ResolvedIdentity } from '../identity.js';
+import { DevIdentityResolver, type IdentityResolver, type ResolvedIdentity } from '../identity.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -33,17 +33,7 @@ export interface ServerOptions {
   clock?: () => number;
 }
 
-export const defaultIdentityResolver: IdentityResolver = new (class {
-  public resolve(token: string): ResolvedIdentity | undefined {
-    if (!token.startsWith('user:')) return undefined;
-    const [userPart = '', ...attributes] = token.split(';');
-    const userId = userPart.slice(5);
-    if (userId.length === 0) return undefined;
-    const groups = attributes.find((value) => value.startsWith('groups='))?.slice(7).split(',').filter(Boolean) ?? [];
-    const permissions = attributes.find((value) => value.startsWith('permissions='))?.slice(12).split(',').filter(Boolean) ?? [];
-    return { userId, groups, permissions };
-  }
-})();
+export const defaultIdentityResolver: IdentityResolver = new DevIdentityResolver();
 
 export const createApiServer = (
   service: TaskService,
