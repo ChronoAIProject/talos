@@ -5,18 +5,14 @@ export default defineConfig({
     include: ['control-plane/src/**/*.test.ts', 'worker/src/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      thresholds: { lines: 80, functions: 80, branches: 70, statements: 80 },
+      thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
       include: ['control-plane/src/**/*.ts', 'worker/src/**/*.ts'],
       exclude: [
         '**/*.test.ts',
-        '**/index.ts',
         '**/domain/types.ts',
         '**/storage/repository.ts',
-        '**/util/logger.ts',
         '**/executor/executor.ts',
-        '**/executor/browser-executor.ts',
-        '**/runtime/http-client.ts',
-        '**/config.ts'
+        '**/worker/src/index.ts'
       ]
     }
   }

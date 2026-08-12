@@ -43,5 +43,8 @@ Architecture overview page (diagrams, decisions, weekly deliverables):
 
 ## Status
 
-Research and design phase. See `docs/DESIGN.md` for the full design and open
-questions; nothing is implemented yet.
+Phase 1 is implemented. The control plane, async in-memory registry, signed webhook
+dispatcher, lease sweep, authenticated admin registration, worker runtime, scripted
+planner, BrowserExecutor, and catalog OpenAPI spec are available. Phase 2/3 hosted
+login and payment handoff machinery remains a typed `not_implemented` path as called
+out in `docs/IMPLEMENTATION.md`.
