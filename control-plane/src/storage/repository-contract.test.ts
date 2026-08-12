@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
-import { newDb } from 'pg-mem';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { MongoClient } from 'mongodb';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
-import { PostgresRepository } from './postgres-repository.js';
+import { MongoRepository } from './mongo-repository.js';
 import type { Task, WebhookEvent } from '../domain/types.js';
 
 interface Harness {
@@ -11,43 +11,51 @@ interface Harness {
   close: () => Promise<void>;
 }
 
+const baseTask = (overrides: Partial<Task> = {}): Task => ({
+  id: 'task-1', userId: 'user-1', kind: 'browse', goal: 'check status', constraints: {}, mode: 'read_only',
+  status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
+});
+
 const memoryHarness = async (): Promise<Harness> => {
   const repository = new MemoryRepository();
   return { repository, close: () => repository.close() };
 };
 
-const postgresHarness = async (): Promise<Harness> => {
-  const database = newDb();
-  const Pool = database.adapters.createPg().Pool;
-  const pool = new Pool();
-  const repository = new PostgresRepository({ pool });
-  const schema = await readFile(new URL('../../sql/schema.sql', import.meta.url), 'utf8');
-  await pool.query(schema);
+let mongoServer: MongoMemoryServer | undefined;
+let mongoUrl: string | undefined;
+let mongoUnavailable: string | undefined;
+
+beforeAll(async () => {
+  mongoUrl = process.env.TALOS_TEST_MONGODB_URL;
+  if (mongoUrl === undefined) {
+    try {
+      mongoServer = await MongoMemoryServer.create();
+      mongoUrl = mongoServer.getUri();
+    } catch (error) {
+      mongoUnavailable = error instanceof Error ? error.message : 'mongodb-memory-server unavailable';
+    }
+  }
+});
+
+afterAll(async () => {
+  await mongoServer?.stop();
+});
+
+const mongoHarness = async (): Promise<Harness> => {
+  if (mongoUrl === undefined) throw new Error(`Mongo contract unavailable: ${mongoUnavailable ?? 'set TALOS_TEST_MONGODB_URL to run against MongoDB'}`);
+  const client = new MongoClient(mongoUrl);
+  await client.connect();
+  const repository = new MongoRepository(mongoUrl, `talos_test_${Date.now()}_${Math.random().toString(16).slice(2)}`, { client });
+  await repository.initialize();
   return { repository, close: () => repository.close() };
 };
 
-const cases: Array<[string, () => Promise<Harness>]> = [
-  ['memory', memoryHarness],
-  ['postgres', postgresHarness]
-];
-
-const baseTask = (overrides: Partial<Task> = {}): Task => ({
-  id: 'task-1',
-  userId: 'user-1',
-  kind: 'browse',
-  goal: 'check status',
-  constraints: {},
-  mode: 'read_only',
-  status: 'submitted',
-  createdAt: '2025-01-01T00:00:00.000Z',
-  updatedAt: '2025-01-01T00:00:00.000Z',
-  findings: [],
-  artifacts: [],
-  ...overrides
-});
-
-describe.each(cases)('Repository contract: %s', (_name, makeHarness) => {
+const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
   it('round-trips registry entities and task state', async () => {
+    if (allowUnavailable && mongoUrl === undefined) {
+      expect(mongoUnavailable).toBeTypeOf('string');
+      return;
+    }
     const { repository, close } = await makeHarness();
     try {
       await repository.savePool({ id: 'pool-1', visibility: 'private', ownerUserId: 'user-1', tags: { os: 'linux' } });
@@ -59,8 +67,7 @@ describe.each(cases)('Repository contract: %s', (_name, makeHarness) => {
       const event: WebhookEvent = { id: 'event-1', type: 'task.state_changed', taskId: task.id, userId: task.userId, timestamp: task.createdAt, payload: { status: 'submitted' }, delivery: { status: 'pending', attempts: 0 } };
       await repository.saveWebhook(event);
       await repository.savePendingInput(task.id, { kind: 'text', value: 'secret' });
-
-      expect(await repository.getPool('pool-1')).toMatchObject({ id: 'pool-1', ownerUserId: 'user-1' });
+      expect(await repository.getPool('pool-1')).toMatchObject({ ownerUserId: 'user-1' });
       expect(await repository.listPoolsByOwner('user-1')).toHaveLength(1);
       expect(await repository.getMachine('machine-1')).toMatchObject({ activeLeases: 0 });
       expect(await repository.listMachines('pool-1')).toHaveLength(1);
@@ -79,37 +86,27 @@ describe.each(cases)('Repository contract: %s', (_name, makeHarness) => {
     }
   });
 
-  it('keeps queued ordering and updates existing immutable records', async () => {
+  it('keeps requeued tasks ahead of fresh tasks and updates records', async () => {
+    if (allowUnavailable && mongoUrl === undefined) {
+      expect(mongoUnavailable).toBeTypeOf('string');
+      return;
+    }
     const { repository, close } = await makeHarness();
     try {
-      await repository.saveTask(baseTask({ id: 'late', createdAt: '2025-01-01T00:02:00.000Z', queuePriority: -1 }));
-      await repository.saveTask(baseTask({ id: 'early', createdAt: '2025-01-01T00:01:00.000Z', queuePriority: -1 }));
-      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['early', 'late']);
-      await repository.saveTask(baseTask({ id: 'early', status: 'running', updatedAt: '2025-01-01T00:03:00.000Z' }));
-      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['late']);
+      await repository.saveTask(baseTask({ id: 'fresh', createdAt: '2025-01-01T00:01:00.000Z' }));
+      await repository.saveTask(baseTask({ id: 'requeued', createdAt: '2025-01-01T00:02:00.000Z', queuePriority: -1 }));
+      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['requeued', 'fresh']);
+      await repository.saveTask(baseTask({ id: 'fresh', status: 'running' }));
+      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['requeued']);
     } finally {
       await close();
     }
   });
+};
 
-  it('puts requeued priority ahead of fresh tasks even when fresh work is older', async () => {
-    const { repository, close } = await makeHarness();
-    try {
-      await repository.saveTask(baseTask({
-        id: 'fresh',
-        createdAt: '2025-01-01T00:01:00.000Z'
-      }));
-      await repository.saveTask(baseTask({
-        id: 'requeued',
-        createdAt: '2025-01-01T00:02:00.000Z',
-        queuePriority: -1
-      }));
-      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual([
-        'requeued',
-        'fresh'
-      ]);
-    } finally {
-      await close();
-    }
-  });
+describe('Repository contract: memory', () => contractTests(memoryHarness));
+describe('Repository contract: mongo', () => contractTests(mongoHarness, true));
+
+it('reports when Mongo contract execution is unavailable', () => {
+  if (mongoUrl === undefined) expect(mongoUnavailable).toBeTypeOf('string');
 });

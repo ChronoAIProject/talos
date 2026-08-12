@@ -15,12 +15,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/pg": "^8.21.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
     "@vitest/coverage-v8": "^2.1.8",
     "eslint": "^9.17.0",
-    "pg-mem": "^3.0.14",
+    "mongodb-memory-server": "^11.2.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

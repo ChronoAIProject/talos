@@ -6,7 +6,7 @@ import { TaskService } from './services/task-service.js';
 import { WebhookSigner } from './services/webhook-signer.js';
 import { WebhookDispatcher, type WebhookDispatcherOptions } from './services/webhook-dispatcher.js';
 import { MemoryRepository } from './storage/memory-repository.js';
-import { PostgresRepository } from './storage/postgres-repository.js';
+import { MongoRepository } from './storage/mongo-repository.js';
 import type { Repository } from './storage/repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
@@ -14,8 +14,8 @@ import { createLogger } from './util/logger.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
-export const createRepository = (databaseUrl = process.env.TALOS_DATABASE_URL): Repository => {
-  if (databaseUrl !== undefined) return new PostgresRepository({ poolConfig: { connectionString: databaseUrl } });
+export const createRepository = (databaseUrl = process.env.TALOS_DATABASE_URL, databaseName = process.env.TALOS_DATABASE_NAME ?? 'talos'): Repository => {
+  if (databaseUrl !== undefined) return new MongoRepository(databaseUrl, databaseName);
   createLogger().warn('using in-memory repository; state is ephemeral and lost on restart');
   return new MemoryRepository();
 };
@@ -57,8 +57,8 @@ export const createControlPlane = (
 /* c8 ignore next: process entrypoint branch is exercised by the deployed process, not unit imports. */
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
-  const repository = createRepository(config.databaseUrl);
-  if (repository instanceof PostgresRepository) await repository.initialize();
+  const repository = createRepository(config.databaseUrl, config.databaseName);
+  if (repository instanceof MongoRepository) await repository.initialize();
   const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs });
   const shutdown = (): void => {
     server.stopSweep();
@@ -78,6 +78,6 @@ export * from './services/profile-lock.js';
 export * from './services/webhook-signer.js';
 export * from './services/webhook-dispatcher.js';
 export * from './storage/memory-repository.js';
-export * from './storage/postgres-repository.js';
+export * from './storage/mongo-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';
