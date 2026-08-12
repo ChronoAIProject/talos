@@ -24,19 +24,31 @@ paths:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/tasks/{id}:
     parameters: [{ $ref: '#/components/parameters/TaskId' }]
     get:
       operationId: getTask
-      responses: { '200': { description: Task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/tasks/{id}/input:
     post:
       operationId: provideTaskInput
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/TaskInput' } } }
-      responses: { '200': { description: Updated task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Updated task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/tasks/{id}/handoff:
     post:
       operationId: requestTaskHandoff
@@ -44,6 +56,11 @@ paths:
         content: { application/json: { schema: { type: object, properties: { expires_in_seconds: { type: integer, minimum: 1, maximum: 3600, default: 900 } } } } }
       responses:
         '200': { description: Handoff link, content: { application/json: { schema: { $ref: '#/components/schemas/Handoff' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '501': { $ref: '#/components/responses/NotImplemented' }
   /v1/tasks/{id}/cancel:
     post:
