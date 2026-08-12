@@ -28,7 +28,7 @@ export class PostgresRepository implements Repository {
   }
 
   public async initialize(): Promise<void> {
-    const schema = await readFile(fileURLToPath(new URL('../../sql/schema.sql', import.meta.url)), 'utf8');
+    const schema = await readFile(fileURLToPath(new URL('../../../control-plane/sql/schema.sql', import.meta.url)), 'utf8');
     await this.pool.query(schema);
   }
 
