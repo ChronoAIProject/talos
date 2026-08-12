@@ -69,6 +69,26 @@ export interface Task {
   handoff?: { url: string; expiresAt: string };
 }
 
+export interface PublicTask {
+  id: string;
+  userId: string;
+  kind: TaskKind;
+  goal: string;
+  siteHint?: string;
+  profileId?: string;
+  constraints: TaskConstraints;
+  mode: TaskMode;
+  callback?: string;
+  status: TaskStatus;
+  createdAt: string;
+  updatedAt: string;
+  claimedAt?: string;
+  findings: readonly TaskFinding[];
+  artifacts: readonly Artifact[];
+  error?: { code: string; message: string };
+  handoff?: { url: string; expiresAt: string };
+}
+
 export interface Pool {
   id: string;
   visibility: 'private' | 'org' | 'platform';

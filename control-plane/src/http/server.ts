@@ -111,7 +111,10 @@ const route = async (
     }
     if (action === 'cancel') return send(response, 200, service.toPublicTask(await service.cancel(taskId, userId)));
   }
-  if (parts[1] === 'profiles' && parts[3] === 'login-link' && method === 'POST') {
+  if (parts[1] === 'profiles' && parts[2] !== undefined && parts[3] === 'login-link' && method === 'POST') {
+    const profile = await repository.getProfile(parts[2]);
+    if (profile === undefined) throw notFound('profile not found');
+    if (profile.userId !== userId) throw unauthorized('profile belongs to another user');
     throw notImplemented('profile login links are planned for Phase 2');
   }
   return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });

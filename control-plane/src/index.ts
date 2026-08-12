@@ -11,15 +11,31 @@ import type { Server } from 'node:http';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; }
 
-export const createControlPlane = (repository = new MemoryRepository(), webhookSecret = process.env.TALOS_WEBHOOK_SECRET, options: { adminToken?: string; sweepIntervalMs?: number; webhook?: Omit<WebhookDispatcherOptions, 'clock'> } = {}): ControlPlaneServer => {
+export const createControlPlane = (
+  repository = new MemoryRepository(),
+  webhookSecret = process.env.TALOS_WEBHOOK_SECRET,
+  options: {
+    adminToken?: string;
+    sweepIntervalMs?: number;
+    webhook?: Omit<WebhookDispatcherOptions, 'clock'>;
+  } = {}
+): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
   const scheduler = new Scheduler(repository);
   const profiles = new ProfileLockService(repository);
   const signer = new WebhookSigner(webhookSecret);
   const dispatcher = new WebhookDispatcher(repository, signer, options.webhook);
-  const service = new TaskService(repository, scheduler, profiles, signer, { validateCallback: (callback) => dispatcher.validateCallback(callback), onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed) });
-  const server = createApiServer(service, repository, { adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN, clock: Date.now }) as ControlPlaneServer;
-  const interval = setInterval(() => { void service.expireLeases(); }, options.sweepIntervalMs ?? 10000);
+  const service = new TaskService(repository, scheduler, profiles, signer, {
+    validateCallback: (callback) => dispatcher.validateCallback(callback),
+    onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed)
+  });
+  const server = createApiServer(service, repository, {
+    adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
+    clock: Date.now
+  }) as ControlPlaneServer;
+  const interval = setInterval(() => {
+    void service.expireLeases();
+  }, options.sweepIntervalMs ?? 10000);
   interval.unref();
   server.stopSweep = (): void => clearInterval(interval);
   return server;

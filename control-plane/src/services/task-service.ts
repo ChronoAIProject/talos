@@ -1,7 +1,7 @@
 import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
+import type { Lease, PublicTask, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -41,12 +41,20 @@ export class TaskService {
     if (data.profile_id !== undefined) await this.profiles.assertOwner(data.profile_id, userId);
     const now = new Date(this.clock()).toISOString();
     const task: Task = {
-      id: newId('task'), userId, kind: data.kind, goal: data.goal,
+      id: newId('task'),
+      userId,
+      kind: data.kind,
+      goal: data.goal,
       ...(data.site_hint === undefined ? {} : { siteHint: data.site_hint }),
       ...(data.profile_id === undefined ? {} : { profileId: data.profile_id }),
-      constraints: data.constraints, mode: data.mode,
+      constraints: data.constraints,
+      mode: data.mode,
       ...(data.callback === undefined ? {} : { callback: data.callback }),
-      status: 'submitted', createdAt: now, updatedAt: now, findings: [], artifacts: []
+      status: 'submitted',
+      createdAt: now,
+      updatedAt: now,
+      findings: [],
+      artifacts: []
     };
     await this.repository.saveTask(task);
     await this.emit(task, 'task.state_changed', { status: task.status });
@@ -69,7 +77,17 @@ export class TaskService {
         }
         const expiresAt = new Date(now + this.leaseSeconds * 1000).toISOString();
         const leaseToken = newId('lease');
-        const task: Task = { ...candidate, status: 'claimed', updatedAt: new Date(now).toISOString(), claimedAt: new Date(now).toISOString(), leaseExpiresAt: expiresAt, leaseToken, queuePriority: undefined, workerId, machineId };
+        const task: Task = {
+          ...candidate,
+          status: 'claimed',
+          updatedAt: new Date(now).toISOString(),
+          claimedAt: new Date(now).toISOString(),
+          leaseExpiresAt: expiresAt,
+          leaseToken,
+          queuePriority: undefined,
+          workerId,
+          machineId
+        };
         await this.repository.saveTask(task);
         await this.repository.saveMachine({ ...machine, activeLeases: machine.activeLeases + 1 });
         await this.emit(task, 'task.state_changed', { status: task.status });
@@ -86,7 +104,12 @@ export class TaskService {
     const task = await this.workerTask(taskId, workerId, leaseToken);
     const now = this.clock();
     const nextStatus = task.status === 'claimed' ? 'running' : task.status;
-    const updated: Task = { ...task, status: nextStatus, updatedAt: new Date(now).toISOString(), leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString() };
+    const updated: Task = {
+      ...task,
+      status: nextStatus,
+      updatedAt: new Date(now).toISOString(),
+      leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString()
+    };
     if (task.profileId !== undefined) await this.profiles.renew(task.profileId, task.id, now, extendSeconds);
     await this.repository.saveTask(updated);
     if (task.status !== updated.status) await this.emit(updated, 'task.state_changed', { status: updated.status });
@@ -95,7 +118,13 @@ export class TaskService {
 
   public async complete(taskId: string, workerId: string, leaseToken: string, status: 'completed' | 'failed', findings: readonly TaskFinding[], error?: { code: string; message: string }): Promise<Task> {
     const task = await this.workerTask(taskId, workerId, leaseToken);
-    const updated: Task = { ...task, status, updatedAt: new Date(this.clock()).toISOString(), findings: [...findings], ...(error === undefined ? {} : { error }) };
+    const updated: Task = {
+      ...task,
+      status,
+      updatedAt: new Date(this.clock()).toISOString(),
+      findings: [...findings],
+      ...(error === undefined ? {} : { error })
+    };
     await this.repository.saveTask(updated);
     await this.releaseLease(updated);
     await this.emit(updated, 'task.state_changed', { status });
@@ -105,7 +134,11 @@ export class TaskService {
 
   public async addArtifact(taskId: string, workerId: string, leaseToken: string, artifact: Task['artifacts'][number]): Promise<Task> {
     const task = await this.workerTask(taskId, workerId, leaseToken);
-    const updated: Task = { ...task, updatedAt: new Date(this.clock()).toISOString(), artifacts: [...task.artifacts, artifact] };
+    const updated: Task = {
+      ...task,
+      updatedAt: new Date(this.clock()).toISOString(),
+      artifacts: [...task.artifacts, artifact]
+    };
     await this.repository.saveTask(updated);
     return updated;
   }
@@ -122,7 +155,6 @@ export class TaskService {
       leaseExpiresAt: task.workerId === undefined ? task.leaseExpiresAt : new Date(now + this.leaseSeconds * 1000).toISOString()
     };
     if (task.workerId !== undefined && task.profileId !== undefined) await this.profiles.renew(task.profileId, task.id, now, this.leaseSeconds);
-    if (task.workerId !== undefined && task.profileId !== undefined) await this.profiles.renew(task.profileId, task.id, now, this.leaseSeconds);
     await this.repository.saveTask(updated);
     await this.emit(updated, 'task.state_changed', { status: updated.status });
     return updated;
@@ -130,7 +162,11 @@ export class TaskService {
 
   public async needsInput(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
     const task = await this.workerTask(taskId, workerId, leaseToken);
-    const updated: Task = { ...task, status: 'needs_input', updatedAt: new Date(this.clock()).toISOString() };
+    const updated: Task = {
+      ...task,
+      status: 'needs_input',
+      updatedAt: new Date(this.clock()).toISOString()
+    };
     await this.repository.saveTask(updated);
     await this.emit(updated, 'task.needs_input', { status: updated.status });
     return updated;
@@ -150,7 +186,12 @@ export class TaskService {
     const linkId = newId('handoff');
     const url = `/v1/handoffs/${linkId}`;
     await this.repository.saveHandoff({ id: linkId, taskId: id, userId, url, expiresAt: expires, used: false });
-    const updated: Task = { ...task, status: 'handoff', updatedAt: new Date(this.clock()).toISOString(), handoff: { url, expiresAt: expires } };
+    const updated: Task = {
+      ...task,
+      status: 'handoff',
+      updatedAt: new Date(this.clock()).toISOString(),
+      handoff: { url, expiresAt: expires }
+    };
     await this.repository.saveTask(updated);
     await this.emit(updated, 'task.handoff_requested', { handoff_url: url, expires });
     return { handoff_url: url, expires };
@@ -159,7 +200,11 @@ export class TaskService {
   public async cancel(id: string, userId: string): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
     if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('task is already terminal');
-    const updated: Task = { ...task, status: 'cancelled', updatedAt: new Date(this.clock()).toISOString() };
+    const updated: Task = {
+      ...task,
+      status: 'cancelled',
+      updatedAt: new Date(this.clock()).toISOString()
+    };
     await this.repository.saveTask(updated);
     await this.releaseLease(updated);
     await this.emit(updated, 'task.state_changed', { status: updated.status });
@@ -172,13 +217,27 @@ export class TaskService {
     for (const candidate of active) {
       const current = await this.repository.getTask(candidate.id);
       if (current?.status === 'submitted' && current.constraints.deadline !== undefined && Date.parse(current.constraints.deadline) <= now) {
-        const failed: Task = { ...current, status: 'failed', updatedAt: new Date(now).toISOString(), error: { code: 'deadline_exceeded', message: deadlineExceeded().message } };
+        const failed: Task = {
+          ...current,
+          status: 'failed',
+          updatedAt: new Date(now).toISOString(),
+          error: { code: 'deadline_exceeded', message: deadlineExceeded().message }
+        };
         await this.repository.saveTask(failed);
         await this.emit(failed, 'task.state_changed', { status: failed.status, error: failed.error });
         continue;
       }
       if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running'].includes(current.status)) {
-        const requeued: Task = { ...current, status: 'submitted', updatedAt: new Date(now).toISOString(), leaseExpiresAt: undefined, leaseToken: undefined, workerId: undefined, machineId: undefined, queuePriority: -1 };
+        const requeued: Task = {
+          ...current,
+          status: 'submitted',
+          updatedAt: new Date(now).toISOString(),
+          leaseExpiresAt: undefined,
+          leaseToken: undefined,
+          workerId: undefined,
+          machineId: undefined,
+          queuePriority: -1
+        };
         await this.repository.saveTask(requeued);
         await this.releaseLease(current);
         expired.push(requeued);
@@ -230,8 +289,17 @@ export class TaskService {
     return signed;
   }
 
-  public toPublicTask(task: Task): Omit<Task, 'leaseToken'> {
-    const hidden = new Set(['leaseToken', 'queuePriority', 'workerId', 'machineId', 'leaseExpiresAt', 'input']);
-    return Object.fromEntries(Object.entries(task).filter(([key]) => !hidden.has(key))) as Omit<Task, 'leaseToken'>;
+  public toPublicTask(task: Task): PublicTask {
+    const hidden = new Set([
+      'leaseToken',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'input'
+    ]);
+    return Object.fromEntries(
+      Object.entries(task).filter(([key]) => !hidden.has(key))
+    ) as unknown as PublicTask;
   }
 }
