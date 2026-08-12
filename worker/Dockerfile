@@ -1,8 +1,8 @@
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
-COPY control-plane/package.json control-plane/tsconfig.json ./control-plane/
-COPY worker/package.json worker/tsconfig.json ./worker/
+COPY control-plane/package.json ./control-plane/
+COPY worker/package.json ./worker/
 RUN npm ci
 COPY worker ./worker
 RUN npm run build --workspace @talos/worker

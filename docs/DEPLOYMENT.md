@@ -9,6 +9,8 @@
 
 Required control-plane secrets are `TALOS_WEBHOOK_SECRET`, `TALOS_ADMIN_TOKEN`, and `TALOS_DATABASE_URL`. When the database URL is unset, Talos starts with an in-memory repository and logs a warning that state is ephemeral.
 
+When `TALOS_DATABASE_URL` is set, the control plane automatically runs `control-plane/sql/schema.sql` through `PostgresRepository.initialize()` before it starts listening. The file uses idempotent `CREATE TABLE IF NOT EXISTS` statements. The runtime database user therefore needs DDL privileges during startup. Operators who restrict the runtime user to DML can pre-apply this schema file with a migration job or administrative database user, then run Talos with the restricted runtime credentials.
+
 ## Build and Push
 
 Run from the repository root:
