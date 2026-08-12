@@ -122,7 +122,7 @@ describe('control-plane HTTP API', () => {
     const machineBody = await machineResponse.json() as { worker_token: string };
     expect(machineBody.worker_token).toMatch(/^tw_/);
     const machine = await repository.getMachine('alice-machine');
-    expect(machine?.workerTokenHash).not.toBe(machineBody.worker_token);
+    expect(machine?.workerTokenHash).toBe(hashWorkerToken(machineBody.worker_token));
     expect((await fetch(`${base}/v1/pools/alice-pool/machines`, { headers: user('bob') })).status).toBe(403);
     expect((await fetch(`${base}/v1/machines/alice-machine/rotate-token`, { method: 'POST', headers: user('bob'), body: '{}' })).status).toBe(403);
     expect((await fetch(`${base}/v1/machines/alice-machine/rotate-token`, { method: 'POST', headers: user('alice'), body: '{}' })).status).toBe(200);
@@ -165,12 +165,15 @@ describe('control-plane HTTP API', () => {
     const enrollment = await enrolled.json() as { worker_token: string };
     const task = await fetch(`${base}/v1/tasks`, { method: 'POST', headers, body: JSON.stringify({ kind: 'browse', goal: 'local', pool_id: 'alice-pool' }) });
     expect(task.status).toBe(201);
+    expect((await task.json() as { poolId: string }).poolId).toBe('alice-pool');
     const claimOnPlatform = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer platform-worker-token-123456', 'x-talos-machine-id': 'platform-machine', 'x-talos-worker-id': 'platform-worker', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'platform-worker', machine_id: 'platform-machine' }) });
     expect(claimOnPlatform.status).toBe(404);
     const claimOnAlice = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: `Bearer ${enrollment.worker_token}`, 'x-talos-machine-id': 'alice-machine', 'x-talos-worker-id': 'alice-worker', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'alice-worker', machine_id: 'alice-machine' }) });
     expect(claimOnAlice.status).toBe(200);
     const foreign = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:bob', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'browse', goal: 'foreign', pool_id: 'alice-pool' }) });
     expect(foreign.status).toBe(403);
+    const unknown = await fetch(`${base}/v1/tasks`, { method: 'POST', headers, body: JSON.stringify({ kind: 'browse', goal: 'unknown', pool_id: 'missing-pool' }) });
+    expect(unknown.status).toBe(404);
     server.close();
   });
 

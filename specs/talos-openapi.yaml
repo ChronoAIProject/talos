@@ -71,6 +71,91 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /v1/pools:
+    get:
+      operationId: listOwnedPools
+      description: Lists pools owned by the authenticated NyxID user, including any admin-provisioned org pool with that owner.
+      responses:
+        '200':
+          description: Caller-owned pools.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Pool' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createPrivatePool
+      description: Creates a private pool owned by the authenticated NyxID user. Org and platform pool creation is admin-only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivatePoolCreate' } } }
+      responses:
+        '201': { description: Created private pool., content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/pools/{id}/machines:
+    parameters: [{ $ref: '#/components/parameters/PoolId' }]
+    get:
+      operationId: listOwnedPoolMachines
+      description: Lists machines in a pool owned by the authenticated NyxID user. Worker token hashes are never returned.
+      responses:
+        '200':
+          description: Machines enrolled in the pool.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Machine' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: enrollOwnedPoolMachine
+      description: Enrolls a machine and returns its server-issued worker token once.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivateMachineCreate' } } }
+      responses:
+        '201': { description: Enrolled machine with one-time worker token., content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/machines/{id}/rotate-token:
+    parameters: [{ $ref: '#/components/parameters/MachineId' }]
+    post:
+      operationId: rotateOwnedMachineToken
+      description: Rotates the server-issued worker token for a machine in a caller-owned pool and returns it once.
+      requestBody:
+        content: { application/json: { schema: { type: object, additionalProperties: false, maxProperties: 0 } } }
+      responses:
+        '200': { description: Rotated worker token., content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/profiles:
+    get:
+      operationId: listOwnedProfiles
+      description: Lists profiles owned by the authenticated NyxID user without lock internals.
+      responses:
+        '200':
+          description: Caller-owned profiles.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createOwnedProfile
+      description: Creates a profile owned by the authenticated NyxID user. A pinned machine must belong to a caller-owned pool.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivateProfileCreate' } } }
+      responses:
+        '201': { description: Created profile., content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/profiles/{id}/login-link:
     parameters: [{ $ref: '#/components/parameters/ProfileId' }]
     post:
@@ -159,6 +244,7 @@ paths:
     post:
       security: [{ adminToken: [] }]
       operationId: registerPool
+      description: Administrative registration for org/platform pools and cross-user setup. User-owned private pools use POST /v1/pools.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
       responses:
         '201': { description: Registered pool, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
@@ -217,6 +303,7 @@ components:
     ProfileId: { name: id, in: path, required: true, schema: { type: string } }
     MachineId: { name: id, in: path, required: true, schema: { type: string } }
     HandoffId: { name: id, in: path, required: true, schema: { type: string } }
+    PoolId: { name: id, in: path, required: true, schema: { type: string } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
     workerToken: { type: http, scheme: bearer, description: Rotatable machine worker token. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header. }
@@ -241,6 +328,7 @@ components:
         goal: { type: string }
         site_hint: { type: string }
         profile_id: { type: string }
+        pool_id: { type: string, description: Restricts scheduling to this visible pool. Foreign private pools are rejected. }
         constraints: { type: object, description: Budget is advisory-only in Phase 1; deadline is enforced by the expiry sweep., properties: { budget: { type: number }, deadline: { type: string, format: date-time }, requirements: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } } } }
         mode: { type: string, enum: [read_only, act], default: read_only }
         callback: { type: string, format: uri }
@@ -258,6 +346,7 @@ components:
         goal: { type: string }
         siteHint: { type: string }
         profileId: { type: string }
+        poolId: { type: string }
         constraints: { type: object }
         mode: { type: string, enum: [read_only, act] }
         callback: { type: string, format: uri }
@@ -316,6 +405,53 @@ components:
       type: object
       required: [id, user_id]
       properties: { id: { type: string }, user_id: { type: string }, machine_id: { type: string } }
+    PrivatePoolCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Omit for a server-generated id. }
+        visibility: { type: string, const: private, description: Optional; any non-private value is rejected. }
+        owner_user_id: { type: string, description: Optional; when present it must match the authenticated user. Ownership is always derived from identity. }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+    Pool:
+      type: object
+      required: [id, visibility, ownerUserId, tags]
+      properties:
+        id: { type: string }
+        visibility: { type: string, enum: [private, org, platform] }
+        ownerUserId: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+    PrivateMachineCreate:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        capacity: { type: integer, minimum: 1, default: 1 }
+        online: { type: boolean, default: true }
+    Machine:
+      type: object
+      required: [id, tags, capacity, online, activeLeases]
+      properties:
+        id: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        capacity: { type: integer, minimum: 1 }
+        online: { type: boolean }
+        activeLeases: { type: integer, minimum: 0 }
+    PrivateProfileCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Omit for a server-generated id. }
+        machine_id: { type: string }
+    Profile:
+      type: object
+      required: [id, userId]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        machineId: { type: string }
     RegisteredResource:
       type: object
       required: [id]
