@@ -55,6 +55,13 @@ describe('control-plane HTTP API', () => {
     expect(unauthorizedMachine.status).toBe(401);
     const unsafeCallback = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'browse', goal: 'x', callback: 'file:///tmp/callback' }) });
     expect(unsafeCallback.status).toBe(400);
+
+    const taskResponse = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'browse', goal: 'cross-machine' }) });
+    const task = await taskResponse.json() as { id: string };
+    const claimResponse = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'machine', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'w', machine_id: 'machine' }) });
+    const claim = await claimResponse.json() as { leaseToken: string };
+    const crossMachine = await fetch(`${base}/v1/worker/tasks/${task.id}/heartbeat`, { method: 'POST', headers: { authorization: 'Bearer other-worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'other', 'content-type': 'application/json' }, body: JSON.stringify({ lease_token: claim.leaseToken }) });
+    expect(crossMachine.status).toBe(401);
     server.close();
   });
 
@@ -75,6 +82,8 @@ describe('control-plane HTTP API', () => {
     const handoff = await fetch(`${base}/v1/handoffs/h`, { headers: { 'x-nyxid-identity-token': 'user:u' } });
     expect(handoff.status).toBe(501);
     expect((await fetch(`${base}/v1/handoffs/h`, { headers: { 'x-nyxid-identity-token': 'user:u' } })).status).toBe(409);
+    await repository.saveHandoff({ id: 'expired', taskId: 't', userId: 'u', url: '/v1/handoffs/expired', expiresAt: new Date(500).toISOString(), used: false });
+    expect((await fetch(`${base}/v1/handoffs/expired`, { headers: { 'x-nyxid-identity-token': 'user:u' } })).status).toBe(409);
     server.close();
   });
 
@@ -95,6 +104,7 @@ describe('control-plane HTTP API', () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
+    await repository.saveProfile({ id: 'p', userId: 'u' });
     const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
     const server = createApiServer(service, repository);
     await new Promise<void>((resolve) => server.listen(0, resolve));
