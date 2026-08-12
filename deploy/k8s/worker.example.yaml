@@ -1,0 +1,48 @@
+# Platform-pool workers can run as containers. Private/org pools should run the
+# daemon directly on real macOS/Windows hardware when headed, residential, or
+# computer-use capabilities are required.
+# Register this machine through the admin API first and put the returned token in
+# the referenced Secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talos-platform-worker
+  namespace: talos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: talos-platform-worker
+  template:
+    metadata:
+      labels:
+        app: talos-platform-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/example/talos-worker:latest
+          env:
+            - name: TALOS_CONTROL_PLANE_URL
+              value: http://talos-control-plane
+            - name: TALOS_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TALOS_MACHINE_ID
+              value: replace-with-registered-machine-id
+            - name: TALOS_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: talos-worker-token
+                  key: TALOS_WORKER_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi

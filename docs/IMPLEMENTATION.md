@@ -12,4 +12,6 @@ Fleet ownership follows the Oracle user-owned pool model. Authenticated users cr
 
 The worker daemon is `worker/src/daemon.ts`. It validates environment configuration, creates the outbound HTTP client and Playwright/CDP executor, drives a planner-based action loop, renews leases, relays private human input, and handles SIGINT/SIGTERM. The default planner is deterministic and intentionally minimal until the agent-loop spike selects an LLM planner.
 
+Deployment uses `control-plane/Dockerfile` for the singleton control plane and `worker/Dockerfile` for Linux platform-pool workers. Kubernetes manifests live under `deploy/k8s/`; the control plane intentionally runs one replica with `Recreate`. Postgres persistence provides durability, not multi-replica claim atomicity. A future `SELECT ... FOR UPDATE SKIP LOCKED` transaction design is required before horizontal scaling.
+
 Scheduling requires explicit `computer_use: true` machine enrollment for `computer_use` tasks; browser tasks remain capability-neutral and match declared tags and capacity. Requeued leases use a constant priority bucket with original `createdAt` ordering. The public task shape excludes lease, worker, machine, queue, and private input fields; claim responses expose lease credentials only in the dedicated lease fields.
