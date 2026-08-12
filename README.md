@@ -43,13 +43,14 @@ Architecture overview page (diagrams, decisions, weekly deliverables):
 
 ## Status
 
-Phase 1 is implemented. The control plane, async in-memory registry, signed webhook
+Phase 1 is implemented. The control plane, durable MongoDB-backed registry (with an
+in-memory fallback for local development), signed webhook
 dispatcher, lease sweep, authenticated admin registration, worker runtime, scripted
 planner, BrowserExecutor, and catalog OpenAPI spec are available. Phase 2/3 hosted
 login and payment handoff machinery remains a typed `not_implemented` path as called
 out in `docs/IMPLEMENTATION.md`.
 
-For deployment, set the validated control-plane and worker environment variables and configure callback host policy for webhook delivery. NyxID-authenticated users create private pools, enroll their own machines, rotate worker tokens, and create profiles through `/v1/pools`, `/v1/machines`, and `/v1/profiles`; selecting `pool_id` on a task makes local versus remote execution an explicit pool choice. The admin-token routes remain for platform/org pools and cross-user setup. The default identity resolver is development-only and must be replaced with a verifying NyxID resolver in production.
+For deployment, set the validated control-plane and worker environment variables and configure callback host policy for webhook delivery. Production identity is controlled by `TALOS_NYXID_JWT_PUBLIC_KEY` or `TALOS_NYXID_JWKS_URL`, together with `TALOS_NYXID_ISSUER` and `TALOS_NYXID_AUDIENCE`. NyxID-authenticated users create private or group-shared org pools, enroll their own machines, rotate worker tokens, and create profiles through `/v1/pools`, `/v1/machines`, and `/v1/profiles`; owners update sharing with `PATCH /v1/pools/{id}`. Selecting `pool_id` on a task makes local versus remote execution an explicit pool choice. The admin-token routes remain for platform pools and cross-user setup. Without JWT settings Talos logs a loud warning and accepts only the development stub syntax.
 
 ## Worker installation
 

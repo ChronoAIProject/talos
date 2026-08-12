@@ -5,8 +5,8 @@ info:
   description: |
     Capability-neutral asynchronous machine-operation tasks for NyxID catalog registration.
     Public requests are scoped by X-NyxID-Identity-Token. Worker endpoints use rotatable
-    pool worker tokens and are intended for outbound-only worker connections. The default
-    identity resolver is a development stub; production must inject a verifying NyxID resolver.
+    pool worker tokens and are intended for outbound-only worker connections. Production verifies
+    NyxID's short-lived RS256 assertions (sub, iss, aud, exp, iat and groups) using configured key material.
 servers:
   - url: https://talos.example.invalid
   # /healthz is an operational Kubernetes probe and is intentionally omitted from the NyxID catalog contract.
@@ -82,16 +82,32 @@ paths:
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Pool' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
-      operationId: createPrivatePool
-      description: Creates a private pool owned by the authenticated NyxID user. Org and platform pool creation is admin-only.
+      operationId: createOwnedPool
+      description: Creates a private or org pool owned by the authenticated NyxID user. Org visibility requires a matching propagated group; an empty shared_with_groups list is owner-only. Platform creation remains admin-only.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/PrivatePoolCreate' } } }
       responses:
-        '201': { description: Created private pool., content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
+        '201': { description: Created private or org pool., content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/pools/{id}:
+    parameters: [{ $ref: '#/components/parameters/PoolId' }]
+    patch:
+      operationId: updateOwnedPool
+      description: Owner-only update of private/org visibility, tags, and group sharing. Platform visibility is admin-only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PoolPatch' } } }
+      responses:
+        '200': { description: Updated pool, content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/pools/{id}/machines:
@@ -245,7 +261,7 @@ paths:
     post:
       security: [{ adminToken: [] }]
       operationId: registerPool
-      description: Administrative registration for org/platform pools and cross-user setup. User-owned private pools use POST /v1/pools.
+      description: Administrative registration for org/platform pools and cross-user setup. User-owned private or org pools use POST /v1/pools.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
       responses:
         '201': { description: Registered pool, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
@@ -400,7 +416,7 @@ components:
     AdminPool:
       type: object
       required: [id, visibility]
-      properties: { id: { type: string }, visibility: { type: string, enum: [private, org, platform] }, owner_user_id: { type: string }, tags: { type: object } }
+      properties: { id: { type: string }, visibility: { type: string, enum: [private, org, platform] }, owner_user_id: { type: string }, tags: { type: object }, shared_with_groups: { type: array, items: { type: string } } }
     AdminMachine:
       type: object
       required: [id, pool_id]
@@ -414,8 +430,17 @@ components:
       additionalProperties: false
       properties:
         id: { type: string, description: Omit for a server-generated id. }
-        visibility: { type: string, const: private, description: Optional; any non-private value is rejected. }
+        visibility: { type: string, enum: [private, org], default: private }
         tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        shared_with_groups: { type: array, items: { type: string }, description: Group slugs allowed to see an org pool; empty is owner-only. }
+    PoolPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        visibility: { type: string, enum: [private, org] }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        shared_with_groups: { type: array, items: { type: string }, description: Group slugs allowed to see an org pool; empty is owner-only. }
     Pool:
       type: object
       required: [id, visibility, ownerUserId, tags]
@@ -424,6 +449,7 @@ components:
         visibility: { type: string, enum: [private, org, platform] }
         ownerUserId: { type: string }
         tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        sharedWithGroups: { type: array, items: { type: string }, description: Groups with visibility to an org pool. }
     PrivateMachineCreate:
       type: object
       additionalProperties: false

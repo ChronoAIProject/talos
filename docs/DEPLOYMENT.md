@@ -5,9 +5,9 @@
 - Node.js 22 for workers that run directly on real hardware.
 - Docker 24+ and a registry for building and pushing the control-plane and platform-worker images.
 - MongoDB 7 or newer. Use MongoDB Atlas or an operator such as the MongoDB Community Operator for production. `deploy/k8s/mongodb.example.yaml` is for development/testing only.
-- A verifying NyxID identity resolver and a production webhook callback host policy. The default `user:<id>` resolver is a development stub; see [IMPLEMENTATION.md](IMPLEMENTATION.md).
+- NyxID JWT verification settings: `TALOS_NYXID_JWT_PUBLIC_KEY` or `TALOS_NYXID_JWKS_URL`, `TALOS_NYXID_ISSUER`, and `TALOS_NYXID_AUDIENCE`. The development stub is only for local testing; see [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
-Required control-plane secrets are `TALOS_WEBHOOK_SECRET`, `TALOS_ADMIN_TOKEN`, and `TALOS_DATABASE_URL`. When the database URL is unset, Talos starts with an in-memory repository and logs a warning that state is ephemeral.
+Required control-plane secrets are `TALOS_WEBHOOK_SECRET`, `TALOS_ADMIN_TOKEN`, `TALOS_DATABASE_URL`, and the NyxID JWT settings for production. When the database URL is unset, Talos starts with an in-memory repository and logs a warning that state is ephemeral.
 
 When `TALOS_DATABASE_URL` is set, the control plane automatically creates its indexes through `MongoRepository.initialize()` before it starts listening. The runtime database user needs `createIndex` rights during startup. Operators who restrict runtime permissions can pre-create the indexes with an administrative user, then run Talos with credentials limited to normal reads and writes.
 
@@ -36,7 +36,7 @@ The worker image is for Linux platform-pool workers and includes Playwright brow
 
 ## Fleet Registration
 
-Platform and org pools, cross-user profiles, and initial machine enrollment use the `X-Talos-Admin-Token` routes. Users can enroll their own private fleet without platform-admin involvement using the NyxID-authenticated `POST /v1/pools`, `POST /v1/pools/{id}/machines`, `POST /v1/machines/{id}/rotate-token`, and `POST /v1/profiles` routes. Submit tasks with `pool_id` to select a local/private or remote/platform pool.
+Platform pools, cross-user profiles, and initial machine enrollment use the `X-Talos-Admin-Token` routes. Users can enroll their own private or org fleet without platform-admin involvement using the NyxID-authenticated `POST /v1/pools`, `POST /v1/pools/{id}/machines`, `POST /v1/machines/{id}/rotate-token`, and `POST /v1/profiles` routes. Pool owners share org pools by setting group slugs in `shared_with_groups`; members submit tasks with `pool_id` using their personal NyxID keys. Submit tasks with `pool_id` to select a local/private or remote/platform pool. An org-owned API key also works because `sub` is treated as the opaque owner id.
 
 Register the OpenAPI document at `specs/talos-openapi.yaml` in the NyxID catalog. `/healthz` is an operational Kubernetes probe and is intentionally omitted from that catalog contract.
 
