@@ -50,3 +50,7 @@ login and payment handoff machinery remains a typed `not_implemented` path as ca
 out in `docs/IMPLEMENTATION.md`.
 
 For deployment, set the validated control-plane and worker environment variables, register pools, machines, and profiles through the authenticated admin routes, and configure callback host policy for webhook delivery. The default identity resolver is development-only and must be replaced with a verifying NyxID resolver in production.
+
+## Worker installation
+
+Playwright is an optional dependency so a control-plane-only deployment can skip its browser binaries. A worker machine must install Playwright and its browser runtime; otherwise `BrowserExecutor` fails clearly when it receives its first claim.

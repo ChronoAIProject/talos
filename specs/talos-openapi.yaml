@@ -161,7 +161,7 @@ paths:
       operationId: registerPool
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
       responses:
-        '201': { description: Registered pool }
+        '201': { description: Registered pool, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
@@ -171,7 +171,7 @@ paths:
       operationId: registerMachine
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMachine' } } } }
       responses:
-        '201': { description: Registered machine with worker token }
+        '201': { description: Registered machine with worker token, content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -180,10 +180,10 @@ paths:
     post:
       security: [{ adminToken: [] }]
       operationId: rotateMachineToken
-      parameters: [{ $ref: '#/components/parameters/TaskId' }]
+      parameters: [{ $ref: '#/components/parameters/MachineId' }]
       requestBody: { content: { application/json: { schema: { type: object, properties: { worker_token: { type: string, minLength: 16 } } } } } }
       responses:
-        '200': { description: Rotated worker token }
+        '200': { description: Rotated worker token, content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -194,7 +194,7 @@ paths:
       operationId: registerProfile
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminProfile' } } } }
       responses:
-        '201': { description: Registered profile }
+        '201': { description: Registered profile, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -203,7 +203,8 @@ paths:
     get:
       security: [{ nyxIdentity: [] }]
       operationId: consumeHandoff
-      parameters: [{ $ref: '#/components/parameters/TaskId' }]
+      description: Phase 1 validates ownership and expiry, marks a valid link used, then returns 501 because the hosted view is not implemented. Phase 3 will authenticate the hosted view through NyxID connect-link authorization instead of X-NyxID-Identity-Token.
+      parameters: [{ $ref: '#/components/parameters/HandoffId' }]
       responses:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -214,6 +215,8 @@ components:
   parameters:
     TaskId: { name: id, in: path, required: true, schema: { type: string } }
     ProfileId: { name: id, in: path, required: true, schema: { type: string } }
+    MachineId: { name: id, in: path, required: true, schema: { type: string } }
+    HandoffId: { name: id, in: path, required: true, schema: { type: string } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
     workerToken: { type: http, scheme: bearer, description: Rotatable machine worker token. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header. }
@@ -313,6 +316,17 @@ components:
       type: object
       required: [id, user_id]
       properties: { id: { type: string }, user_id: { type: string }, machine_id: { type: string } }
+    RegisteredResource:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+    MachineTokenResponse:
+      type: object
+      required: [id, worker_token]
+      properties:
+        id: { type: string }
+        worker_token: { type: string, minLength: 16 }
+        rotated: { type: boolean }
     Error:
       type: object
       required: [error]
