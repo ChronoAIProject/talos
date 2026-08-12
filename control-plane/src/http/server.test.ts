@@ -81,6 +81,7 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/admin/machines`, { method: 'POST', headers, body: JSON.stringify({ id: 'machine', pool_id: 'pool', worker_token: 'worker-token-123456' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/admin/profiles`, { method: 'POST', headers, body: JSON.stringify({ id: 'profile', user_id: 'u' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/admin/machines/machine/rotate-token`, { method: 'POST', headers, body: JSON.stringify({ worker_token: 'rotated-worker-token-123456' }) })).status).toBe(200);
+    expect((await repository.getMachine('machine'))?.workerTokenHash).toBe(hashWorkerToken('rotated-worker-token-123456'));
     await repository.saveHandoff({ id: 'h', taskId: 't', userId: 'u', url: '/v1/handoffs/h', expiresAt: new Date(2000).toISOString(), used: false });
     const handoff = await fetch(`${base}/v1/handoffs/h`, { headers: { 'x-nyxid-identity-token': 'user:u' } });
     expect(handoff.status).toBe(501);
@@ -112,10 +113,11 @@ describe('control-plane HTTP API', () => {
     if (address === null || typeof address === 'string') throw new Error('server did not bind');
     const base = `http://127.0.0.1:${address.port}`;
     const user = (id: string) => ({ 'x-nyxid-identity-token': `user:${id}`, 'content-type': 'application/json' });
-    const poolResponse = await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'alice-pool', visibility: 'private', owner_user_id: 'alice', tags: { region: 'local' } }) });
+    const poolResponse = await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'alice-pool', visibility: 'private', tags: { region: 'local' } }) });
     expect(poolResponse.status).toBe(201);
     expect((await poolResponse.json() as { visibility: string }).visibility).toBe('private');
     expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'bad-org', visibility: 'org' }) })).status).toBe(403);
+    expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'forged-owner', owner_user_id: 'bob' }) })).status).toBe(400);
     expect((await fetch(`${base}/v1/pools/alice-pool/machines`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'alice-machine' }) })).status).toBe(403);
     const machineResponse = await fetch(`${base}/v1/pools/alice-pool/machines`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ id: 'alice-machine', tags: { os: 'macos' } }) });
     expect(machineResponse.status).toBe(201);
@@ -125,7 +127,14 @@ describe('control-plane HTTP API', () => {
     expect(machine?.workerTokenHash).toBe(hashWorkerToken(machineBody.worker_token));
     expect((await fetch(`${base}/v1/pools/alice-pool/machines`, { headers: user('bob') })).status).toBe(403);
     expect((await fetch(`${base}/v1/machines/alice-machine/rotate-token`, { method: 'POST', headers: user('bob'), body: '{}' })).status).toBe(403);
-    expect((await fetch(`${base}/v1/machines/alice-machine/rotate-token`, { method: 'POST', headers: user('alice'), body: '{}' })).status).toBe(200);
+    const rotationResponse = await fetch(`${base}/v1/machines/alice-machine/rotate-token`, { method: 'POST', headers: user('alice'), body: '{}' });
+    expect(rotationResponse.status).toBe(200);
+    const rotation = await rotationResponse.json() as { worker_token: string };
+    expect((await repository.getMachine('alice-machine'))?.workerTokenHash).toBe(hashWorkerToken(rotation.worker_token));
+    const oldAuthentication = await fetch(`${base}/v1/worker/nope`, { headers: { authorization: `Bearer ${machineBody.worker_token}`, 'x-talos-machine-id': 'alice-machine', 'x-talos-worker-id': 'worker' } });
+    expect(oldAuthentication.status).toBe(401);
+    const newAuthentication = await fetch(`${base}/v1/worker/nope`, { headers: { authorization: `Bearer ${rotation.worker_token}`, 'x-talos-machine-id': 'alice-machine', 'x-talos-worker-id': 'worker' } });
+    expect(newAuthentication.status).toBe(404);
     const profileResponse = await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('alice'), body: JSON.stringify({ machine_id: 'alice-machine' }) });
     expect(profileResponse.status).toBe(201);
     const profileBody = await profileResponse.json() as { id: string; userId: string };
@@ -141,9 +150,13 @@ describe('control-plane HTTP API', () => {
       online: true,
       activeLeases: 0
     }]);
+    expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-pool' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/pools/bob-pool/machines`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-machine' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-profile', machine_id: 'bob-machine' }) })).status).toBe(201);
     const bobPools = await fetch(`${base}/v1/pools`, { headers: user('bob') });
     expect(bobPools.status).toBe(200);
-    expect(await bobPools.json()).toEqual([]);
+    expect((await bobPools.json() as Array<{ id: string }>).map((pool) => pool.id)).toEqual(['bob-pool']);
+    expect((await (await fetch(`${base}/v1/profiles`, { headers: user('bob') })).json() as Array<{ id: string }>).map((profile) => profile.id)).toEqual(['bob-profile']);
     expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ machine_id: 'alice-machine' }) })).status).toBe(403);
     server.close();
   });

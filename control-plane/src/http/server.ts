@@ -189,7 +189,6 @@ const fleetPoolRoute = async (
   if (parts.length === 2 && method === 'POST') {
     const input = selfPoolSchema.parse(await readBody(request, options.maxBodyBytes));
     if (input.visibility !== undefined && input.visibility !== 'private') throw forbidden('org and platform pools are admin-only');
-    if (input.owner_user_id !== undefined && input.owner_user_id !== userId) throw forbidden('pool owner is the authenticated user');
     const id = input.id ?? newId('pool');
     if (await repository.getPool(id) !== undefined) throw conflict('pool already exists');
     await repository.savePool({ id, visibility: 'private', ownerUserId: userId, tags: input.tags });

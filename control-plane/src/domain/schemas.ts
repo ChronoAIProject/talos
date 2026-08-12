@@ -95,9 +95,8 @@ export const adminProfileSchema = z.object({ id: z.string().min(1), user_id: z.s
 export const selfPoolSchema = z.object({
   id: z.string().trim().min(1).max(255).optional(),
   visibility: z.enum(['private', 'org', 'platform']).optional(),
-  owner_user_id: z.string().trim().min(1).max(255).optional(),
   tags: z.record(z.union([z.string(), z.boolean()])).default({})
-});
+}).strict();
 
 export const selfMachineSchema = z.object({
   id: z.string().trim().min(1).max(255),
@@ -111,7 +110,7 @@ export const selfRotateMachineSchema = z.object({}).strict();
 export const selfProfileSchema = z.object({
   id: z.string().trim().min(1).max(255).optional(),
   machine_id: z.string().trim().min(1).max(255).optional()
-});
+}).strict();
 
 export type TaskCreateRequest = z.infer<typeof taskCreateSchema>;
 export type TaskInputRequest = z.infer<typeof taskInputSchema>;

@@ -411,7 +411,6 @@ components:
       properties:
         id: { type: string, description: Omit for a server-generated id. }
         visibility: { type: string, const: private, description: Optional; any non-private value is rejected. }
-        owner_user_id: { type: string, description: Optional; when present it must match the authenticated user. Ownership is always derived from identity. }
         tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
     Pool:
       type: object
