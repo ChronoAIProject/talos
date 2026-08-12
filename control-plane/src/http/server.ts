@@ -244,6 +244,7 @@ const adminRoute = async (
   if (request.method !== 'POST') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
   if (parts[2] === 'pools') {
     const input = adminPoolSchema.parse(await readBody(request, options.maxBodyBytes));
+    if (await repository.getPool(input.id) !== undefined) throw conflict('pool already exists');
     await repository.savePool({ id: input.id, visibility: input.visibility, ...(input.owner_user_id === undefined ? {} : { ownerUserId: input.owner_user_id }), tags: input.tags });
     return send(response, 201, { id: input.id });
   }
@@ -257,6 +258,7 @@ const adminRoute = async (
   }
   if (parts[2] === 'machines') {
     const input = adminMachineSchema.parse(await readBody(request, options.maxBodyBytes));
+    if (await repository.getMachine(input.id) !== undefined) throw conflict('machine already exists');
     if (await repository.getPool(input.pool_id) === undefined) throw notFound('pool not found');
     const workerToken = input.worker_token ?? issueWorkerToken();
     await repository.saveMachine({ id: input.id, poolId: input.pool_id, tags: input.tags, capacity: input.capacity, online: input.online, activeLeases: 0, workerTokenHash: hashWorkerToken(workerToken) });
@@ -264,6 +266,7 @@ const adminRoute = async (
   }
   if (parts[2] === 'profiles') {
     const input = adminProfileSchema.parse(await readBody(request, options.maxBodyBytes));
+    if (await repository.getProfile(input.id) !== undefined) throw conflict('profile already exists');
     await repository.saveProfile({ id: input.id, userId: input.user_id, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
     return send(response, 201, { id: input.id });
   }

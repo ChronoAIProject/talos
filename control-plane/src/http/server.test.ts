@@ -78,8 +78,18 @@ describe('control-plane HTTP API', () => {
     const base = `http://127.0.0.1:${address.port}`;
     const headers = { 'x-talos-admin-token': 'admin-token-123456', 'content-type': 'application/json' };
     expect((await fetch(`${base}/v1/admin/pools`, { method: 'POST', headers, body: JSON.stringify({ id: 'pool', visibility: 'platform' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/admin/pools`, { method: 'POST', headers, body: JSON.stringify({ id: 'pool', visibility: 'org' }) })).status).toBe(409);
     expect((await fetch(`${base}/v1/admin/machines`, { method: 'POST', headers, body: JSON.stringify({ id: 'machine', pool_id: 'pool', worker_token: 'worker-token-123456' }) })).status).toBe(201);
+    const registeredMachine = await repository.getMachine('machine');
+    if (registeredMachine === undefined) throw new Error('machine was not registered');
+    await repository.saveMachine({ ...registeredMachine, activeLeases: 1 });
+    expect((await fetch(`${base}/v1/admin/machines`, { method: 'POST', headers, body: JSON.stringify({ id: 'machine', pool_id: 'pool', worker_token: 'replacement-token-123456' }) })).status).toBe(409);
+    expect(await repository.getMachine('machine')).toMatchObject({
+      activeLeases: 1,
+      workerTokenHash: hashWorkerToken('worker-token-123456')
+    });
     expect((await fetch(`${base}/v1/admin/profiles`, { method: 'POST', headers, body: JSON.stringify({ id: 'profile', user_id: 'u' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/admin/profiles`, { method: 'POST', headers, body: JSON.stringify({ id: 'profile', user_id: 'other-user' }) })).status).toBe(409);
     expect((await fetch(`${base}/v1/admin/machines/machine/rotate-token`, { method: 'POST', headers, body: JSON.stringify({ worker_token: 'rotated-worker-token-123456' }) })).status).toBe(200);
     expect((await repository.getMachine('machine'))?.workerTokenHash).toBe(hashWorkerToken('rotated-worker-token-123456'));
     await repository.saveHandoff({ id: 'h', taskId: 't', userId: 'u', url: '/v1/handoffs/h', expiresAt: new Date(2000).toISOString(), used: false });
