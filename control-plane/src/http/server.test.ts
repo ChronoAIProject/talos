@@ -21,6 +21,20 @@ describe('control-plane HTTP API', () => {
     server.close();
   });
 
+  it('reports degraded health when repository ping fails', async () => {
+    const repository = new MemoryRepository();
+    repository.ping = async () => { throw new Error('database unavailable'); };
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: 'degraded' });
+    server.close();
+  });
+
   it('enforces NyxID and worker authentication across lifecycle routes', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
