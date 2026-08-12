@@ -6,7 +6,7 @@ describe('BrowserExecutor', () => {
     const calls: unknown[] = [];
     const page = { screenshot: async () => Buffer.from('png'), mouse: { click: async () => undefined, wheel: async () => undefined }, keyboard: { type: async () => undefined, press: async () => undefined }, waitForTimeout: async () => undefined, goto: async () => undefined, locator: () => ({ allTextContents: async () => ['x'], click: async () => undefined, fill: async () => undefined }), viewportSize: () => ({ width: 10, height: 20 }) };
     const context = { newPage: async () => page, close: async () => undefined };
-    const executor = new BrowserExecutor({ profilePath: '/tmp/profile', cdpEndpoint: 'http://localhost:9222', provider: { connectOverCDP: async (endpoint) => { calls.push(endpoint); return context; }, launchPersistentContext: async () => context } });
+    const executor = new BrowserExecutor({ profilePath: '/tmp/profile', cdpEndpoint: 'http://localhost:9222', provider: { connectOverCDP: async (endpoint) => { calls.push(endpoint); return { contexts: () => [context], close: async () => undefined }; }, launchPersistentContext: async () => context } });
     const result = await executor.execute({ type: 'screenshot' }, { taskId: 't', masking: false });
     expect(result.screenshot?.width).toBe(10);
     expect(calls).toEqual(['http://localhost:9222']);

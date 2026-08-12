@@ -56,13 +56,16 @@ export class WorkerRuntime {
   public async runOnce(): Promise<void> {
     const lease = await this.options.client.claim();
     let lastResult: unknown = undefined;
+    let cancellationError: unknown;
     const interval = setInterval(() => {
       void this.options.client.heartbeat(lease.task.id, lease.leaseToken).catch((error: unknown) => {
         this.options.logger?.warn('lease heartbeat failed', { taskId: lease.task.id, error: error instanceof Error ? error.message : 'unknown' });
+        if (error instanceof Error && 'code' in error && error.code === 'task_cancelled') cancellationError = error;
       });
     }, this.options.heartbeatMs ?? 20000);
     try {
       while (true) {
+        if (cancellationError !== undefined) throw cancellationError;
         const decision = await this.options.planner.plan(lease.task, lastResult);
         if (decision.type === 'done') {
           await this.options.client.result(lease.task.id, lease.leaseToken, 'completed', decision.findings);
@@ -72,6 +75,7 @@ export class WorkerRuntime {
           await this.options.client.needsInput(lease.task.id, lease.leaseToken);
           let input: unknown;
           while (input === undefined) {
+            if (cancellationError !== undefined) throw cancellationError;
             await new Promise((resolve) => setTimeout(resolve, 25));
             input = await this.options.client.getInput(lease.task.id, lease.leaseToken);
           }

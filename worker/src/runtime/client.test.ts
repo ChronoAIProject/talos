@@ -72,13 +72,38 @@ describe('WorkerRuntime', () => {
         needsInput: async () => undefined,
         getInput: async () => undefined
       },
-      planner: { plan: async () => ({ type: 'done', findings: [] }) },
+      planner: { plan: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { type: 'done', findings: [] };
+      } },
       heartbeatMs: 1,
       logger: { warn: (message) => warnings.push(message), error: () => undefined },
       executor: { execute: async () => ({}), close: async () => undefined }
     });
     await runtime.runOnce();
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(warnings.length).toBeGreaterThanOrEqual(0);
+    expect(warnings).toContain('lease heartbeat failed');
+  });
+
+  it('stops the planner when heartbeat discovers cancellation', async () => {
+    let closed = false;
+    const runtime = new WorkerRuntime({
+      client: {
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        heartbeat: async () => { throw Object.assign(new Error('cancelled'), { code: 'task_cancelled' }); },
+        result: async () => undefined,
+        artifact: async () => undefined,
+        needsInput: async () => undefined,
+        getInput: async () => undefined
+      },
+      heartbeatMs: 1,
+      planner: { plan: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { type: 'action', action: { type: 'wait', milliseconds: 0 } };
+      } },
+      executor: { execute: async () => ({}), close: async () => { closed = true; } }
+    });
+    await runtime.runOnce();
+    expect(closed).toBe(true);
   });
 });

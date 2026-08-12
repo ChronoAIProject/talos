@@ -12,12 +12,14 @@ interface BrowserPage {
 }
 
 interface BrowserContext { close(): Promise<void>; newPage(): Promise<BrowserPage>; }
-interface BrowserProvider { launchPersistentContext(path: string, options: Record<string, unknown>): Promise<BrowserContext>; connectOverCDP?(endpoint: string): Promise<BrowserContext>; }
+interface CdpBrowser { close(): Promise<void>; contexts(): BrowserContext[]; }
+interface BrowserProvider { launchPersistentContext(path: string, options: Record<string, unknown>): Promise<BrowserContext>; connectOverCDP?(endpoint: string): Promise<CdpBrowser>; }
 
 export interface BrowserExecutorOptions { profilePath: string; cdpEndpoint?: string; provider?: BrowserProvider; }
 
 export class BrowserExecutor implements Executor {
   private context?: BrowserContext;
+  private browser?: CdpBrowser;
   private page?: BrowserPage;
   public constructor(private readonly options: BrowserExecutorOptions) {}
 
@@ -44,16 +46,23 @@ export class BrowserExecutor implements Executor {
     }
   }
 
-  public async close(): Promise<void> { await this.context?.close(); this.context = undefined; this.page = undefined; }
+  public async close(): Promise<void> {
+    if (this.browser !== undefined) await this.browser.close();
+    else await this.context?.close();
+    this.browser = undefined;
+    this.context = undefined;
+    this.page = undefined;
+  }
 
   private async getPage(): Promise<BrowserPage> {
     if (this.page !== undefined) return this.page;
     const provider = this.options.provider ?? await this.loadProvider();
-    this.context = this.options.cdpEndpoint === undefined
-      ? await provider.launchPersistentContext(this.options.profilePath, { headless: false })
-      : provider.connectOverCDP === undefined
-        ? await provider.launchPersistentContext(this.options.profilePath, { headless: false })
-        : await provider.connectOverCDP(this.options.cdpEndpoint);
+    if (this.options.cdpEndpoint !== undefined && provider.connectOverCDP !== undefined) {
+      this.browser = await provider.connectOverCDP(this.options.cdpEndpoint);
+      this.context = this.browser.contexts()[0] ?? await provider.launchPersistentContext(this.options.profilePath, { headless: false });
+    } else {
+      this.context = await provider.launchPersistentContext(this.options.profilePath, { headless: false });
+    }
     this.page = await this.context.newPage();
     return this.page;
   }
