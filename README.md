@@ -48,3 +48,5 @@ dispatcher, lease sweep, authenticated admin registration, worker runtime, scrip
 planner, BrowserExecutor, and catalog OpenAPI spec are available. Phase 2/3 hosted
 login and payment handoff machinery remains a typed `not_implemented` path as called
 out in `docs/IMPLEMENTATION.md`.
+
+For deployment, set the validated control-plane and worker environment variables, register pools, machines, and profiles through the authenticated admin routes, and configure callback host policy for webhook delivery. The default identity resolver is development-only and must be replaced with a verifying NyxID resolver in production.

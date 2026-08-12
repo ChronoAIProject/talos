@@ -65,11 +65,21 @@ paths:
   /v1/tasks/{id}/cancel:
     post:
       operationId: cancelTask
-      responses: { '200': { description: Cancelled task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Cancelled task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/profiles/{id}/login-link:
+    parameters: [{ $ref: '#/components/parameters/ProfileId' }]
     post:
       operationId: createProfileLoginLink
       responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '501': { $ref: '#/components/responses/NotImplemented' }
   /v1/worker/claim:
     post:
@@ -78,74 +88,135 @@ paths:
       requestBody:
         required: true
         content: { application/json: { schema: { type: object, required: [worker_id, machine_id], properties: { worker_id: { type: string }, machine_id: { type: string } } } } }
-      responses: { '200': { description: Claimed task, content: { application/json: { schema: { $ref: '#/components/schemas/ClaimResponse' } } } } }
+      responses:
+        '200': { description: Claimed task, content: { application/json: { schema: { $ref: '#/components/schemas/ClaimResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/heartbeat:
     post:
       security: [{ workerToken: [] }]
       operationId: heartbeatTask
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Heartbeat' } } } }
-      responses: { '200': { description: Running task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Running task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/needs-input:
     post:
       security: [{ workerToken: [] }]
       operationId: signalNeedsInput
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LeaseToken' } } } }
-      responses: { '200': { description: Task waiting for input, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Task waiting for input, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/input:
     get:
       security: [{ workerToken: [] }]
       operationId: getRelayedInput
       parameters: [{ name: X-Talos-Lease-Token, in: header, required: true, schema: { type: string } }]
-      responses: { '200': { description: Private input relay, content: { application/json: { schema: { type: object, properties: { input: { $ref: '#/components/schemas/TaskInput' } } } } } } }
+      responses:
+        '200':
+          description: Private input relay; input is omitted until human input is available.
+          content: { application/json: { schema: { type: object, properties: { input: { $ref: '#/components/schemas/TaskInput' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/worker/tasks/{id}/result:
     post:
       security: [{ workerToken: [] }]
       operationId: submitTaskResult
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Result' } } } }
-      responses: { '200': { description: Final task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '200': { description: Final task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/artifacts:
     post:
       security: [{ workerToken: [] }]
       operationId: uploadArtifact
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ArtifactUpload' } } } }
-      responses: { '201': { description: Task with artifact, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+      responses:
+        '201': { description: Task with artifact, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/admin/pools:
     post:
       security: [{ adminToken: [] }]
       operationId: registerPool
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
-      responses: { '201': { description: Registered pool }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+      responses:
+        '201': { description: Registered pool }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/admin/machines:
     post:
       security: [{ adminToken: [] }]
       operationId: registerMachine
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMachine' } } } }
-      responses: { '201': { description: Registered machine with worker token } }
+      responses:
+        '201': { description: Registered machine with worker token }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/admin/machines/{id}/rotate-token:
     post:
       security: [{ adminToken: [] }]
       operationId: rotateMachineToken
       parameters: [{ $ref: '#/components/parameters/TaskId' }]
       requestBody: { content: { application/json: { schema: { type: object, properties: { worker_token: { type: string, minLength: 16 } } } } } }
-      responses: { '200': { description: Rotated worker token } }
+      responses:
+        '200': { description: Rotated worker token }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/admin/profiles:
     post:
       security: [{ adminToken: [] }]
       operationId: registerProfile
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminProfile' } } } }
-      responses: { '201': { description: Registered profile } }
+      responses:
+        '201': { description: Registered profile }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/handoffs/{id}:
     get:
       security: [{ nyxIdentity: [] }]
       operationId: consumeHandoff
       parameters: [{ $ref: '#/components/parameters/TaskId' }]
-      responses: { '501': { $ref: '#/components/responses/NotImplemented' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
+      responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
 components:
   parameters:
     TaskId: { name: id, in: path, required: true, schema: { type: string } }
+    ProfileId: { name: id, in: path, required: true, schema: { type: string } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
-    workerToken: { type: http, scheme: bearer, description: Rotatable pool worker token. Include X-Talos-Worker-Id and X-Talos-Machine-Id. }
+    workerToken: { type: http, scheme: bearer, description: Rotatable machine worker token. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header. }
     adminToken: { type: apiKey, in: header, name: X-Talos-Admin-Token, description: Startup-configured administrative registration token. }
   responses:
     BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -182,9 +253,19 @@ components:
         userId: { type: string }
         kind: { type: string, enum: [browse, computer_use] }
         goal: { type: string }
+        siteHint: { type: string }
+        profileId: { type: string }
+        constraints: { type: object }
+        mode: { type: string, enum: [read_only, act] }
+        callback: { type: string, format: uri }
         status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        claimedAt: { type: string, format: date-time }
         findings: { type: array, items: { type: object } }
         artifacts: { type: array, items: { $ref: '#/components/schemas/Artifact' } }
+        error: { $ref: '#/components/schemas/TaskError' }
+        handoff: { type: object, required: [url, expiresAt], properties: { url: { type: string }, expiresAt: { type: string, format: date-time } } }
     Handoff:
       type: object
       required: [handoff_url, expires]
@@ -196,7 +277,14 @@ components:
     ClaimResponse:
       type: object
       required: [task, lease, leaseToken]
-      properties: { task: { $ref: '#/components/schemas/Task' }, lease: { type: object }, leaseToken: { type: string } }
+      properties:
+        task: { $ref: '#/components/schemas/Task' }
+        lease: { $ref: '#/components/schemas/Lease' }
+        leaseToken: { type: string, minLength: 1 }
+    Lease:
+      type: object
+      required: [taskId, workerId, machineId, expiresAt]
+      properties: { taskId: { type: string }, workerId: { type: string }, machineId: { type: string }, expiresAt: { type: string, format: date-time } }
     Heartbeat:
       type: object
       required: [lease_token]
@@ -228,11 +316,53 @@ components:
     Error:
       type: object
       required: [error]
-      properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string } } } }
+      properties: { error: { $ref: '#/components/schemas/TaskError' } }
     WebhookEvent:
       type: object
       required: [id, type, taskId, userId, timestamp, payload]
-      properties: { id: { type: string }, type: { type: string, enum: [task.state_changed, task.needs_input, task.handoff_requested, task.completed] }, taskId: { type: string }, userId: { type: string }, timestamp: { type: string, format: date-time }, payload: { type: object }, delivery: { type: object } }
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [task.state_changed, task.needs_input, task.handoff_requested, task.completed] }
+        taskId: { type: string }
+        userId: { type: string }
+        timestamp: { type: string, format: date-time }
+        payload:
+          oneOf:
+            - { $ref: '#/components/schemas/StateChangedPayload' }
+            - { $ref: '#/components/schemas/NeedsInputPayload' }
+            - { $ref: '#/components/schemas/HandoffRequestedPayload' }
+            - { $ref: '#/components/schemas/CompletedPayload' }
+        delivery: { $ref: '#/components/schemas/WebhookDelivery' }
+    StateChangedPayload:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        error: { $ref: '#/components/schemas/TaskError' }
+    NeedsInputPayload:
+      type: object
+      required: [status]
+      properties: { status: { type: string, const: needs_input } }
+    HandoffRequestedPayload:
+      type: object
+      required: [handoff_url, expires]
+      properties: { handoff_url: { type: string }, expires: { type: string, format: date-time } }
+    CompletedPayload:
+      type: object
+      required: [status]
+      properties: { status: { type: string, const: completed } }
+    WebhookDelivery:
+      type: object
+      required: [status, attempts]
+      properties:
+        status: { type: string, enum: [pending, delivered, failed] }
+        attempts: { type: integer, minimum: 0 }
+        lastAttemptAt: { type: string, format: date-time }
+        lastError: { type: string }
+    TaskError:
+      type: object
+      required: [code, message]
+      properties: { code: { type: string }, message: { type: string } }
 x-webhook-signing:
   scheme: HMAC-SHA256
   headers: X-Talos-Webhook-Timestamp, X-Talos-Webhook-Signature
