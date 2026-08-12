@@ -10,6 +10,7 @@ type PoolLike = Pick<Pool, 'query' | 'end'>;
 const nullable = (value: unknown): string | undefined => value === null || value === undefined ? undefined : String(value);
 const iso = (value: unknown): string => new Date(String(value)).toISOString();
 const json = <T>(value: unknown, fallback: T): T => value === null || value === undefined ? fallback : value as T;
+const encodeJson = (value: unknown): string => JSON.stringify(value);
 
 export interface PostgresRepositoryOptions {
   pool?: PoolLike;
@@ -46,7 +47,7 @@ export class PostgresRepository implements Repository {
       `INSERT INTO tasks (id, user_id, kind, goal, site_hint, profile_id, pool_id, constraints, mode, callback, status, queue_priority, created_at, updated_at, claimed_at, lease_expires_at, lease_token, worker_id, machine_id, findings, artifacts, input, error, handoff)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        ON CONFLICT (id) DO UPDATE SET user_id=EXCLUDED.user_id, kind=EXCLUDED.kind, goal=EXCLUDED.goal, site_hint=EXCLUDED.site_hint, profile_id=EXCLUDED.profile_id, pool_id=EXCLUDED.pool_id, constraints=EXCLUDED.constraints, mode=EXCLUDED.mode, callback=EXCLUDED.callback, status=EXCLUDED.status, queue_priority=EXCLUDED.queue_priority, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, claimed_at=EXCLUDED.claimed_at, lease_expires_at=EXCLUDED.lease_expires_at, lease_token=EXCLUDED.lease_token, worker_id=EXCLUDED.worker_id, machine_id=EXCLUDED.machine_id, findings=EXCLUDED.findings, artifacts=EXCLUDED.artifacts, input=EXCLUDED.input, error=EXCLUDED.error, handoff=EXCLUDED.handoff`,
-      [task.id, task.userId, task.kind, task.goal, task.siteHint ?? null, task.profileId ?? null, task.poolId ?? null, task.constraints, task.mode, task.callback ?? null, task.status, task.queuePriority ?? null, task.createdAt, task.updatedAt, task.claimedAt ?? null, task.leaseExpiresAt ?? null, task.leaseToken ?? null, task.workerId ?? null, task.machineId ?? null, task.findings, task.artifacts, task.input ?? null, task.error ?? null, task.handoff ?? null]
+      [task.id, task.userId, task.kind, task.goal, task.siteHint ?? null, task.profileId ?? null, task.poolId ?? null, encodeJson(task.constraints), task.mode, task.callback ?? null, task.status, task.queuePriority ?? null, task.createdAt, task.updatedAt, task.claimedAt ?? null, task.leaseExpiresAt ?? null, task.leaseToken ?? null, task.workerId ?? null, task.machineId ?? null, encodeJson(task.findings), encodeJson(task.artifacts), task.input === undefined ? null : encodeJson(task.input), task.error === undefined ? null : encodeJson(task.error), task.handoff === undefined ? null : encodeJson(task.handoff)]
     );
   }
 
@@ -69,7 +70,7 @@ export class PostgresRepository implements Repository {
     await this.pool.query(
       `INSERT INTO pools (id, visibility, owner_user_id, tags) VALUES ($1,$2,$3,$4)
        ON CONFLICT (id) DO UPDATE SET visibility=EXCLUDED.visibility, owner_user_id=EXCLUDED.owner_user_id, tags=EXCLUDED.tags`,
-      [pool.id, pool.visibility, pool.ownerUserId ?? null, pool.tags]
+      [pool.id, pool.visibility, pool.ownerUserId ?? null, encodeJson(pool.tags)]
     );
   }
 
@@ -94,7 +95,7 @@ export class PostgresRepository implements Repository {
     await this.pool.query(
       `INSERT INTO machines (id, pool_id, tags, capacity, active_leases, online, worker_token_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (id) DO UPDATE SET pool_id=EXCLUDED.pool_id, tags=EXCLUDED.tags, capacity=EXCLUDED.capacity, active_leases=EXCLUDED.active_leases, online=EXCLUDED.online, worker_token_hash=EXCLUDED.worker_token_hash`,
-      [machine.id, machine.poolId, machine.tags, machine.capacity, machine.activeLeases, machine.online, machine.workerTokenHash]
+      [machine.id, machine.poolId, encodeJson(machine.tags), machine.capacity, machine.activeLeases, machine.online, machine.workerTokenHash]
     );
   }
 
@@ -134,7 +135,7 @@ export class PostgresRepository implements Repository {
     await this.pool.query(
       `INSERT INTO webhooks (id, type, task_id, user_id, timestamp, payload, delivery_status, delivery_attempts, last_attempt_at, last_error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (id) DO UPDATE SET type=EXCLUDED.type, task_id=EXCLUDED.task_id, user_id=EXCLUDED.user_id, timestamp=EXCLUDED.timestamp, payload=EXCLUDED.payload, delivery_status=EXCLUDED.delivery_status, delivery_attempts=EXCLUDED.delivery_attempts, last_attempt_at=EXCLUDED.last_attempt_at, last_error=EXCLUDED.last_error`,
-      [event.id, event.type, event.taskId, event.userId, event.timestamp, event.payload, event.delivery.status, event.delivery.attempts, event.delivery.lastAttemptAt ?? null, event.delivery.lastError ?? null]
+      [event.id, event.type, event.taskId, event.userId, event.timestamp, encodeJson(event.payload), event.delivery.status, event.delivery.attempts, event.delivery.lastAttemptAt ?? null, event.delivery.lastError ?? null]
     );
   }
 
@@ -153,7 +154,7 @@ export class PostgresRepository implements Repository {
     await this.pool.query(
       `INSERT INTO pending_inputs (task_id, input) VALUES ($1,$2)
        ON CONFLICT (task_id) DO UPDATE SET input=EXCLUDED.input`,
-      [taskId, input]
+      [taskId, encodeJson(input)]
     );
   }
 
