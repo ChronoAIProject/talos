@@ -47,6 +47,34 @@ describe('WebhookDispatcher', () => {
     await expect(dispatcher.dispatch(event, 'file:///tmp/hook')).rejects.toThrow('scheme');
   });
 
+  it('does not block task creation on a timed-out callback and records failure', async () => {
+    const repository = new MemoryRepository();
+    const signer = new WebhookSigner('webhook-secret-1234');
+    const fetchImpl = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    const dispatcher = new WebhookDispatcher(repository, signer, {
+      fetchImpl,
+      retries: 1,
+      timeoutMs: 5,
+      backoffMs: 0
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      signer,
+      { onWebhook: (event, signed, url) => dispatcher.dispatch(event, url, signed) }
+    );
+    const started = Date.now();
+    await service.createTask('u', { kind: 'browse', goal: 'fast', callback: 'http://localhost/hung' });
+    expect(Date.now() - started).toBeLessThan(100);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const events = await repository.listWebhooks();
+    expect(events[0]?.delivery.status).toBe('failed');
+  });
+
   it('receives a signed webhook during the full task lifecycle', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
@@ -72,6 +100,9 @@ describe('WebhookDispatcher', () => {
     const claim = await service.claim('w', 'machine');
     await service.heartbeat(task.id, 'w', claim.leaseToken, 60);
     await service.complete(task.id, 'w', claim.leaseToken, 'completed', []);
+    for (let attempt = 0; attempt < 20 && !received.includes('task.completed'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(received).toContain('task.completed');
     server.close();
   });

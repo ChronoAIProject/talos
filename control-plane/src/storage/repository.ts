@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, Pool, Profile, Task, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 
 export interface Repository {
   getTask(id: string): Promise<Task | undefined>;
@@ -17,4 +17,6 @@ export interface Repository {
   saveWebhook(event: WebhookEvent): Promise<void>;
   getWebhook(id: string): Promise<WebhookEvent | undefined>;
   listWebhooks(): Promise<readonly WebhookEvent[]>;
+  savePendingInput(taskId: string, input: TaskInput): Promise<void>;
+  takePendingInput(taskId: string): Promise<TaskInput | undefined>;
 }

@@ -1,4 +1,4 @@
-import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized } from '../domain/errors.js';
+import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
 import type { Lease, PublicTask, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
@@ -8,12 +8,14 @@ import type { ProfileLockService } from './profile-lock.js';
 import type { Scheduler } from './scheduler.js';
 import type { WebhookSigner } from './webhook-signer.js';
 import type { SignedWebhook } from './webhook-signer.js';
+import type { Logger } from '../util/logger.js';
 
 export interface TaskServiceOptions {
   leaseSeconds?: number;
   clock?: () => number;
   onWebhook?: (event: WebhookEvent, signed: SignedWebhook, callback?: string) => Promise<void>;
   validateCallback?: (callback: string) => void;
+  logger?: Pick<Logger, 'warn'>;
 }
 
 export class TaskService {
@@ -21,7 +23,7 @@ export class TaskService {
   private readonly clock: () => number;
   private readonly onWebhook?: (event: WebhookEvent, signed: SignedWebhook, callback?: string) => Promise<void>;
   private readonly validateCallback?: (callback: string) => void;
-  private readonly pendingInputs = new Map<string, Task['input']>();
+  private readonly logger?: Pick<Logger, 'warn'>;
   public constructor(
     private readonly repository: Repository,
     private readonly scheduler: Scheduler,
@@ -33,6 +35,7 @@ export class TaskService {
     this.clock = options.clock ?? Date.now;
     this.onWebhook = options.onWebhook;
     this.validateCallback = options.validateCallback;
+    this.logger = options.logger;
   }
 
   public async createTask(userId: string, input: unknown): Promise<Task> {
@@ -93,7 +96,7 @@ export class TaskService {
         await this.emit(task, 'task.state_changed', { status: task.status });
         return { task, lease: { taskId: task.id, workerId, machineId, expiresAt }, leaseToken };
       } catch (error) {
-        if (error instanceof Error && 'code' in error && error.code === 'conflict') continue;
+        if (error instanceof TalosError && error.code === 'conflict') continue;
         throw error;
       }
     }
@@ -143,11 +146,11 @@ export class TaskService {
     return updated;
   }
 
-  public async provideInput(id: string, userId: string, input: Task['input']): Promise<Task> {
+  public async provideInput(id: string, userId: string, input: NonNullable<Task['input']>): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
     if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
     const now = this.clock();
-    this.pendingInputs.set(id, input);
+    await this.repository.savePendingInput(id, input);
     const updated: Task = {
       ...task,
       status: 'running',
@@ -174,9 +177,7 @@ export class TaskService {
 
   public async getWorkerInput(taskId: string, workerId: string, leaseToken: string): Promise<Task['input']> {
     await this.workerTask(taskId, workerId, leaseToken);
-    const input = this.pendingInputs.get(taskId);
-    this.pendingInputs.delete(taskId);
-    return input;
+    return this.repository.takePendingInput(taskId);
   }
 
   public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
@@ -256,11 +257,11 @@ export class TaskService {
   private async workerTask(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
     const task = await this.repository.getTask(taskId);
     if (task === undefined) throw notFound('task not found');
-    if (task.status === 'cancelled') throw taskCancelled();
-    if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff'].includes(task.status)) throw unauthorized('worker does not own active lease');
+    if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff', 'cancelled'].includes(task.status)) throw unauthorized('worker does not own active lease');
     const expected = Buffer.from(task.leaseToken);
     const actual = Buffer.from(leaseToken);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized('invalid lease token');
+    if (task.status === 'cancelled') throw taskCancelled();
     if (task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= this.clock() && !['needs_input', 'handoff'].includes(task.status)) throw unauthorized('lease expired');
     return task;
   }
@@ -285,7 +286,14 @@ export class TaskService {
     };
     await this.repository.saveWebhook(event);
     const signed = this.signer.sign(event, this.clock());
-    if (this.onWebhook !== undefined) await this.onWebhook(event, signed, task.callback);
+    if (this.onWebhook !== undefined) {
+      void this.onWebhook(event, signed, task.callback).catch((error: unknown) => {
+        this.logger?.warn('webhook delivery failed', {
+          eventId: event.id,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      });
+    }
     return signed;
   }
 

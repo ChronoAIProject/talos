@@ -12,6 +12,7 @@ export interface WebhookDispatcherOptions {
   fetchImpl?: typeof fetch;
   retries?: number;
   backoffMs?: number;
+  timeoutMs?: number;
   policy?: WebhookPolicy;
   clock?: () => number;
 }
@@ -20,6 +21,7 @@ export class WebhookDispatcher {
   private readonly fetchImpl: typeof fetch;
   private readonly retries: number;
   private readonly backoffMs: number;
+  private readonly timeoutMs: number;
   private readonly policy: Required<WebhookPolicy>;
   private readonly clock: () => number;
 
@@ -31,6 +33,7 @@ export class WebhookDispatcher {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.retries = options.retries ?? 3;
     this.backoffMs = options.backoffMs ?? 50;
+    this.timeoutMs = options.timeoutMs ?? 10000;
     this.policy = {
       schemes: options.policy?.schemes ?? ['http:', 'https:'],
       hosts: options.policy?.hosts ?? []
@@ -53,6 +56,7 @@ export class WebhookDispatcher {
     let lastError = 'delivery failed';
     for (let attempt = 1; attempt <= this.retries; attempt += 1) {
       try {
+        const signal = AbortSignal.timeout(this.timeoutMs);
         const response = await this.fetchImpl(callback, {
           method: 'POST',
           headers: {
@@ -60,7 +64,8 @@ export class WebhookDispatcher {
             'X-Talos-Webhook-Timestamp': signed.timestamp,
             'X-Talos-Webhook-Signature': signed.signature
           },
-          body: signed.body
+          body: signed.body,
+          signal
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await this.update(event, { status: 'delivered', attempts: attempt, lastAttemptAt: new Date(this.clock()).toISOString() });

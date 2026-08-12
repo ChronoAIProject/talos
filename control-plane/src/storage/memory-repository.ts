@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, Pool, Profile, Task, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { Repository } from './repository.js';
 
 export class MemoryRepository implements Repository {
@@ -8,6 +8,7 @@ export class MemoryRepository implements Repository {
   private readonly profiles = new Map<string, Profile>();
   private readonly handoffs = new Map<string, HandoffLink>();
   private readonly webhooks = new Map<string, WebhookEvent>();
+  private readonly pendingInputs = new Map<string, TaskInput>();
 
   public async getTask(id: string): Promise<Task | undefined> {
     return this.tasks.get(id);
@@ -77,5 +78,15 @@ export class MemoryRepository implements Repository {
 
   public async listWebhooks(): Promise<readonly WebhookEvent[]> {
     return [...this.webhooks.values()];
+  }
+
+  public async savePendingInput(taskId: string, input: TaskInput): Promise<void> {
+    this.pendingInputs.set(taskId, input);
+  }
+
+  public async takePendingInput(taskId: string): Promise<TaskInput | undefined> {
+    const input = this.pendingInputs.get(taskId);
+    this.pendingInputs.delete(taskId);
+    return input;
   }
 }

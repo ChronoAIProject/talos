@@ -8,6 +8,7 @@ import { WebhookDispatcher, type WebhookDispatcherOptions } from './services/web
 import { MemoryRepository } from './storage/memory-repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
+import { createLogger } from './util/logger.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; }
 
@@ -25,9 +26,11 @@ export const createControlPlane = (
   const profiles = new ProfileLockService(repository);
   const signer = new WebhookSigner(webhookSecret);
   const dispatcher = new WebhookDispatcher(repository, signer, options.webhook);
+  const logger = createLogger();
   const service = new TaskService(repository, scheduler, profiles, signer, {
     validateCallback: (callback) => dispatcher.validateCallback(callback),
-    onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed)
+    onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
+    logger
   });
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,

@@ -119,6 +119,7 @@ describe('task service', () => {
     const claim = await service.claim('worker-a', 'machine');
     await service.cancel(active.id, 'user-a');
     await expect(service.heartbeat(active.id, 'worker-a', claim.leaseToken, 10)).rejects.toMatchObject({ code: 'task_cancelled' });
+    await expect(service.heartbeat(active.id, 'worker-a', 'wrong-lease-token', 10)).rejects.toMatchObject({ code: 'unauthorized' });
     const deadline = await service.createTask('user-a', { kind: 'browse', goal: 'late', constraints: { deadline: new Date(2000).toISOString() } });
     clock.value = 3000;
     await service.expireLeases();
