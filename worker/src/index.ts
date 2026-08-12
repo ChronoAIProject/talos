@@ -3,6 +3,8 @@ export * from './executor/executor.js';
 export * from './executor/browser-executor.js';
 export * from './runtime/client.js';
 export * from './runtime/http-client.js';
+export * from './runtime/errors.js';
+export * from './runtime/logger.js';
 export * from './runtime/policy.js';
 export * from './runtime/planner.js';
 export * from './daemon.js';

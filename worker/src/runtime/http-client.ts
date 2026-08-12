@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { workerConfigSchema, type TaskEnvelope, type WorkerClient } from './client.js';
+import { workerConfigSchema, type TaskEnvelope, type TaskHeartbeat, type WorkerClient } from './client.js';
+import { WorkerClientError } from './errors.js';
 
 const taskSchema = z.object({ id: z.string(), kind: z.enum(['browse', 'computer_use']), goal: z.string() });
 const claimSchema = z.object({
@@ -14,14 +15,8 @@ const claimSchema = z.object({
 });
 const inputResponseSchema = z.object({ input: z.unknown().optional() });
 const errorResponseSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
-const publicTaskSchema = taskSchema.passthrough();
-
-export class WorkerClientError extends Error {
-  public constructor(public readonly code: string, message: string, public readonly status: number) {
-    super(message);
-    this.name = 'WorkerClientError';
-  }
-}
+const taskStatusSchema = z.enum(['submitted', 'claimed', 'running', 'needs_input', 'handoff', 'completed', 'failed', 'cancelled']);
+const publicTaskSchema = taskSchema.extend({ status: taskStatusSchema }).passthrough();
 
 export class HttpWorkerClient implements WorkerClient {
   private readonly config: ReturnType<typeof workerConfigSchema.parse>;
@@ -34,8 +29,9 @@ export class HttpWorkerClient implements WorkerClient {
     return claimSchema.parse(await this.request('/v1/worker/claim', { worker_id: this.config.workerId, machine_id: this.config.machineId }));
   }
 
-  public async heartbeat(taskId: string, leaseToken: string): Promise<void> {
-    publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/heartbeat`, { lease_token: leaseToken, extend_seconds: 60 }));
+  public async heartbeat(taskId: string, leaseToken: string): Promise<TaskHeartbeat> {
+    const task = publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/heartbeat`, { lease_token: leaseToken, extend_seconds: 60 }));
+    return { status: task.status };
   }
 
   public async needsInput(taskId: string, leaseToken: string): Promise<void> {

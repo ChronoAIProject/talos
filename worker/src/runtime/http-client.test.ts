@@ -15,16 +15,16 @@ describe('HttpWorkerClient', () => {
   it('relays heartbeat, input, needs-input, result, and artifact requests', async () => {
     const responses = [
       { task: { id: 't', kind: 'browse', goal: 'x' }, lease: { taskId: 't', workerId: 'w', machineId: 'm', expiresAt: new Date().toISOString() }, leaseToken: 'lease_1' },
-      { id: 't', kind: 'browse', goal: 'x' },
-      { id: 't', kind: 'browse', goal: 'x' },
+      { id: 't', kind: 'browse', goal: 'x', status: 'handoff' },
+      { id: 't', kind: 'browse', goal: 'x', status: 'needs_input' },
       { input: { kind: 'text', value: 'ok' } },
-      { id: 't', kind: 'browse', goal: 'x' },
-      { id: 't', kind: 'browse', goal: 'x' }
+      { id: 't', kind: 'browse', goal: 'x', status: 'completed' },
+      { id: 't', kind: 'browse', goal: 'x', status: 'running' }
     ];
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(responses.shift() ?? {}), { status: 200 }));
     const client = new HttpWorkerClient({ controlPlaneUrl: 'http://localhost:8080', workerId: 'w', machineId: 'm', workerToken: 'worker-token-123456' });
     await client.claim();
-    await client.heartbeat('t', 'lease_1');
+    expect(await client.heartbeat('t', 'lease_1')).toEqual({ status: 'handoff' });
     await client.needsInput('t', 'lease_1');
     expect(await client.getInput('t', 'lease_1')).toMatchObject({ value: 'ok' });
     await client.result('t', 'lease_1', 'completed', []);
