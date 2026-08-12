@@ -5,6 +5,14 @@ const taskSchema = z.object({ id: z.string(), kind: z.enum(['browse', 'computer_
 const claimSchema = z.object({ task: taskSchema, lease: z.object({ taskId: z.string(), workerId: z.string(), machineId: z.string(), expiresAt: z.string() }), leaseToken: z.string().min(1) });
 const inputResponseSchema = z.object({ input: z.unknown().optional() });
 const errorResponseSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
+const publicTaskSchema = taskSchema.passthrough();
+
+export class WorkerClientError extends Error {
+  public constructor(public readonly code: string, message: string, public readonly status: number) {
+    super(message);
+    this.name = 'WorkerClientError';
+  }
+}
 
 export class HttpWorkerClient implements WorkerClient {
   private readonly config: ReturnType<typeof workerConfigSchema.parse>;
@@ -18,11 +26,11 @@ export class HttpWorkerClient implements WorkerClient {
   }
 
   public async heartbeat(taskId: string, leaseToken: string): Promise<void> {
-    await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/heartbeat`, { lease_token: leaseToken, extend_seconds: 60 });
+    publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/heartbeat`, { lease_token: leaseToken, extend_seconds: 60 }));
   }
 
   public async needsInput(taskId: string, leaseToken: string): Promise<void> {
-    await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/needs-input`, { lease_token: leaseToken });
+    publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/needs-input`, { lease_token: leaseToken }));
   }
 
   public async getInput(taskId: string, leaseToken: string): Promise<unknown> {
@@ -31,11 +39,11 @@ export class HttpWorkerClient implements WorkerClient {
   }
 
   public async result(taskId: string, leaseToken: string, status: 'completed' | 'failed', findings: readonly unknown[], error?: { code: string; message: string }): Promise<void> {
-    await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/result`, { lease_token: leaseToken, status, findings, ...(error === undefined ? {} : { error }) });
+    publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/result`, { lease_token: leaseToken, status, findings, ...(error === undefined ? {} : { error }) }));
   }
 
   public async artifact(taskId: string, leaseToken: string, artifact: { name: string; contentType: string; size: number; uri: string }): Promise<void> {
-    await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/artifacts`, { lease_token: leaseToken, name: artifact.name, content_type: artifact.contentType, size: artifact.size, uri: artifact.uri });
+    publicTaskSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/artifacts`, { lease_token: leaseToken, name: artifact.name, content_type: artifact.contentType, size: artifact.size, uri: artifact.uri }));
   }
 
   private async request(path: string, payload?: unknown, method = 'POST', extraHeaders: Record<string, string> = {}): Promise<unknown> {
@@ -49,7 +57,8 @@ export class HttpWorkerClient implements WorkerClient {
     try { json = text.length === 0 ? {} : JSON.parse(text) as unknown; } catch { json = {}; }
     if (!response.ok) {
       const error = errorResponseSchema.safeParse(json);
-      throw new Error(error.success ? `${error.data.error.code}: ${error.data.error.message}` : `control plane request failed (${response.status})`);
+      if (error.success) throw new WorkerClientError(error.data.error.code, error.data.error.message, response.status);
+      throw new WorkerClientError('http_error', `control plane request failed (${response.status})`, response.status);
     }
     return json;
   }

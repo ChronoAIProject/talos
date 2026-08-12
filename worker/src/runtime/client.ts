@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Action } from '../protocol/actions.js';
-import type { HandoffPolicy } from './policy.js';
+import { createHandoffPolicy, type HandoffPolicy } from './policy.js';
 
 export interface TaskEnvelope { id: string; kind: 'browse' | 'computer_use'; goal: string; }
 export interface WorkerClient {
@@ -47,11 +47,14 @@ export interface RuntimeOptions {
 }
 
 export class WorkerRuntime {
-  public constructor(private readonly options: RuntimeOptions) {}
+  private policy: HandoffPolicy;
+
+  public constructor(private readonly options: RuntimeOptions) {
+    this.policy = options.policy ?? createHandoffPolicy();
+  }
 
   public async runOnce(): Promise<void> {
     const lease = await this.options.client.claim();
-    const policy = this.options.policy ?? (await import('./policy.js')).createHandoffPolicy();
     let lastResult: unknown = undefined;
     const interval = setInterval(() => {
       void this.options.client.heartbeat(lease.task.id, lease.leaseToken).catch((error: unknown) => {
@@ -75,7 +78,7 @@ export class WorkerRuntime {
           lastResult = input;
           continue;
         }
-        lastResult = await this.options.executor.execute(decision.action, { taskId: lease.task.id, masking: policy.isMasked });
+        lastResult = await this.options.executor.execute(decision.action, { taskId: lease.task.id, masking: this.policy.isMasked });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'executor failed';
@@ -91,8 +94,11 @@ export class WorkerRuntime {
   }
 
   public async executeHandoff(taskId: string, action: Action): Promise<void> {
-    const policy = this.options.policy ?? (await import('./policy.js')).createHandoffPolicy();
-    const masked = policy.startHandoff();
-    await this.options.executor.execute(action, { taskId, masking: masked.isMasked });
+    this.policy = this.policy.startHandoff();
+    await this.options.executor.execute(action, { taskId, masking: this.policy.isMasked });
+  }
+
+  public endHandoff(): void {
+    this.policy = this.policy.endHandoff();
   }
 }

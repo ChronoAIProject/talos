@@ -11,4 +11,25 @@ describe('HttpWorkerClient', () => {
     await expect(client.heartbeat('t', 'lease_1')).rejects.toThrow('409');
     fetchMock.mockRestore();
   });
+
+  it('relays heartbeat, input, needs-input, result, and artifact requests', async () => {
+    const responses = [
+      { task: { id: 't', kind: 'browse', goal: 'x' }, lease: { taskId: 't', workerId: 'w', machineId: 'm', expiresAt: new Date().toISOString() }, leaseToken: 'lease_1' },
+      { id: 't', kind: 'browse', goal: 'x' },
+      { id: 't', kind: 'browse', goal: 'x' },
+      { input: { kind: 'text', value: 'ok' } },
+      { id: 't', kind: 'browse', goal: 'x' },
+      { id: 't', kind: 'browse', goal: 'x' }
+    ];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(responses.shift() ?? {}), { status: 200 }));
+    const client = new HttpWorkerClient({ controlPlaneUrl: 'http://localhost:8080', workerId: 'w', machineId: 'm', workerToken: 'worker-token-123456' });
+    await client.claim();
+    await client.heartbeat('t', 'lease_1');
+    await client.needsInput('t', 'lease_1');
+    expect(await client.getInput('t', 'lease_1')).toMatchObject({ value: 'ok' });
+    await client.result('t', 'lease_1', 'completed', []);
+    await client.artifact('t', 'lease_1', { name: 'a', contentType: 'text/plain', size: 1, uri: 'https://example.com/a' });
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    fetchMock.mockRestore();
+  });
 });

@@ -16,21 +16,28 @@ export const loadWorkerConfig = (env: NodeJS.ProcessEnv = process.env) => worker
   pollMs: env.TALOS_POLL_MS
 });
 
-export const runWorkerDaemon = async (env: NodeJS.ProcessEnv = process.env): Promise<() => void> => {
+export interface DaemonDependencies {
+  createClient?: (config: ReturnType<typeof loadWorkerConfig>) => HttpWorkerClient;
+  createExecutor?: (config: ReturnType<typeof loadWorkerConfig>) => BrowserExecutor;
+  createRuntime?: (client: HttpWorkerClient, executor: BrowserExecutor, config: ReturnType<typeof loadWorkerConfig>) => WorkerRuntime;
+}
+
+export const runWorkerDaemon = async (env: NodeJS.ProcessEnv = process.env, dependencies: DaemonDependencies = {}): Promise<() => Promise<void>> => {
   const config = loadWorkerConfig(env);
-  const client = new HttpWorkerClient(config);
-  const executor = new BrowserExecutor({ profilePath: config.profilePath, ...(config.cdpEndpoint === undefined ? {} : { cdpEndpoint: config.cdpEndpoint }) });
-  const runtime = new WorkerRuntime({ client, executor, planner: new ScriptedPlanner([{ type: 'action', action: { type: 'screenshot' } }, { type: 'done', findings: [] }]), heartbeatMs: config.heartbeatMs, logger: { warn: (message, fields) => process.stderr.write(JSON.stringify({ level: 'warn', message, ...fields }) + '\n'), error: (message, fields) => process.stderr.write(JSON.stringify({ level: 'error', message, ...fields }) + '\n') } });
+  const client = dependencies.createClient?.(config) ?? new HttpWorkerClient(config);
+  const executor = dependencies.createExecutor?.(config) ?? new BrowserExecutor({ profilePath: config.profilePath, ...(config.cdpEndpoint === undefined ? {} : { cdpEndpoint: config.cdpEndpoint }) });
+  const runtime = dependencies.createRuntime?.(client, executor, config) ?? new WorkerRuntime({ client, executor, planner: new ScriptedPlanner([{ type: 'action', action: { type: 'screenshot' } }, { type: 'done', findings: [] }]), heartbeatMs: config.heartbeatMs, logger: { warn: (message, fields) => process.stderr.write(JSON.stringify({ level: 'warn', message, ...fields }) + '\n'), error: (message, fields) => process.stderr.write(JSON.stringify({ level: 'error', message, ...fields }) + '\n') } });
   let stopped = false;
-  const stop = (): void => { stopped = true; };
+  const signalStop = (): void => { stopped = true; };
   const loop = async (): Promise<void> => {
     let backoff = config.pollMs;
     while (!stopped) {
       try {
         await runtime.runOnce();
         backoff = config.pollMs;
+        await new Promise((resolve) => setTimeout(resolve, config.pollMs));
       } catch (error) {
-        if (error instanceof Error && error.message.includes('not_found')) {
+        if (error instanceof Error && 'code' in error && error.code === 'not_found') {
           await new Promise((resolve) => setTimeout(resolve, backoff));
           backoff = Math.min(backoff * 2, 30000);
         } else {
@@ -40,10 +47,15 @@ export const runWorkerDaemon = async (env: NodeJS.ProcessEnv = process.env): Pro
     }
     await executor.close();
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
-  void loop();
-  return stop;
+  process.once('SIGINT', signalStop);
+  process.once('SIGTERM', signalStop);
+  const running = loop();
+  return async (): Promise<void> => {
+    stopped = true;
+    await running;
+    process.off('SIGINT', signalStop);
+    process.off('SIGTERM', signalStop);
+  };
 };
 
 /* c8 ignore next: process entrypoint branch is exercised by the deployed daemon, not unit imports. */
