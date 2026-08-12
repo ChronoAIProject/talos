@@ -21,7 +21,7 @@ export class MongoRepository implements Repository {
   private readonly pendingInputs: Collection<Document>;
 
   public constructor(url: string, databaseName = 'talos', options: MongoRepositoryOptions = {}) {
-    this.client = options.client ?? new MongoClient(url, options.clientOptions);
+    this.client = options.client ?? new MongoClient(url, { ...options.clientOptions, ignoreUndefined: true });
     this.database = this.client.db(databaseName);
     this.tasks = this.database.collection('tasks');
     this.pools = this.database.collection('pools');
@@ -141,7 +141,7 @@ export class MongoRepository implements Repository {
 }
 
 const withoutId = (document: Document): Record<string, unknown> => {
-  return Object.fromEntries(Object.entries(document).filter(([key]) => key !== '_id'));
+  return Object.fromEntries(Object.entries(document).filter(([key, value]) => key !== '_id' && value !== null));
 };
 
 const taskFromDocument = (document: Document): Task => withoutId(document) as unknown as Task;

@@ -104,8 +104,36 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
   });
 };
 
-describe('Repository contract: memory', () => contractTests(memoryHarness));
-describe('Repository contract: mongo', () => contractTests(mongoHarness, true));
+const undefinedLeaseTest = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
+  it('round-trips explicitly undefined lease fields as undefined', async () => {
+    if (allowUnavailable && mongoUrl === undefined) {
+      expect(mongoUnavailable).toBeTypeOf('string');
+      return;
+    }
+    const { repository, close } = await makeHarness();
+    try {
+      const claimed = baseTask({ status: 'claimed', leaseExpiresAt: '2025-01-01T00:01:00.000Z', leaseToken: 'lease-1', workerId: 'worker-1', machineId: 'machine-1' });
+      await repository.saveTask(claimed);
+      await repository.saveTask({ ...claimed, status: 'submitted', queuePriority: -1, leaseExpiresAt: undefined, leaseToken: undefined, workerId: undefined, machineId: undefined });
+      const requeued = await repository.getTask(claimed.id);
+      expect(requeued?.leaseExpiresAt).toBeUndefined();
+      expect(requeued?.leaseToken).toBeUndefined();
+      expect(requeued?.workerId).toBeUndefined();
+      expect(requeued?.machineId).toBeUndefined();
+    } finally {
+      await close();
+    }
+  });
+};
+
+describe('Repository contract: memory', () => {
+  contractTests(memoryHarness);
+  undefinedLeaseTest(memoryHarness);
+});
+describe('Repository contract: mongo', () => {
+  contractTests(mongoHarness, true);
+  undefinedLeaseTest(mongoHarness, true);
+});
 
 it('reports when Mongo contract execution is unavailable', () => {
   if (mongoUrl === undefined) expect(mongoUnavailable).toBeTypeOf('string');
