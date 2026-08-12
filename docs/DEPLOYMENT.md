@@ -4,12 +4,12 @@
 
 - Node.js 22 for workers that run directly on real hardware.
 - Docker 24+ and a registry for building and pushing the control-plane and platform-worker images.
-- PostgreSQL 15 or newer. Use managed Postgres such as Cloud SQL/RDS, or a Postgres operator such as CloudNativePG, for production. `deploy/k8s/postgres.example.yaml` is for development/testing only.
+- MongoDB 7 or newer. Use MongoDB Atlas or an operator such as the MongoDB Community Operator for production. `deploy/k8s/mongodb.example.yaml` is for development/testing only.
 - A verifying NyxID identity resolver and a production webhook callback host policy. The default `user:<id>` resolver is a development stub; see [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 Required control-plane secrets are `TALOS_WEBHOOK_SECRET`, `TALOS_ADMIN_TOKEN`, and `TALOS_DATABASE_URL`. When the database URL is unset, Talos starts with an in-memory repository and logs a warning that state is ephemeral.
 
-When `TALOS_DATABASE_URL` is set, the control plane automatically runs `control-plane/sql/schema.sql` through `PostgresRepository.initialize()` before it starts listening. The file uses idempotent `CREATE TABLE IF NOT EXISTS` statements. The runtime database user therefore needs DDL privileges during startup. Operators who restrict the runtime user to DML can pre-apply this schema file with a migration job or administrative database user, then run Talos with the restricted runtime credentials.
+When `TALOS_DATABASE_URL` is set, the control plane automatically creates its indexes through `MongoRepository.initialize()` before it starts listening. The runtime database user needs `createIndex` rights during startup. Operators who restrict runtime permissions can pre-create the indexes with an administrative user, then run Talos with credentials limited to normal reads and writes.
 
 ## Build and Push
 
@@ -28,7 +28,7 @@ The worker image is for Linux platform-pool workers and includes Playwright brow
 
 1. Replace placeholders in `deploy/k8s/secret.example.yaml` and apply `namespace.yaml` followed by the secret.
 2. Apply `control-plane-deployment.yaml` and `control-plane-service.yaml`, using the image tags you pushed.
-3. For development only, apply `postgres.example.yaml`; production should point `TALOS_DATABASE_URL` at managed Postgres or an operator-managed cluster.
+3. For development only, apply `mongodb.example.yaml`; production should point `TALOS_DATABASE_URL` at MongoDB Atlas or an operator-managed cluster.
 4. Optionally configure `ingress.example.yaml` after replacing its host and TLS placeholders.
 5. Register a platform machine with the admin API, create a Secret named `talos-worker-token` containing `TALOS_WORKER_TOKEN`, set `TALOS_MACHINE_ID`, and apply `worker.example.yaml`.
 
@@ -42,4 +42,4 @@ Register the OpenAPI document at `specs/talos-openapi.yaml` in the NyxID catalog
 
 ## Scaling Constraint
 
-Run exactly one control-plane replica in this phase. Postgres provides durability, but claim and lease requeue transitions are not yet transactionally safe across multiple replicas. A future follow-up must use `SELECT ... FOR UPDATE SKIP LOCKED` (and related transactional capacity updates) before horizontal scaling is enabled. The deployment therefore uses `replicas: 1` and `strategy: Recreate`.
+Run exactly one control-plane replica in this phase. MongoDB provides durability, but claim and lease requeue transitions are not yet transactionally safe across multiple replicas. A future follow-up must use `findOneAndUpdate`-based atomic claim and capacity updates before horizontal scaling is enabled. The deployment therefore uses `replicas: 1` and `strategy: Recreate`.

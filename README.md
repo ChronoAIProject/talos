@@ -55,4 +55,4 @@ For deployment, set the validated control-plane and worker environment variables
 
 Playwright is an optional dependency so a control-plane-only deployment can skip its browser binaries. A worker machine must install Playwright and its browser runtime; otherwise `BrowserExecutor` fails clearly when it receives its first claim.
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker builds, Kubernetes manifests, Postgres configuration, fleet registration, and the platform-worker versus real-machine deployment matrix.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker builds, Kubernetes manifests, MongoDB configuration, fleet registration, and the platform-worker versus real-machine deployment matrix.

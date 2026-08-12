@@ -1,0 +1,39 @@
+# DEVELOPMENT/TESTING ONLY. Do not use this single-instance database for production.
+# Use MongoDB Atlas or an operator such as the MongoDB Community Operator for production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  namespace: talos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:7
+          env:
+            - name: MONGO_INITDB_DATABASE
+              value: talos
+          ports:
+            - name: mongodb
+              containerPort: 27017
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: talos
+spec:
+  selector:
+    app: mongodb
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb

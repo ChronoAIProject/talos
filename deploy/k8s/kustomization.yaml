@@ -6,7 +6,7 @@ resources:
   - secret.example.yaml
   - control-plane-deployment.yaml
   - control-plane-service.yaml
-  # Apply postgres.example.yaml only for development/testing.
-  # - postgres.example.yaml
+  # Apply mongodb.example.yaml only for development/testing.
+  # - mongodb.example.yaml
   # - ingress.example.yaml
   # - worker.example.yaml
