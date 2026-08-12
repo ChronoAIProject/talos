@@ -49,6 +49,9 @@ describe('control-plane HTTP API', () => {
     expect(malformed.status).toBe(400);
     const invalid = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'bad' }) });
     expect(invalid.status).toBe(400);
+    const invalidBody = await invalid.json() as { error: { message: string } };
+    expect(invalidBody.error.message).toContain('kind:');
+    expect(invalidBody.error.message).not.toContain('\n');
     const oversized = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'browse', goal: 'x'.repeat(200) }) });
     expect(oversized.status).toBe(413);
     const unauthorizedMachine = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'other', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'w', machine_id: 'other' }) });

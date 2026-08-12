@@ -19,16 +19,10 @@ describe('Scheduler eligibility', () => {
     expect(await scheduler.isEligible(task({}, 'computer_use'), 'b', 'u')).toBeDefined();
     expect(await scheduler.isEligible(task({}, 'computer_use'), 'a', 'owner')).toBeUndefined();
     expect(await scheduler.isEligible(task({}, 'browse', 'p'), 'a', 'u')).toBeUndefined();
-    expect((await scheduler.selectMachine(task({ os: 'linux' }), 'u')).machine.id).toBe('b');
-
     await repository.saveMachine({ id: 'full', poolId: 'platform', tags: {}, capacity: 1, activeLeases: 1, online: true, workerTokenHash: 'x' });
     expect(await scheduler.isEligible(task(), 'full', 'u')).toBeUndefined();
     await repository.saveMachine({ id: 'offline', poolId: 'platform', tags: {}, capacity: 1, activeLeases: 0, online: false, workerTokenHash: 'x' });
     expect(await scheduler.isEligible(task(), 'offline', 'u')).toBeUndefined();
   });
 
-  it('reports when no machine is eligible', async () => {
-    const scheduler = new Scheduler(new MemoryRepository());
-    await expect(scheduler.selectMachine(task(), 'u')).rejects.toMatchObject({ code: 'conflict' });
-  });
 });

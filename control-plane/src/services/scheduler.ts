@@ -1,4 +1,3 @@
-import { conflict } from '../domain/errors.js';
 import type { Machine, Pool, Task } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 
@@ -13,14 +12,6 @@ export class Scheduler {
     const pool = await this.repository.getPool(machine.poolId);
     if (pool === undefined || !this.poolVisible(pool, userId) || !this.matches(task, machine)) return undefined;
     return { pool, machine };
-  }
-
-  public async selectMachine(task: Task, userId: string): Promise<{ pool: Pool; machine: Machine }> {
-    for (const machine of await this.repository.listMachines()) {
-      const result = await this.isEligible(task, machine.id, userId);
-      if (result !== undefined) return result;
-    }
-    throw conflict('no machine currently satisfies task requirements');
   }
 
   private poolVisible(pool: Pool, userId: string): boolean {

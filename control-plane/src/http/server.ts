@@ -47,7 +47,11 @@ export const createApiServer = (
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;
       const validation = error instanceof z.ZodError
-        ? { code: 'validation_error', message: error.message, status: 400 }
+        ? {
+            code: 'validation_error',
+            message: error.issues.map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; '),
+            status: 400
+          }
         : undefined;
       const invalidJson = error instanceof SyntaxError
         ? { code: 'invalid_json', message: 'request body must be valid JSON', status: 400 }
