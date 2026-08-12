@@ -1,0 +1,185 @@
+import { conflict, forbidden, notFound, unauthorized } from '../domain/errors.js';
+import { taskCreateSchema } from '../domain/schemas.js';
+import type { Lease, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
+import type { Repository } from '../storage/repository.js';
+import { newId } from '../util/id.js';
+import type { ProfileLockService } from './profile-lock.js';
+import type { Scheduler } from './scheduler.js';
+import type { WebhookSigner } from './webhook-signer.js';
+import type { SignedWebhook } from './webhook-signer.js';
+
+export interface TaskServiceOptions { leaseSeconds?: number; clock?: () => number; }
+
+export class TaskService {
+  private readonly leaseSeconds: number;
+  private readonly clock: () => number;
+  public constructor(private readonly repository: Repository, private readonly scheduler: Scheduler, private readonly profiles: ProfileLockService, private readonly signer: WebhookSigner, options: TaskServiceOptions = {}) {
+    this.leaseSeconds = options.leaseSeconds ?? 60;
+    this.clock = options.clock ?? Date.now;
+  }
+
+  public async createTask(userId: string, input: unknown): Promise<Task> {
+    const data = taskCreateSchema.parse(input);
+    if (data.profile_id !== undefined) await this.profiles.assertOwner(data.profile_id, userId);
+    const now = new Date(this.clock()).toISOString();
+    const task: Task = {
+      id: newId('task'), userId, kind: data.kind, goal: data.goal,
+      ...(data.site_hint === undefined ? {} : { siteHint: data.site_hint }),
+      ...(data.profile_id === undefined ? {} : { profileId: data.profile_id }),
+      constraints: data.constraints, mode: data.mode,
+      ...(data.callback === undefined ? {} : { callback: data.callback }),
+      status: 'submitted', createdAt: now, updatedAt: now, findings: [], artifacts: []
+    };
+    await this.repository.saveTask(task);
+    await this.emit(task, 'task.state_changed', { status: task.status });
+    return task;
+  }
+
+  public async getTask(id: string, userId: string): Promise<Task> { return this.authorizedTask(id, userId); }
+
+  public async claim(workerId: string, machineId: string, now = this.clock()): Promise<{ task: Task; lease: Lease; leaseToken: string }> {
+    const queued = await this.repository.listQueuedTasks();
+    for (const candidate of queued) {
+      try {
+        const { machine } = await this.scheduler.selectMachine(candidate, candidate.userId);
+        if (machine.id !== machineId) continue;
+        if (candidate.profileId !== undefined) {
+          const profile = await this.profiles.assertOwner(candidate.profileId, candidate.userId);
+          if (profile.machineId !== undefined && profile.machineId !== machine.id) continue;
+          await this.profiles.acquire(candidate.profileId, candidate.userId, candidate.id, now, machine.id);
+        }
+        const expiresAt = new Date(now + this.leaseSeconds * 1000).toISOString();
+        const leaseToken = newId('lease');
+        const task: Task = { ...candidate, status: 'claimed', updatedAt: new Date(now).toISOString(), claimedAt: new Date(now).toISOString(), leaseExpiresAt: expiresAt, leaseToken, queuePriority: undefined, workerId, machineId };
+        await this.repository.saveTask(task);
+        await this.repository.saveMachine({ ...machine, activeLeases: machine.activeLeases + 1 });
+        await this.emit(task, 'task.state_changed', { status: task.status });
+        return { task, lease: { taskId: task.id, workerId, machineId, expiresAt }, leaseToken };
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('profile already')) continue;
+        throw error;
+      }
+    }
+    throw notFound('no queued task available for worker');
+  }
+
+  public async heartbeat(taskId: string, workerId: string, leaseToken: string, extendSeconds: number): Promise<Task> {
+    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const now = this.clock();
+    const updated: Task = { ...task, status: 'running', updatedAt: new Date(now).toISOString(), leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString() };
+    await this.repository.saveTask(updated);
+    if (task.status !== updated.status) await this.emit(updated, 'task.state_changed', { status: updated.status });
+    return updated;
+  }
+
+  public async complete(taskId: string, workerId: string, leaseToken: string, status: 'completed' | 'failed', findings: readonly TaskFinding[], error?: { code: string; message: string }): Promise<Task> {
+    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const updated: Task = { ...task, status, updatedAt: new Date(this.clock()).toISOString(), findings: [...findings], ...(error === undefined ? {} : { error }) };
+    await this.repository.saveTask(updated);
+    await this.releaseLease(updated);
+    await this.emit(updated, 'task.state_changed', { status });
+    if (status === 'completed') await this.emit(updated, 'task.completed', { status });
+    return updated;
+  }
+
+  public async addArtifact(taskId: string, workerId: string, leaseToken: string, artifact: Task['artifacts'][number]): Promise<Task> {
+    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const updated: Task = { ...task, updatedAt: new Date(this.clock()).toISOString(), artifacts: [...task.artifacts, artifact] };
+    await this.repository.saveTask(updated);
+    return updated;
+  }
+
+  public async provideInput(id: string, userId: string, input: Task['input']): Promise<Task> {
+    const task = await this.authorizedTask(id, userId);
+    if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
+    const updated: Task = { ...task, status: 'running', input, updatedAt: new Date(this.clock()).toISOString() };
+    await this.repository.saveTask(updated);
+    await this.emit(updated, 'task.state_changed', { status: updated.status });
+    return updated;
+  }
+
+  public async needsInput(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
+    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const updated: Task = { ...task, status: 'needs_input', updatedAt: new Date(this.clock()).toISOString() };
+    await this.repository.saveTask(updated);
+    await this.emit(updated, 'task.needs_input', { status: updated.status });
+    return updated;
+  }
+
+  public async getWorkerInput(taskId: string, workerId: string, leaseToken: string): Promise<Task['input']> {
+    const task = await this.workerTask(taskId, workerId, leaseToken);
+    return task.input;
+  }
+
+  public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
+    const task = await this.authorizedTask(id, userId);
+    if (!['running', 'claimed'].includes(task.status)) throw conflict('task cannot request handoff in current state');
+    const expires = new Date(this.clock() + expiresInSeconds * 1000).toISOString();
+    const linkId = newId('handoff');
+    const url = `/v1/handoffs/${linkId}`;
+    await this.repository.saveHandoff({ id: linkId, taskId: id, userId, url, expiresAt: expires, used: false });
+    const updated: Task = { ...task, status: 'handoff', updatedAt: new Date(this.clock()).toISOString(), handoff: { url, expiresAt: expires } };
+    await this.repository.saveTask(updated);
+    await this.emit(updated, 'task.handoff_requested', { handoff_url: url, expires });
+    return { handoff_url: url, expires };
+  }
+
+  public async cancel(id: string, userId: string): Promise<Task> {
+    const task = await this.authorizedTask(id, userId);
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('task is already terminal');
+    const updated: Task = { ...task, status: 'cancelled', updatedAt: new Date(this.clock()).toISOString() };
+    await this.repository.saveTask(updated);
+    await this.releaseLease(updated);
+    await this.emit(updated, 'task.state_changed', { status: updated.status });
+    return updated;
+  }
+
+  public async expireLeases(now = this.clock()): Promise<readonly Task[]> {
+    const active = await this.repository.listTasks();
+    const expired: Task[] = [];
+    for (const candidate of active) {
+      const current = await this.repository.getTask(candidate.id);
+      if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running'].includes(current.status)) {
+        const requeued: Task = { ...current, status: 'submitted', updatedAt: new Date(now).toISOString(), leaseExpiresAt: undefined, leaseToken: undefined, workerId: undefined, machineId: undefined, queuePriority: -now };
+        await this.repository.saveTask(requeued);
+        await this.releaseLease(current);
+        expired.push(requeued);
+      }
+    }
+    return expired;
+  }
+
+  private async authorizedTask(id: string, userId: string): Promise<Task> {
+    const task = await this.repository.getTask(id);
+    if (task === undefined) throw notFound('task not found');
+    if (task.userId !== userId) throw forbidden('task belongs to another user');
+    return task;
+  }
+
+  private async workerTask(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
+    if (!leaseToken.startsWith('lease_')) throw unauthorized('invalid lease token');
+    const task = await this.repository.getTask(taskId);
+    if (task === undefined) throw notFound('task not found');
+    if (task.workerId !== workerId || task.leaseToken !== leaseToken || !['claimed', 'running'].includes(task.status)) throw unauthorized('worker does not own active lease');
+    if (task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= this.clock()) throw unauthorized('lease expired');
+    return task;
+  }
+
+  private async releaseLease(task: Task): Promise<void> {
+    if (task.machineId !== undefined) {
+      const machine = await this.repository.getMachine(task.machineId);
+      if (machine !== undefined) await this.repository.saveMachine({ ...machine, activeLeases: Math.max(0, machine.activeLeases - 1) });
+    }
+    if (task.profileId !== undefined) await this.profiles.release(task.profileId, task.id);
+  }
+
+  private async emit(task: Task, type: WebhookEvent['type'], payload: Record<string, unknown>): Promise<SignedWebhook> {
+    const event: WebhookEvent = { id: newId('evt'), type, taskId: task.id, userId: task.userId, timestamp: new Date(this.clock()).toISOString(), payload };
+    await this.repository.saveWebhook(event);
+    return this.signer.sign(event, this.clock());
+  }
+
+  public toPublicTask(task: Task): Omit<Task, 'leaseToken'> {
+    return Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'leaseToken')) as Omit<Task, 'leaseToken'>;
+  }
+}

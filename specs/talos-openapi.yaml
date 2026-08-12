@@ -1,0 +1,125 @@
+openapi: 3.1.0
+info:
+  title: Talos Task API
+  version: 0.1.0
+  description: |
+    Capability-neutral asynchronous machine-operation tasks for NyxID catalog registration.
+    Public requests are scoped by X-NyxID-Identity-Token. Worker endpoints use rotatable
+    pool worker tokens and are intended for outbound-only worker connections.
+servers:
+  - url: https://talos.example.invalid
+security:
+  - nyxIdentity: []
+paths:
+  /v1/tasks:
+    post:
+      operationId: submitTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+  /v1/tasks/{id}:
+    parameters: [{ $ref: '#/components/parameters/TaskId' }]
+    get:
+      operationId: getTask
+      responses: { '200': { description: Task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/tasks/{id}/input:
+    post:
+      operationId: provideTaskInput
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TaskInput' } } }
+      responses: { '200': { description: Updated task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/tasks/{id}/handoff:
+    post:
+      operationId: requestTaskHandoff
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { expires_in_seconds: { type: integer, minimum: 1, maximum: 3600, default: 900 } } } } }
+      responses:
+        '200': { description: Handoff link, content: { application/json: { schema: { $ref: '#/components/schemas/Handoff' } } } }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+  /v1/tasks/{id}/cancel:
+    post:
+      operationId: cancelTask
+      responses: { '200': { description: Cancelled task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/profiles/{id}/login-link:
+    post:
+      operationId: createProfileLoginLink
+      responses:
+        '501': { $ref: '#/components/responses/NotImplemented' }
+  /v1/worker/claim:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: claimTask
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [worker_id, machine_id], properties: { worker_id: { type: string }, machine_id: { type: string } } } } }
+      responses: { '200': { description: Claimed task, content: { application/json: { schema: { type: object } } } } }
+  /v1/worker/tasks/{id}/heartbeat:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: heartbeatTask
+      responses: { '200': { description: Running task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/worker/tasks/{id}/result:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: submitTaskResult
+      responses: { '200': { description: Final task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/worker/tasks/{id}/artifacts:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: uploadArtifact
+      responses: { '201': { description: Task with artifact, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+components:
+  parameters:
+    TaskId: { name: id, in: path, required: true, schema: { type: string } }
+  securitySchemes:
+    nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
+    workerToken: { type: http, scheme: bearer, description: Rotatable pool worker token. Include X-Talos-Worker-Id and X-Talos-Machine-Id. }
+  responses:
+    NotImplemented:
+      description: Phase 2/3 machinery is not implemented in Phase 1.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    TaskCreate:
+      type: object
+      required: [kind, goal]
+      properties:
+        kind: { type: string, enum: [browse, computer_use] }
+        goal: { type: string }
+        site_hint: { type: string }
+        profile_id: { type: string }
+        constraints: { type: object, properties: { budget: { type: number }, deadline: { type: string, format: date-time }, requirements: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } } } }
+        mode: { type: string, enum: [read_only, act], default: read_only }
+        callback: { type: string, format: uri }
+    TaskInput:
+      type: object
+      required: [kind, value]
+      properties: { kind: { type: string, enum: [choice, text, otp] }, value: { type: string } }
+    Task:
+      type: object
+      required: [id, userId, kind, goal, status, createdAt, updatedAt, findings, artifacts]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string, enum: [browse, computer_use] }
+        goal: { type: string }
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        findings: { type: array, items: { type: object } }
+        artifacts: { type: array, items: { type: object } }
+    Handoff:
+      type: object
+      required: [handoff_url, expires]
+      properties: { handoff_url: { type: string }, expires: { type: string, format: date-time } }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string } } } }
+x-webhook-signing:
+  scheme: HMAC-SHA256
+  headers: X-Talos-Webhook-Timestamp, X-Talos-Webhook-Signature
+  signed_payload: '{timestamp}.{raw_json_body}'
+  replay_tolerance_seconds: 300

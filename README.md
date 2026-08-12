@@ -28,7 +28,7 @@ A standalone service (never part of the NyxID codebase) that:
 - Aevatar: purchase/errand workflows submit tasks and suspend on `wait_signal`
 - Managed Codex: a codex agent can chain tasks to Talos through the NyxID proxy
 - Ornn: task playbooks (site-specific know-how) publishable as versioned skills
-- Oracle (Lexa): the proven ancestor of the worker protocol; the CDP worker is the
+- Oracle: the proven ancestor of the worker protocol; the CDP worker is the
   starting point for our worker daemon
 
 Architecture overview page (diagrams, decisions, weekly deliverables):
