@@ -52,7 +52,7 @@ export class PostgresRepository implements Repository {
   }
 
   public async listQueuedTasks(): Promise<readonly Task[]> {
-    const result = await this.pool.query<Row>("SELECT * FROM tasks WHERE status = 'submitted' ORDER BY queue_priority NULLS FIRST, created_at ASC");
+    const result = await this.pool.query<Row>("SELECT * FROM tasks WHERE status = 'submitted' ORDER BY COALESCE(queue_priority, 0) ASC, created_at ASC");
     return result.rows.map(taskFromRow);
   }
 

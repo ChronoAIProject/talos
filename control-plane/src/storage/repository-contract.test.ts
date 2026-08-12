@@ -91,4 +91,25 @@ describe.each(cases)('Repository contract: %s', (_name, makeHarness) => {
       await close();
     }
   });
+
+  it('puts requeued priority ahead of fresh tasks even when fresh work is older', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveTask(baseTask({
+        id: 'fresh',
+        createdAt: '2025-01-01T00:01:00.000Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'requeued',
+        createdAt: '2025-01-01T00:02:00.000Z',
+        queuePriority: -1
+      }));
+      expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual([
+        'requeued',
+        'fresh'
+      ]);
+    } finally {
+      await close();
+    }
+  });
 });
