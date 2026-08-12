@@ -12,7 +12,7 @@ interface BrowserPage {
 }
 
 interface BrowserContext { close(): Promise<void>; newPage(): Promise<BrowserPage>; }
-interface BrowserProvider { launchPersistentContext(path: string, options: Record<string, unknown>): Promise<BrowserContext>; }
+interface BrowserProvider { launchPersistentContext(path: string, options: Record<string, unknown>): Promise<BrowserContext>; connectOverCDP?(endpoint: string): Promise<BrowserContext>; }
 
 export interface BrowserExecutorOptions { profilePath: string; cdpEndpoint?: string; provider?: BrowserProvider; }
 
@@ -49,7 +49,11 @@ export class BrowserExecutor implements Executor {
   private async getPage(): Promise<BrowserPage> {
     if (this.page !== undefined) return this.page;
     const provider = this.options.provider ?? await this.loadProvider();
-    this.context = await provider.launchPersistentContext(this.options.profilePath, this.options.cdpEndpoint === undefined ? { headless: false } : { headless: false, cdpEndpoint: this.options.cdpEndpoint });
+    this.context = this.options.cdpEndpoint === undefined
+      ? await provider.launchPersistentContext(this.options.profilePath, { headless: false })
+      : provider.connectOverCDP === undefined
+        ? await provider.launchPersistentContext(this.options.profilePath, { headless: false })
+        : await provider.connectOverCDP(this.options.cdpEndpoint);
     this.page = await this.context.newPage();
     return this.page;
   }
