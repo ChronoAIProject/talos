@@ -15,4 +15,6 @@ export interface Repository {
   saveHandoff(link: HandoffLink): Promise<void>;
   getHandoff(id: string): Promise<HandoffLink | undefined>;
   saveWebhook(event: WebhookEvent): Promise<void>;
+  getWebhook(id: string): Promise<WebhookEvent | undefined>;
+  listWebhooks(): Promise<readonly WebhookEvent[]>;
 }

@@ -12,12 +12,12 @@ export class ProfileLockService {
     return profile;
   }
 
-  public async acquire(profileId: string, userId: string, taskId: string, now = Date.now(), machineId?: string): Promise<Profile> {
+  public async acquire(profileId: string, userId: string, taskId: string, now = Date.now(), machineId?: string, leaseSeconds = this.leaseSeconds): Promise<Profile> {
     const profile = await this.assertOwner(profileId, userId);
     if (profile.lockedByTaskId !== undefined && profile.lockExpiresAt !== undefined && Date.parse(profile.lockExpiresAt) > now && profile.lockedByTaskId !== taskId) {
       throw conflict('profile already has an active session');
     }
-    const next: Profile = { ...profile, ...(machineId === undefined ? {} : { machineId }), lockedByTaskId: taskId, lockExpiresAt: new Date(now + this.leaseSeconds * 1000).toISOString() };
+    const next: Profile = { ...profile, ...(machineId === undefined ? {} : { machineId }), lockedByTaskId: taskId, lockExpiresAt: new Date(now + leaseSeconds * 1000).toISOString() };
     await this.repository.saveProfile(next);
     return next;
   }
@@ -25,5 +25,12 @@ export class ProfileLockService {
   public async release(profileId: string, taskId: string): Promise<void> {
     const profile = await this.repository.getProfile(profileId);
     if (profile?.lockedByTaskId === taskId) await this.repository.saveProfile({ id: profile.id, userId: profile.userId, ...(profile.machineId === undefined ? {} : { machineId: profile.machineId }) });
+  }
+
+  public async renew(profileId: string, taskId: string, now = Date.now(), leaseSeconds = this.leaseSeconds): Promise<void> {
+    const profile = await this.repository.getProfile(profileId);
+    if (profile?.lockedByTaskId === taskId) {
+      await this.repository.saveProfile({ ...profile, lockExpiresAt: new Date(now + leaseSeconds * 1000).toISOString() });
+    }
   }
 }

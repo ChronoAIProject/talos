@@ -5,14 +5,20 @@ import type { Repository } from '../storage/repository.js';
 export class Scheduler {
   public constructor(private readonly repository: Repository) {}
 
-  public async selectMachine(task: Task, userId: string): Promise<{ pool: Pool; machine: Machine }> {
+  public async isEligible(task: Task, machineId: string, userId: string): Promise<{ pool: Pool; machine: Machine } | undefined> {
     const profile = task.profileId === undefined ? undefined : await this.repository.getProfile(task.profileId);
-    const machines = [...(await this.repository.listMachines())].sort((a, b) => Number(profile?.machineId === b.id) - Number(profile?.machineId === a.id));
-    for (const machine of machines) {
-      if (!machine.online || machine.activeLeases >= machine.capacity) continue;
-      const pool = await this.repository.getPool(machine.poolId);
-      if (pool === undefined || !this.poolVisible(pool, userId) || !this.matches(task, machine)) continue;
-      return { pool, machine };
+    const machine = await this.repository.getMachine(machineId);
+    if (machine === undefined || !machine.online || machine.activeLeases >= machine.capacity) return undefined;
+    if (profile?.machineId !== undefined && profile.machineId !== machine.id) return undefined;
+    const pool = await this.repository.getPool(machine.poolId);
+    if (pool === undefined || !this.poolVisible(pool, userId) || !this.matches(task, machine)) return undefined;
+    return { pool, machine };
+  }
+
+  public async selectMachine(task: Task, userId: string): Promise<{ pool: Pool; machine: Machine }> {
+    for (const machine of await this.repository.listMachines()) {
+      const result = await this.isEligible(task, machine.id, userId);
+      if (result !== undefined) return result;
     }
     throw conflict('no machine currently satisfies task requirements');
   }
@@ -22,6 +28,7 @@ export class Scheduler {
   }
 
   private matches(task: Task, machine: Machine): boolean {
+    if (task.kind === 'computer_use' && machine.tags.computer_use !== true) return false;
     const requirements = task.constraints.requirements ?? {};
     return Object.entries(requirements).every(([key, wanted]) => machine.tags[key] === wanted);
   }

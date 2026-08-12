@@ -27,7 +27,7 @@ export const taskCreateSchema = z.object({
     })
     .default({}),
   mode: z.enum(['read_only', 'act']).default('read_only'),
-  callback: z.string().url().max(2048).optional()
+  callback: z.string().url().max(2048).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'callback must use http or https').optional()
 });
 
 export const taskInputSchema = z.object({
@@ -70,6 +70,26 @@ export const artifactSchema = z.object({
   size: z.number().int().nonnegative(),
   uri: z.string().url().max(2048)
 });
+
+export const adminPoolSchema = z.object({
+  id: z.string().min(1),
+  visibility: z.enum(['private', 'org', 'platform']),
+  owner_user_id: z.string().min(1).optional(),
+  tags: z.record(z.union([z.string(), z.boolean()])).default({})
+});
+
+export const adminMachineSchema = z.object({
+  id: z.string().min(1),
+  pool_id: z.string().min(1),
+  tags: z.record(z.union([z.string(), z.boolean()])).default({}),
+  capacity: z.number().int().positive().default(1),
+  online: z.boolean().default(true),
+  worker_token: z.string().min(16)
+});
+
+export const adminRotateMachineSchema = z.object({ worker_token: z.string().min(16) });
+
+export const adminProfileSchema = z.object({ id: z.string().min(1), user_id: z.string().min(1), machine_id: z.string().min(1).optional() });
 
 export type TaskCreateRequest = z.infer<typeof taskCreateSchema>;
 export type TaskInputRequest = z.infer<typeof taskInputSchema>;

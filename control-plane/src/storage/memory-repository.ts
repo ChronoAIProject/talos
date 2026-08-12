@@ -29,4 +29,6 @@ export class MemoryRepository implements Repository {
   public async saveHandoff(link: HandoffLink): Promise<void> { this.handoffs.set(link.id, link); }
   public async getHandoff(id: string): Promise<HandoffLink | undefined> { return this.handoffs.get(id); }
   public async saveWebhook(event: WebhookEvent): Promise<void> { this.webhooks.set(event.id, event); }
+  public async getWebhook(id: string): Promise<WebhookEvent | undefined> { return this.webhooks.get(id); }
+  public async listWebhooks(): Promise<readonly WebhookEvent[]> { return [...this.webhooks.values()]; }
 }

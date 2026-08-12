@@ -117,4 +117,5 @@ export interface WebhookEvent {
   userId: string;
   timestamp: string;
   payload: Record<string, unknown>;
+  delivery: { status: 'pending' | 'delivered' | 'failed'; attempts: number; lastAttemptAt?: string; lastError?: string };
 }
