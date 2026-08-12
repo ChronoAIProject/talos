@@ -1,6 +1,8 @@
 import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 
 export interface Repository {
+  ping(): Promise<void>;
+  close(): Promise<void>;
   getTask(id: string): Promise<Task | undefined>;
   saveTask(task: Task): Promise<void>;
   listQueuedTasks(): Promise<readonly Task[]>;

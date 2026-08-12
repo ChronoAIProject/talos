@@ -47,6 +47,14 @@ export const createApiServer = (
   const identities = options.identityResolver ?? defaultIdentityResolver;
   return createServer(async (request, response) => {
     try {
+      if (request.method === 'GET' && new URL(request.url ?? '/', 'http://talos.local').pathname === '/healthz') {
+        try {
+          await repository.ping();
+          return send(response, 200, { status: 'ok' });
+        } catch {
+          return send(response, 503, { status: 'degraded' });
+        }
+      }
       await route(request, response, service, repository, identities, options);
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;

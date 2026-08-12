@@ -6,14 +6,22 @@ import { TaskService } from './services/task-service.js';
 import { WebhookSigner } from './services/webhook-signer.js';
 import { WebhookDispatcher, type WebhookDispatcherOptions } from './services/webhook-dispatcher.js';
 import { MemoryRepository } from './storage/memory-repository.js';
+import { PostgresRepository } from './storage/postgres-repository.js';
+import type { Repository } from './storage/repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
 import { createLogger } from './util/logger.js';
 
-export interface ControlPlaneServer extends Server { stopSweep(): void; }
+export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
+
+export const createRepository = (databaseUrl = process.env.TALOS_DATABASE_URL): Repository => {
+  if (databaseUrl !== undefined) return new PostgresRepository({ poolConfig: { connectionString: databaseUrl } });
+  createLogger().warn('using in-memory repository; state is ephemeral and lost on restart');
+  return new MemoryRepository();
+};
 
 export const createControlPlane = (
-  repository = new MemoryRepository(),
+  repository = createRepository(),
   webhookSecret = process.env.TALOS_WEBHOOK_SECRET,
   options: {
     adminToken?: string;
@@ -36,6 +44,8 @@ export const createControlPlane = (
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
     clock: Date.now
   }) as ControlPlaneServer;
+  server.repository = repository;
+  server.on('close', () => { void repository.close(); });
   const interval = setInterval(() => {
     void service.expireLeases();
   }, options.sweepIntervalMs ?? 10000);
@@ -47,7 +57,16 @@ export const createControlPlane = (
 /* c8 ignore next: process entrypoint branch is exercised by the deployed process, not unit imports. */
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
-  createControlPlane(undefined, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs }).listen(config.port);
+  const repository = createRepository(config.databaseUrl);
+  if (repository instanceof PostgresRepository) await repository.initialize();
+  const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs });
+  const shutdown = (): void => {
+    server.stopSweep();
+    server.close();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  server.listen(config.port);
 }
 
 export * from './domain/types.js';
@@ -59,5 +78,6 @@ export * from './services/profile-lock.js';
 export * from './services/webhook-signer.js';
 export * from './services/webhook-dispatcher.js';
 export * from './storage/memory-repository.js';
+export * from './storage/postgres-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';

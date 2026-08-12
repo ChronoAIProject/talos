@@ -9,6 +9,7 @@ info:
     identity resolver is a development stub; production must inject a verifying NyxID resolver.
 servers:
   - url: https://talos.example.invalid
+  # /healthz is an operational Kubernetes probe and is intentionally omitted from the NyxID catalog contract.
 security:
   - nyxIdentity: []
 paths:

@@ -10,6 +10,10 @@ export class MemoryRepository implements Repository {
   private readonly webhooks = new Map<string, WebhookEvent>();
   private readonly pendingInputs = new Map<string, TaskInput>();
 
+  public async ping(): Promise<void> {}
+
+  public async close(): Promise<void> {}
+
   public async getTask(id: string): Promise<Task | undefined> {
     return this.tasks.get(id);
   }

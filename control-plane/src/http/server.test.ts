@@ -8,6 +8,19 @@ import { MemoryRepository } from '../storage/memory-repository.js';
 import { createApiServer } from './server.js';
 
 describe('control-plane HTTP API', () => {
+  it('serves an unauthenticated repository health check', async () => {
+    const repository = new MemoryRepository();
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok' });
+    server.close();
+  });
+
   it('enforces NyxID and worker authentication across lifecycle routes', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
