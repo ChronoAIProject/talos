@@ -50,6 +50,7 @@ export interface Task {
   goal: string;
   siteHint?: string;
   profileId?: string;
+  poolId?: string;
   constraints: TaskConstraints;
   mode: TaskMode;
   callback?: string;
@@ -76,6 +77,7 @@ export interface PublicTask {
   goal: string;
   siteHint?: string;
   profileId?: string;
+  poolId?: string;
   constraints: TaskConstraints;
   mode: TaskMode;
   callback?: string;

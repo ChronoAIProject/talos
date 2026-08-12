@@ -42,6 +42,11 @@ export class TaskService {
     const data = taskCreateSchema.parse(input);
     if (data.callback !== undefined) this.validateCallback?.(data.callback);
     if (data.profile_id !== undefined) await this.profiles.assertOwner(data.profile_id, userId);
+    if (data.pool_id !== undefined) {
+      const pool = await this.repository.getPool(data.pool_id);
+      if (pool === undefined) throw notFound('pool not found');
+      if (pool.visibility === 'private' && pool.ownerUserId !== userId) throw forbidden('pool belongs to another user');
+    }
     const now = new Date(this.clock()).toISOString();
     const task: Task = {
       id: newId('task'),
@@ -50,6 +55,7 @@ export class TaskService {
       goal: data.goal,
       ...(data.site_hint === undefined ? {} : { siteHint: data.site_hint }),
       ...(data.profile_id === undefined ? {} : { profileId: data.profile_id }),
+      ...(data.pool_id === undefined ? {} : { poolId: data.pool_id }),
       constraints: data.constraints,
       mode: data.mode,
       ...(data.callback === undefined ? {} : { callback: data.callback }),

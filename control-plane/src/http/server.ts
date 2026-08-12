@@ -7,6 +7,10 @@ import {
   adminPoolSchema,
   adminProfileSchema,
   adminRotateMachineSchema,
+  selfMachineSchema,
+  selfPoolSchema,
+  selfProfileSchema,
+  selfRotateMachineSchema,
   artifactSchema,
   handoffRequestSchema,
   heartbeatSchema,
@@ -14,7 +18,7 @@ import {
   taskInputSchema,
   workerClaimSchema
 } from '../domain/schemas.js';
-import { TalosError, notFound, notImplemented, payloadTooLarge, unauthorized } from '../domain/errors.js';
+import { TalosError, conflict, forbidden, notFound, notImplemented, payloadTooLarge, unauthorized } from '../domain/errors.js';
 import type { TaskService } from '../services/task-service.js';
 import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
@@ -95,6 +99,32 @@ const route = async (
   if (parts[1] === 'worker') return workerRoute(request, response, service, repository, parts, options);
 
   const userId = requireIdentity(request, identities);
+  if (parts[1] === 'pools') return fleetPoolRoute(request, response, repository, parts, userId, options);
+  if (parts[1] === 'machines' && parts[2] !== undefined && parts[3] === 'rotate-token' && method === 'POST') {
+    const machine = await repository.getMachine(parts[2]);
+    if (machine === undefined) throw notFound('machine not found');
+    await assertPoolOwner(repository, machine.poolId, userId);
+    const input = selfRotateMachineSchema.parse(await readBody(request, options.maxBodyBytes));
+    const workerToken = input.worker_token ?? issueWorkerToken();
+    await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(workerToken) });
+    return send(response, 200, { id: machine.id, rotated: true, worker_token: workerToken });
+  }
+  if (parts[1] === 'profiles' && parts.length === 2 && method === 'POST') {
+    const input = selfProfileSchema.parse(await readBody(request, options.maxBodyBytes));
+    if (input.machine_id !== undefined) {
+      const machine = await repository.getMachine(input.machine_id);
+      if (machine === undefined) throw notFound('machine not found');
+      await assertPoolOwner(repository, machine.poolId, userId);
+    }
+    const id = input.id ?? newId('profile');
+    if (await repository.getProfile(id) !== undefined) throw conflict('profile already exists');
+    await repository.saveProfile({ id, userId, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
+    return send(response, 201, { id, user_id: userId, ...(input.machine_id === undefined ? {} : { machine_id: input.machine_id }) });
+  }
+  if (parts[1] === 'profiles' && parts.length === 2 && method === 'GET') {
+    const profiles = await repository.listProfilesByUser(userId);
+    return send(response, 200, profiles.map((profile) => ({ id: profile.id, user_id: profile.userId, ...(profile.machineId === undefined ? {} : { machine_id: profile.machineId }) })));
+  }
   if (method === 'POST' && parts.length === 2 && parts[1] === 'tasks') {
     const task = await service.createTask(userId, await readBody(request, options.maxBodyBytes));
     return send(response, 201, service.toPublicTask(task));
@@ -120,6 +150,57 @@ const route = async (
     if (profile === undefined) throw notFound('profile not found');
     if (profile.userId !== userId) throw unauthorized('profile belongs to another user');
     throw notImplemented('profile login links are planned for Phase 2');
+  }
+  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+};
+
+const assertPoolOwner = async (repository: Repository, poolId: string, userId: string): Promise<NonNullable<Awaited<ReturnType<Repository['getPool']>>>> => {
+  const pool = await repository.getPool(poolId);
+  if (pool === undefined) throw notFound('pool not found');
+  if (pool.ownerUserId !== userId) throw forbidden('pool belongs to another user');
+  return pool;
+};
+
+const publicMachine = (machine: Awaited<ReturnType<Repository['getMachine']>>): unknown => {
+  if (machine === undefined) return undefined;
+  return { id: machine.id, pool_id: machine.poolId, tags: machine.tags, capacity: machine.capacity, online: machine.online, active_leases: machine.activeLeases };
+};
+
+const fleetPoolRoute = async (
+  request: IncomingMessage,
+  response: ServerResponse,
+  repository: Repository,
+  parts: readonly string[],
+  userId: string,
+  options: ServerOptions
+): Promise<void> => {
+  const method = request.method ?? 'GET';
+  if (parts.length === 2 && method === 'POST') {
+    const input = selfPoolSchema.parse(await readBody(request, options.maxBodyBytes));
+    if (input.visibility !== undefined && input.visibility !== 'private') throw forbidden('org and platform pools are admin-only');
+    if (input.owner_user_id !== undefined && input.owner_user_id !== userId) throw forbidden('pool owner is the authenticated user');
+    const id = input.id ?? newId('pool');
+    if (await repository.getPool(id) !== undefined) throw conflict('pool already exists');
+    await repository.savePool({ id, visibility: 'private', ownerUserId: userId, tags: input.tags });
+    return send(response, 201, { id, visibility: 'private', owner_user_id: userId, tags: input.tags });
+  }
+  if (parts.length === 2 && method === 'GET') {
+    const pools = await repository.listPoolsByOwner(userId);
+    return send(response, 200, pools.map((pool) => ({ id: pool.id, visibility: pool.visibility, owner_user_id: pool.ownerUserId, tags: pool.tags })));
+  }
+  if (parts[3] === 'machines' && parts[2] !== undefined) {
+    const pool = await assertPoolOwner(repository, parts[2], userId);
+    if (method === 'POST' && parts.length === 4) {
+      const input = selfMachineSchema.parse(await readBody(request, options.maxBodyBytes));
+      if (await repository.getMachine(input.id) !== undefined) throw conflict('machine already exists');
+      const workerToken = input.worker_token ?? issueWorkerToken();
+      await repository.saveMachine({ id: input.id, poolId: pool.id, tags: input.tags, capacity: input.capacity, online: input.online, activeLeases: 0, workerTokenHash: hashWorkerToken(workerToken) });
+      return send(response, 201, { id: input.id, worker_token: workerToken });
+    }
+    if (method === 'GET' && parts.length === 4) {
+      const machines = await repository.listMachines(pool.id);
+      return send(response, 200, machines.map(publicMachine));
+    }
   }
   return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
 };

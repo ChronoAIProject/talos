@@ -19,6 +19,7 @@ export const taskCreateSchema = z.object({
   goal: z.string().trim().min(1).max(10000),
   site_hint: z.string().trim().min(1).max(255).optional(),
   profile_id: z.string().trim().min(1).max(255).optional(),
+  pool_id: z.string().trim().min(1).max(255).optional(),
   constraints: z
     .object({
       budget: z.number().finite().nonnegative().optional(),
@@ -90,6 +91,28 @@ export const adminMachineSchema = z.object({
 export const adminRotateMachineSchema = z.object({ worker_token: z.string().min(16).optional() });
 
 export const adminProfileSchema = z.object({ id: z.string().min(1), user_id: z.string().min(1), machine_id: z.string().min(1).optional() });
+
+export const selfPoolSchema = z.object({
+  id: z.string().trim().min(1).max(255).optional(),
+  visibility: z.enum(['private', 'org', 'platform']).optional(),
+  owner_user_id: z.string().trim().min(1).max(255).optional(),
+  tags: z.record(z.union([z.string(), z.boolean()])).default({})
+});
+
+export const selfMachineSchema = z.object({
+  id: z.string().trim().min(1).max(255),
+  tags: z.record(z.union([z.string(), z.boolean()])).default({}),
+  capacity: z.number().int().positive().default(1),
+  online: z.boolean().default(true),
+  worker_token: z.string().min(16).optional()
+});
+
+export const selfRotateMachineSchema = z.object({ worker_token: z.string().min(16).optional() });
+
+export const selfProfileSchema = z.object({
+  id: z.string().trim().min(1).max(255).optional(),
+  machine_id: z.string().trim().min(1).max(255).optional()
+});
 
 export type TaskCreateRequest = z.infer<typeof taskCreateSchema>;
 export type TaskInputRequest = z.infer<typeof taskInputSchema>;

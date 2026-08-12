@@ -39,6 +39,10 @@ export class MemoryRepository implements Repository {
     this.pools.set(pool.id, pool);
   }
 
+  public async listPoolsByOwner(ownerUserId: string): Promise<readonly Pool[]> {
+    return [...this.pools.values()].filter((pool) => pool.ownerUserId === ownerUserId);
+  }
+
   public async listMachines(poolId?: string): Promise<readonly Machine[]> {
     return [...this.machines.values()].filter(
       (machine) => poolId === undefined || machine.poolId === poolId
@@ -58,6 +62,10 @@ export class MemoryRepository implements Repository {
 
   public async saveProfile(profile: Profile): Promise<void> {
     this.profiles.set(profile.id, profile);
+  }
+
+  public async listProfilesByUser(userId: string): Promise<readonly Profile[]> {
+    return [...this.profiles.values()].filter((profile) => profile.userId === userId);
   }
 
   public async saveHandoff(link: HandoffLink): Promise<void> {
