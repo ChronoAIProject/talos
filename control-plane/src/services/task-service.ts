@@ -38,7 +38,7 @@ export class TaskService {
     this.logger = options.logger;
   }
 
-  public async createTask(userId: string, input: unknown): Promise<Task> {
+  public async createTask(userId: string, input: unknown, requesterGroups: readonly string[] = []): Promise<Task> {
     const data = taskCreateSchema.parse(input);
     if (data.callback !== undefined) this.validateCallback?.(data.callback);
     const profile = data.profile_id === undefined
@@ -47,7 +47,7 @@ export class TaskService {
     if (data.pool_id !== undefined) {
       const pool = await this.repository.getPool(data.pool_id);
       if (pool === undefined) throw notFound('pool not found');
-      if (pool.visibility === 'private' && pool.ownerUserId !== userId) throw forbidden('pool belongs to another user');
+      if (!this.scheduler.poolVisible(pool, userId, requesterGroups)) throw forbidden('pool is not visible to this identity');
       if (profile?.machineId !== undefined) {
         const machine = await this.repository.getMachine(profile.machineId);
         if (machine === undefined) throw notFound('profile pinned machine not found');
@@ -63,6 +63,7 @@ export class TaskService {
       ...(data.site_hint === undefined ? {} : { siteHint: data.site_hint }),
       ...(data.profile_id === undefined ? {} : { profileId: data.profile_id }),
       ...(data.pool_id === undefined ? {} : { poolId: data.pool_id }),
+      ...(requesterGroups.length === 0 ? {} : { requesterGroups: [...requesterGroups] }),
       constraints: data.constraints,
       mode: data.mode,
       ...(data.callback === undefined ? {} : { callback: data.callback }),
@@ -83,7 +84,7 @@ export class TaskService {
     const queued = await this.repository.listQueuedTasks();
     for (const candidate of queued) {
       try {
-        const eligible = await this.scheduler.isEligible(candidate, machineId, candidate.userId);
+        const eligible = await this.scheduler.isEligible(candidate, machineId, candidate.userId, candidate.requesterGroups ?? []);
         if (eligible === undefined) continue;
         const { machine } = eligible;
         if (candidate.profileId !== undefined) {
@@ -317,7 +318,8 @@ export class TaskService {
       'workerId',
       'machineId',
       'leaseExpiresAt',
-      'input'
+      'input',
+      'requesterGroups'
     ]);
     return Object.fromEntries(
       Object.entries(task).filter(([key]) => !hidden.has(key))

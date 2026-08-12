@@ -76,7 +76,8 @@ export const adminPoolSchema = z.object({
   id: z.string().min(1),
   visibility: z.enum(['private', 'org', 'platform']),
   owner_user_id: z.string().min(1).optional(),
-  tags: z.record(z.union([z.string(), z.boolean()])).default({})
+  tags: z.record(z.union([z.string(), z.boolean()])).default({}),
+  shared_with_groups: z.array(z.string().trim().min(1).max(255)).default([])
 });
 
 export const adminMachineSchema = z.object({
@@ -94,9 +95,16 @@ export const adminProfileSchema = z.object({ id: z.string().min(1), user_id: z.s
 
 export const selfPoolSchema = z.object({
   id: z.string().trim().min(1).max(255).optional(),
-  visibility: z.enum(['private', 'org', 'platform']).optional(),
-  tags: z.record(z.union([z.string(), z.boolean()])).default({})
+  visibility: z.enum(['private', 'org']).optional(),
+  tags: z.record(z.union([z.string(), z.boolean()])).default({}),
+  shared_with_groups: z.array(z.string().trim().min(1).max(255)).default([])
 }).strict();
+
+export const selfPoolPatchSchema = z.object({
+  visibility: z.enum(['private', 'org']).optional(),
+  shared_with_groups: z.array(z.string().trim().min(1).max(255)).optional(),
+  tags: z.record(z.union([z.string(), z.boolean()])).optional()
+}).strict().refine((value) => Object.keys(value).length > 0, 'at least one pool field is required');
 
 export const selfMachineSchema = z.object({
   id: z.string().trim().min(1).max(255),

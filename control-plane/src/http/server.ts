@@ -9,6 +9,7 @@ import {
   adminRotateMachineSchema,
   selfMachineSchema,
   selfPoolSchema,
+  selfPoolPatchSchema,
   selfProfileSchema,
   selfRotateMachineSchema,
   artifactSchema,
@@ -23,10 +24,7 @@ import type { TaskService } from '../services/task-service.js';
 import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
 import { newId } from '../util/id.js';
-
-export interface IdentityResolver {
-  resolve(token: string): string | undefined;
-}
+import type { IdentityResolver, ResolvedIdentity } from '../identity.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -35,9 +33,17 @@ export interface ServerOptions {
   clock?: () => number;
 }
 
-const defaultIdentityResolver: IdentityResolver = {
-  resolve: (token) => token.startsWith('user:') ? token.slice(5) : undefined
-};
+export const defaultIdentityResolver: IdentityResolver = new (class {
+  public resolve(token: string): ResolvedIdentity | undefined {
+    if (!token.startsWith('user:')) return undefined;
+    const [userPart = '', ...attributes] = token.split(';');
+    const userId = userPart.slice(5);
+    if (userId.length === 0) return undefined;
+    const groups = attributes.find((value) => value.startsWith('groups='))?.slice(7).split(',').filter(Boolean) ?? [];
+    const permissions = attributes.find((value) => value.startsWith('permissions='))?.slice(12).split(',').filter(Boolean) ?? [];
+    return { userId, groups, permissions };
+  }
+})();
 
 export const createApiServer = (
   service: TaskService,
@@ -93,10 +99,10 @@ const route = async (
 
   if (parts[0] !== 'v1') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
   if (parts[1] === 'handoffs' && parts[2] !== undefined && method === 'GET') {
-    const userId = requireIdentity(request, identities);
+    const identity = await requireIdentity(request, identities);
     const link = await repository.getHandoff(parts[2]);
     if (link === undefined) throw notFound('handoff not found');
-    if (link.userId !== userId) throw unauthorized('handoff belongs to another user');
+    if (link.userId !== identity.userId) throw unauthorized('handoff belongs to another user');
     if (link.used || Date.parse(link.expiresAt) <= (options.clock?.() ?? Date.now())) {
       throw new TalosError('handoff_expired', 'handoff link is expired or already used', 409);
     }
@@ -106,8 +112,9 @@ const route = async (
   if (parts[1] === 'admin') return adminRoute(request, response, repository, parts, options);
   if (parts[1] === 'worker') return workerRoute(request, response, service, repository, parts, options);
 
-  const userId = requireIdentity(request, identities);
-  if (parts[1] === 'pools') return fleetPoolRoute(request, response, repository, parts, userId, options);
+  const identity = await requireIdentity(request, identities);
+  const userId = identity.userId;
+  if (parts[1] === 'pools') return fleetPoolRoute(request, response, repository, parts, identity, options);
   if (parts[1] === 'machines' && parts[2] !== undefined && parts[3] === 'rotate-token' && method === 'POST') {
     const machine = await repository.getMachine(parts[2]);
     if (machine === undefined) throw notFound('machine not found');
@@ -142,7 +149,7 @@ const route = async (
     })));
   }
   if (method === 'POST' && parts.length === 2 && parts[1] === 'tasks') {
-    const task = await service.createTask(userId, await readBody(request, options.maxBodyBytes));
+    const task = await service.createTask(userId, await readBody(request, options.maxBodyBytes), identity.groups);
     return send(response, 201, service.toPublicTask(task));
   }
   if (parts[1] === 'tasks' && parts[2] !== undefined && method === 'GET' && parts.length === 3) {
@@ -190,21 +197,41 @@ const fleetPoolRoute = async (
   response: ServerResponse,
   repository: Repository,
   parts: readonly string[],
-  userId: string,
+  identity: ResolvedIdentity,
   options: ServerOptions
 ): Promise<void> => {
   const method = request.method ?? 'GET';
+  const userId = identity.userId;
   if (parts.length === 2 && method === 'POST') {
     const input = selfPoolSchema.parse(await readBody(request, options.maxBodyBytes));
-    if (input.visibility !== undefined && input.visibility !== 'private') throw forbidden('org and platform pools are admin-only');
     const id = input.id ?? newId('pool');
     if (await repository.getPool(id) !== undefined) throw conflict('pool already exists');
-    await repository.savePool({ id, visibility: 'private', ownerUserId: userId, tags: input.tags });
+    const visibility = input.visibility ?? 'private';
+    await repository.savePool({ id, visibility, ownerUserId: userId, tags: input.tags, ...(input.shared_with_groups.length === 0 ? {} : { sharedWithGroups: input.shared_with_groups }) });
     return send(response, 201, {
       id,
-      visibility: 'private',
+      visibility,
       ownerUserId: userId,
-      tags: input.tags
+      tags: input.tags,
+      ...(input.shared_with_groups.length === 0 ? {} : { sharedWithGroups: input.shared_with_groups })
+    });
+  }
+  if (parts.length === 3 && method === 'PATCH') {
+    const pool = await assertPoolOwner(repository, parts[2] as string, userId);
+    const input = selfPoolPatchSchema.parse(await readBody(request, options.maxBodyBytes));
+    const updated = {
+      ...pool,
+      ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+      ...(input.tags === undefined ? {} : { tags: input.tags }),
+      ...(input.shared_with_groups === undefined ? {} : { sharedWithGroups: input.shared_with_groups })
+    };
+    await repository.savePool(updated);
+    return send(response, 200, {
+      id: updated.id,
+      visibility: updated.visibility,
+      ownerUserId: updated.ownerUserId,
+      tags: updated.tags,
+      ...(updated.sharedWithGroups === undefined ? {} : { sharedWithGroups: updated.sharedWithGroups })
     });
   }
   if (parts.length === 2 && method === 'GET') {
@@ -213,7 +240,8 @@ const fleetPoolRoute = async (
       id: pool.id,
       visibility: pool.visibility,
       ownerUserId: pool.ownerUserId,
-      tags: pool.tags
+      tags: pool.tags,
+      ...(pool.sharedWithGroups === undefined ? {} : { sharedWithGroups: pool.sharedWithGroups })
     })));
   }
   if (parts[3] === 'machines' && parts[2] !== undefined) {
@@ -253,7 +281,7 @@ const adminRoute = async (
   if (parts[2] === 'pools') {
     const input = adminPoolSchema.parse(await readBody(request, options.maxBodyBytes));
     if (await repository.getPool(input.id) !== undefined) throw conflict('pool already exists');
-    await repository.savePool({ id: input.id, visibility: input.visibility, ...(input.owner_user_id === undefined ? {} : { ownerUserId: input.owner_user_id }), tags: input.tags });
+    await repository.savePool({ id: input.id, visibility: input.visibility, ...(input.owner_user_id === undefined ? {} : { ownerUserId: input.owner_user_id }), tags: input.tags, ...(input.shared_with_groups.length === 0 ? {} : { sharedWithGroups: input.shared_with_groups }) });
     return send(response, 201, { id: input.id });
   }
   if (parts[2] === 'machines' && parts[3] !== undefined && parts[4] === 'rotate-token') {
@@ -328,12 +356,12 @@ const workerRoute = async (
   return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
 };
 
-const requireIdentity = (request: IncomingMessage, resolver: IdentityResolver): string => {
+const requireIdentity = async (request: IncomingMessage, resolver: IdentityResolver): Promise<ResolvedIdentity> => {
   const header = request.headers['x-nyxid-identity-token'];
   const token = Array.isArray(header) ? header[0] : header;
-  const userId = token === undefined ? undefined : resolver.resolve(token);
-  if (userId === undefined) throw unauthorized('X-NyxID-Identity-Token is required');
-  return userId;
+  const identity = token === undefined ? undefined : await resolver.resolve(token);
+  if (identity === undefined) throw unauthorized('X-NyxID-Identity-Token is required');
+  return identity;
 };
 
 const requireWorker = async (request: IncomingMessage, repository: Repository): Promise<string> => {

@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "jose": "^6.2.8",
     "mongodb": "^7.5.0",
     "zod": "^3.24.1"
   }

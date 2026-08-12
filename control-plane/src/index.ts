@@ -11,6 +11,7 @@ import type { Repository } from './storage/repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
 import { createLogger } from './util/logger.js';
+import { DevIdentityResolver, JwtIdentityResolver, type IdentityResolver } from './identity.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -25,6 +26,7 @@ export const createControlPlane = (
   webhookSecret = process.env.TALOS_WEBHOOK_SECRET,
   options: {
     adminToken?: string;
+    identityResolver?: IdentityResolver;
     sweepIntervalMs?: number;
     webhook?: Omit<WebhookDispatcherOptions, 'clock'>;
   } = {}
@@ -42,6 +44,7 @@ export const createControlPlane = (
   });
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
+    identityResolver: options.identityResolver,
     clock: Date.now
   }) as ControlPlaneServer;
   server.repository = repository;
@@ -59,7 +62,18 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   const config = loadConfig();
   const repository = createRepository(config.databaseUrl, config.databaseName);
   if (repository instanceof MongoRepository) await repository.initialize();
-  const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs });
+  const identityResolver = config.nyxidJwtPublicKey !== undefined || config.nyxidJwksUrl !== undefined
+    ? new JwtIdentityResolver({
+        publicKey: config.nyxidJwtPublicKey,
+        jwksUrl: config.nyxidJwksUrl,
+        issuer: config.nyxidIssuer as string,
+        audience: config.nyxidAudience as string
+      })
+    : (() => {
+        createLogger().warn('NyxID JWT verification is not configured; using the development-only identity stub');
+        return new DevIdentityResolver();
+      })();
+  const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs, identityResolver });
   const shutdown = (): void => {
     server.stopSweep();
     server.close();

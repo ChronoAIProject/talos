@@ -51,6 +51,7 @@ export interface Task {
   siteHint?: string;
   profileId?: string;
   poolId?: string;
+  requesterGroups?: readonly string[];
   constraints: TaskConstraints;
   mode: TaskMode;
   callback?: string;
@@ -95,6 +96,7 @@ export interface Pool {
   id: string;
   visibility: 'private' | 'org' | 'platform';
   ownerUserId?: string;
+  sharedWithGroups?: readonly string[];
   tags: Readonly<Record<string, string | boolean>>;
 }
 
