@@ -84,10 +84,10 @@ export const adminMachineSchema = z.object({
   tags: z.record(z.union([z.string(), z.boolean()])).default({}),
   capacity: z.number().int().positive().default(1),
   online: z.boolean().default(true),
-  worker_token: z.string().min(16)
+  worker_token: z.string().min(16).optional()
 });
 
-export const adminRotateMachineSchema = z.object({ worker_token: z.string().min(16) });
+export const adminRotateMachineSchema = z.object({ worker_token: z.string().min(16).optional() });
 
 export const adminProfileSchema = z.object({ id: z.string().min(1), user_id: z.string().min(1), machine_id: z.string().min(1).optional() });
 

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import { z } from 'zod';
@@ -77,8 +77,10 @@ const route = async (
 
   if (parts[0] !== 'v1') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
   if (parts[1] === 'handoffs' && parts[2] !== undefined && method === 'GET') {
+    const userId = requireIdentity(request, identities);
     const link = await repository.getHandoff(parts[2]);
     if (link === undefined) throw notFound('handoff not found');
+    if (link.userId !== userId) throw unauthorized('handoff belongs to another user');
     if (link.used || Date.parse(link.expiresAt) <= (options.clock?.() ?? Date.now())) {
       throw new TalosError('handoff_expired', 'handoff link is expired or already used', 409);
     }
@@ -133,14 +135,16 @@ const adminRoute = async (
     const input = adminRotateMachineSchema.parse(await readBody(request, options.maxBodyBytes));
     const machine = await repository.getMachine(parts[3]);
     if (machine === undefined) throw notFound('machine not found');
-    await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(input.worker_token) });
-    return send(response, 200, { id: machine.id, rotated: true });
+    const workerToken = input.worker_token ?? issueWorkerToken();
+    await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(workerToken) });
+    return send(response, 200, { id: machine.id, rotated: true, worker_token: workerToken });
   }
   if (parts[2] === 'machines') {
     const input = adminMachineSchema.parse(await readBody(request, options.maxBodyBytes));
     if (await repository.getPool(input.pool_id) === undefined) throw notFound('pool not found');
-    await repository.saveMachine({ id: input.id, poolId: input.pool_id, tags: input.tags, capacity: input.capacity, online: input.online, activeLeases: 0, workerTokenHash: hashWorkerToken(input.worker_token) });
-    return send(response, 201, { id: input.id });
+    const workerToken = input.worker_token ?? issueWorkerToken();
+    await repository.saveMachine({ id: input.id, poolId: input.pool_id, tags: input.tags, capacity: input.capacity, online: input.online, activeLeases: 0, workerTokenHash: hashWorkerToken(workerToken) });
+    return send(response, 201, { id: input.id, worker_token: workerToken });
   }
   if (parts[2] === 'profiles') {
     const input = adminProfileSchema.parse(await readBody(request, options.maxBodyBytes));
@@ -237,6 +241,8 @@ const requireAdmin = (request: IncomingMessage, expected?: string): void => {
   const target = Buffer.from(expected);
   if (actual.length !== target.length || !timingSafeEqual(actual, target)) throw unauthorized('invalid admin token');
 };
+
+const issueWorkerToken = (): string => `tw_${randomBytes(24).toString('base64url')}`;
 
 const send = (response: ServerResponse, status: number, payload: unknown): void => {
   response.statusCode = status;

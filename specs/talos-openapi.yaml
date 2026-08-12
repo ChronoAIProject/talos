@@ -68,6 +68,18 @@ paths:
       operationId: heartbeatTask
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Heartbeat' } } } }
       responses: { '200': { description: Running task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/worker/tasks/{id}/needs-input:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: signalNeedsInput
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LeaseToken' } } } }
+      responses: { '200': { description: Task waiting for input, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/worker/tasks/{id}/input:
+    get:
+      security: [{ workerToken: [] }]
+      operationId: getRelayedInput
+      parameters: [{ name: X-Talos-Lease-Token, in: header, required: true, schema: { type: string } }]
+      responses: { '200': { description: Private input relay, content: { application/json: { schema: { type: object, properties: { input: { $ref: '#/components/schemas/TaskInput' } } } } } } }
   /v1/worker/tasks/{id}/result:
     post:
       security: [{ workerToken: [] }]
@@ -80,16 +92,52 @@ paths:
       operationId: uploadArtifact
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ArtifactUpload' } } } }
       responses: { '201': { description: Task with artifact, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } }
+  /v1/admin/pools:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerPool
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
+      responses: { '201': { description: Registered pool }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /v1/admin/machines:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerMachine
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMachine' } } } }
+      responses: { '201': { description: Registered machine with worker token } }
+  /v1/admin/machines/{id}/rotate-token:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: rotateMachineToken
+      parameters: [{ $ref: '#/components/parameters/TaskId' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { worker_token: { type: string, minLength: 16 } } } } } }
+      responses: { '200': { description: Rotated worker token } }
+  /v1/admin/profiles:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerProfile
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminProfile' } } } }
+      responses: { '201': { description: Registered profile } }
+  /v1/handoffs/{id}:
+    get:
+      security: [{ nyxIdentity: [] }]
+      operationId: consumeHandoff
+      parameters: [{ $ref: '#/components/parameters/TaskId' }]
+      responses: { '501': { $ref: '#/components/responses/NotImplemented' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } }
 components:
   parameters:
     TaskId: { name: id, in: path, required: true, schema: { type: string } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
     workerToken: { type: http, scheme: bearer, description: Rotatable pool worker token. Include X-Talos-Worker-Id and X-Talos-Machine-Id. }
+    adminToken: { type: apiKey, in: header, name: X-Talos-Admin-Token, description: Startup-configured administrative registration token. }
   responses:
     BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: Missing or invalid identity, worker, or admin credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     PayloadTooLarge: { description: Request body exceeds 1 MiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: State conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Identity-scoped resource belongs to another user, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotImplemented:
       description: Phase 2/3 machinery is not implemented in Phase 1.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
@@ -144,12 +192,41 @@ components:
       type: object
       required: [lease_token, name, content_type, size, uri]
       properties: { lease_token: { type: string }, name: { type: string }, content_type: { type: string }, size: { type: integer }, uri: { type: string, format: uri } }
+    LeaseToken:
+      type: object
+      required: [lease_token]
+      properties: { lease_token: { type: string } }
+    AdminPool:
+      type: object
+      required: [id, visibility]
+      properties: { id: { type: string }, visibility: { type: string, enum: [private, org, platform] }, owner_user_id: { type: string }, tags: { type: object } }
+    AdminMachine:
+      type: object
+      required: [id, pool_id]
+      properties: { id: { type: string }, pool_id: { type: string }, tags: { type: object }, capacity: { type: integer }, online: { type: boolean }, worker_token: { type: string, minLength: 16, description: Omit to have Talos issue a rotatable token. } }
+    AdminProfile:
+      type: object
+      required: [id, user_id]
+      properties: { id: { type: string }, user_id: { type: string }, machine_id: { type: string } }
     Error:
       type: object
       required: [error]
       properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string } } } }
+    WebhookEvent:
+      type: object
+      required: [id, type, taskId, userId, timestamp, payload]
+      properties: { id: { type: string }, type: { type: string, enum: [task.state_changed, task.needs_input, task.handoff_requested, task.completed] }, taskId: { type: string }, userId: { type: string }, timestamp: { type: string, format: date-time }, payload: { type: object }, delivery: { type: object } }
 x-webhook-signing:
   scheme: HMAC-SHA256
   headers: X-Talos-Webhook-Timestamp, X-Talos-Webhook-Signature
   signed_payload: '{timestamp}.{raw_json_body}'
   replay_tolerance_seconds: 300
+x-webhooks:
+  task.state_changed:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.needs_input:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.handoff_requested:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.completed:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }

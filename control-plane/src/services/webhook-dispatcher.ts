@@ -1,5 +1,6 @@
 import type { Repository } from '../storage/repository.js';
 import type { WebhookEvent } from '../domain/types.js';
+import { TalosError } from '../domain/errors.js';
 import type { WebhookSigner } from './webhook-signer.js';
 
 export interface WebhookPolicy {
@@ -39,17 +40,16 @@ export class WebhookDispatcher {
 
   public validateCallback(callback: string): void {
     const url = new URL(callback);
-    if (!this.policy.schemes.includes(url.protocol)) throw new Error('callback scheme is not allowed');
-    if (this.policy.hosts.length > 0 && !this.policy.hosts.includes(url.host)) throw new Error('callback host is not allowed');
+    if (!this.policy.schemes.includes(url.protocol)) throw new TalosError('validation_error', 'callback scheme is not allowed', 400);
+    if (this.policy.hosts.length > 0 && !this.policy.hosts.includes(url.host)) throw new TalosError('validation_error', 'callback host is not allowed', 400);
   }
 
-  public async dispatch(event: WebhookEvent, callback?: string): Promise<void> {
+  public async dispatch(event: WebhookEvent, callback?: string, signed = this.signer.sign(event, this.clock())): Promise<void> {
     if (callback === undefined) {
       await this.update(event, { status: 'delivered', attempts: 0 });
       return;
     }
     this.validateCallback(callback);
-    const signed = this.signer.sign(event, this.clock());
     let lastError = 'delivery failed';
     for (let attempt = 1; attempt <= this.retries; attempt += 1) {
       try {

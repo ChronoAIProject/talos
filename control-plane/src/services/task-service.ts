@@ -9,12 +9,18 @@ import type { Scheduler } from './scheduler.js';
 import type { WebhookSigner } from './webhook-signer.js';
 import type { SignedWebhook } from './webhook-signer.js';
 
-export interface TaskServiceOptions { leaseSeconds?: number; clock?: () => number; onWebhook?: (event: WebhookEvent, callback?: string) => Promise<void>; }
+export interface TaskServiceOptions {
+  leaseSeconds?: number;
+  clock?: () => number;
+  onWebhook?: (event: WebhookEvent, signed: SignedWebhook, callback?: string) => Promise<void>;
+  validateCallback?: (callback: string) => void;
+}
 
 export class TaskService {
   private readonly leaseSeconds: number;
   private readonly clock: () => number;
-  private readonly onWebhook?: (event: WebhookEvent, callback?: string) => Promise<void>;
+  private readonly onWebhook?: (event: WebhookEvent, signed: SignedWebhook, callback?: string) => Promise<void>;
+  private readonly validateCallback?: (callback: string) => void;
   private readonly pendingInputs = new Map<string, Task['input']>();
   public constructor(
     private readonly repository: Repository,
@@ -26,10 +32,12 @@ export class TaskService {
     this.leaseSeconds = options.leaseSeconds ?? 60;
     this.clock = options.clock ?? Date.now;
     this.onWebhook = options.onWebhook;
+    this.validateCallback = options.validateCallback;
   }
 
   public async createTask(userId: string, input: unknown): Promise<Task> {
     const data = taskCreateSchema.parse(input);
+    if (data.callback !== undefined) this.validateCallback?.(data.callback);
     if (data.profile_id !== undefined) await this.profiles.assertOwner(data.profile_id, userId);
     const now = new Date(this.clock()).toISOString();
     const task: Task = {
@@ -218,7 +226,7 @@ export class TaskService {
     };
     await this.repository.saveWebhook(event);
     const signed = this.signer.sign(event, this.clock());
-    if (this.onWebhook !== undefined) await this.onWebhook(event, task.callback);
+    if (this.onWebhook !== undefined) await this.onWebhook(event, signed, task.callback);
     return signed;
   }
 
