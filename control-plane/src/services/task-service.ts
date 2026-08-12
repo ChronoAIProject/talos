@@ -41,11 +41,18 @@ export class TaskService {
   public async createTask(userId: string, input: unknown): Promise<Task> {
     const data = taskCreateSchema.parse(input);
     if (data.callback !== undefined) this.validateCallback?.(data.callback);
-    if (data.profile_id !== undefined) await this.profiles.assertOwner(data.profile_id, userId);
+    const profile = data.profile_id === undefined
+      ? undefined
+      : await this.profiles.assertOwner(data.profile_id, userId);
     if (data.pool_id !== undefined) {
       const pool = await this.repository.getPool(data.pool_id);
       if (pool === undefined) throw notFound('pool not found');
       if (pool.visibility === 'private' && pool.ownerUserId !== userId) throw forbidden('pool belongs to another user');
+      if (profile?.machineId !== undefined) {
+        const machine = await this.repository.getMachine(profile.machineId);
+        if (machine === undefined) throw notFound('profile pinned machine not found');
+        if (machine.poolId !== pool.id) throw conflict('profile pinned machine belongs to a different pool');
+      }
     }
     const now = new Date(this.clock()).toISOString();
     const task: Task = {

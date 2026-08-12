@@ -83,6 +83,32 @@ describe('task service', () => {
     await expect(service.claim('worker-a', 'machine')).rejects.toMatchObject({ code: 'not_found' });
   });
 
+  it('rejects a pool target that conflicts with the profile pinned machine', async () => {
+    const { repository, service } = setup();
+    await repository.savePool({ id: 'local', visibility: 'private', ownerUserId: 'user-a', tags: {} });
+    await repository.savePool({ id: 'remote', visibility: 'platform', tags: {} });
+    await repository.saveMachine({
+      id: 'remote-machine',
+      poolId: 'remote',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'x'
+    });
+    await repository.saveProfile({ id: 'profile', userId: 'user-a', machineId: 'remote-machine' });
+
+    await expect(service.createTask('user-a', {
+      kind: 'browse',
+      goal: 'impossible target',
+      profile_id: 'profile',
+      pool_id: 'local'
+    })).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'profile pinned machine belongs to a different pool'
+    });
+  });
+
   it('keeps a profile lock renewed and resumes late input without requeue', async () => {
     const { repository, service, clock } = setup({ value: 1000 });
     await repository.saveProfile({ id: 'profile', userId: 'user-a' });
