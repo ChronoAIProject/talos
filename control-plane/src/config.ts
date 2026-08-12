@@ -6,7 +6,7 @@ const configSchema = z.object({
   TALOS_PORT: z.coerce.number().int().positive().default(8080),
   TALOS_ADMIN_TOKEN: z.string().min(16),
   TALOS_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(10000),
-  TALOS_DATABASE_URL: z.string().url().optional()
+  TALOS_DATABASE_URL: z.string().url().refine((value) => value.startsWith('postgres://') || value.startsWith('postgresql://'), 'TALOS_DATABASE_URL must use postgres or postgresql').optional()
 });
 
 export interface TalosConfig { webhookSecret: string; port: number; adminToken: string; sweepIntervalMs: number; databaseUrl?: string; }
