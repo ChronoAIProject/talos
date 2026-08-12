@@ -206,8 +206,8 @@ const fleetPoolRoute = async (
       ...(input.shared_with_groups.length === 0 ? {} : { sharedWithGroups: input.shared_with_groups })
     });
   }
-  if (parts.length === 3 && method === 'PATCH') {
-    const pool = await assertPoolOwner(repository, parts[2] as string, userId);
+  if (parts.length === 3 && parts[2] !== undefined && method === 'PATCH') {
+    const pool = await assertPoolOwner(repository, parts[2], userId);
     const input = selfPoolPatchSchema.parse(await readBody(request, options.maxBodyBytes));
     const updated = {
       ...pool,
