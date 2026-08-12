@@ -103,11 +103,10 @@ export const selfMachineSchema = z.object({
   id: z.string().trim().min(1).max(255),
   tags: z.record(z.union([z.string(), z.boolean()])).default({}),
   capacity: z.number().int().positive().default(1),
-  online: z.boolean().default(true),
-  worker_token: z.string().min(16).optional()
-});
+  online: z.boolean().default(true)
+}).strict();
 
-export const selfRotateMachineSchema = z.object({ worker_token: z.string().min(16).optional() });
+export const selfRotateMachineSchema = z.object({}).strict();
 
 export const selfProfileSchema = z.object({
   id: z.string().trim().min(1).max(255).optional(),

@@ -104,8 +104,8 @@ const route = async (
     const machine = await repository.getMachine(parts[2]);
     if (machine === undefined) throw notFound('machine not found');
     await assertPoolOwner(repository, machine.poolId, userId);
-    const input = selfRotateMachineSchema.parse(await readBody(request, options.maxBodyBytes));
-    const workerToken = input.worker_token ?? issueWorkerToken();
+    selfRotateMachineSchema.parse(await readBody(request, options.maxBodyBytes));
+    const workerToken = issueWorkerToken();
     await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(workerToken) });
     return send(response, 200, { id: machine.id, rotated: true, worker_token: workerToken });
   }
@@ -119,11 +119,19 @@ const route = async (
     const id = input.id ?? newId('profile');
     if (await repository.getProfile(id) !== undefined) throw conflict('profile already exists');
     await repository.saveProfile({ id, userId, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
-    return send(response, 201, { id, user_id: userId, ...(input.machine_id === undefined ? {} : { machine_id: input.machine_id }) });
+    return send(response, 201, {
+      id,
+      userId,
+      ...(input.machine_id === undefined ? {} : { machineId: input.machine_id })
+    });
   }
   if (parts[1] === 'profiles' && parts.length === 2 && method === 'GET') {
     const profiles = await repository.listProfilesByUser(userId);
-    return send(response, 200, profiles.map((profile) => ({ id: profile.id, user_id: profile.userId, ...(profile.machineId === undefined ? {} : { machine_id: profile.machineId }) })));
+    return send(response, 200, profiles.map((profile) => ({
+      id: profile.id,
+      userId: profile.userId,
+      ...(profile.machineId === undefined ? {} : { machineId: profile.machineId })
+    })));
   }
   if (method === 'POST' && parts.length === 2 && parts[1] === 'tasks') {
     const task = await service.createTask(userId, await readBody(request, options.maxBodyBytes));
@@ -161,10 +169,13 @@ const assertPoolOwner = async (repository: Repository, poolId: string, userId: s
   return pool;
 };
 
-const publicMachine = (machine: Awaited<ReturnType<Repository['getMachine']>>): unknown => {
-  if (machine === undefined) return undefined;
-  return { id: machine.id, pool_id: machine.poolId, tags: machine.tags, capacity: machine.capacity, online: machine.online, active_leases: machine.activeLeases };
-};
+const publicMachine = (machine: NonNullable<Awaited<ReturnType<Repository['getMachine']>>>): unknown => ({
+  id: machine.id,
+  tags: machine.tags,
+  capacity: machine.capacity,
+  online: machine.online,
+  activeLeases: machine.activeLeases
+});
 
 const fleetPoolRoute = async (
   request: IncomingMessage,
@@ -182,19 +193,37 @@ const fleetPoolRoute = async (
     const id = input.id ?? newId('pool');
     if (await repository.getPool(id) !== undefined) throw conflict('pool already exists');
     await repository.savePool({ id, visibility: 'private', ownerUserId: userId, tags: input.tags });
-    return send(response, 201, { id, visibility: 'private', owner_user_id: userId, tags: input.tags });
+    return send(response, 201, {
+      id,
+      visibility: 'private',
+      ownerUserId: userId,
+      tags: input.tags
+    });
   }
   if (parts.length === 2 && method === 'GET') {
     const pools = await repository.listPoolsByOwner(userId);
-    return send(response, 200, pools.map((pool) => ({ id: pool.id, visibility: pool.visibility, owner_user_id: pool.ownerUserId, tags: pool.tags })));
+    return send(response, 200, pools.map((pool) => ({
+      id: pool.id,
+      visibility: pool.visibility,
+      ownerUserId: pool.ownerUserId,
+      tags: pool.tags
+    })));
   }
   if (parts[3] === 'machines' && parts[2] !== undefined) {
     const pool = await assertPoolOwner(repository, parts[2], userId);
     if (method === 'POST' && parts.length === 4) {
       const input = selfMachineSchema.parse(await readBody(request, options.maxBodyBytes));
       if (await repository.getMachine(input.id) !== undefined) throw conflict('machine already exists');
-      const workerToken = input.worker_token ?? issueWorkerToken();
-      await repository.saveMachine({ id: input.id, poolId: pool.id, tags: input.tags, capacity: input.capacity, online: input.online, activeLeases: 0, workerTokenHash: hashWorkerToken(workerToken) });
+      const workerToken = issueWorkerToken();
+      await repository.saveMachine({
+        id: input.id,
+        poolId: pool.id,
+        tags: input.tags,
+        capacity: input.capacity,
+        online: input.online,
+        activeLeases: 0,
+        workerTokenHash: hashWorkerToken(workerToken)
+      });
       return send(response, 201, { id: input.id, worker_token: workerToken });
     }
     if (method === 'GET' && parts.length === 4) {
