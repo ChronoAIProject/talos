@@ -21,11 +21,14 @@ spec:
           type: RuntimeDefault
       containers:
         - name: control-plane
-          image: ghcr.io/example/talos-control-plane:latest
+          # 0.0.1 pinned by digest (pushed 2026-08-13, linux/amd64)
+          image: REGISTRY/talos-control-plane@sha256:715199b5907f03c00bdf6366179459afd3b927362aafd6b872ddb0336fd9bb8f
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: talos-secrets
+            - configMapRef:
+                name: talos-config
           ports:
             - name: http
               containerPort: 8080

@@ -1,0 +1,20 @@
+# Non-secret runtime configuration for the Talos control plane.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: talos-config
+  namespace: talos
+data:
+  TALOS_PORT: "8080"
+  TALOS_DATABASE_NAME: "talos"
+  TALOS_SWEEP_INTERVAL_MS: "10000"
+  # NyxID identity assertion verification. JWKS endpoint verified live (HTTP 200).
+  TALOS_NYXID_JWKS_URL: "https://nyxid.example.com/.well-known/jwks.json"
+  # NyxID's JWT_ISSUER env is unset in its prod configmap, so the issuer
+  # defaults to the backend BASE_URL.
+  TALOS_NYXID_ISSUER: "https://nyxid.example.com"
+  # TODO(you): must exactly match what NyxID puts in the assertion `aud` claim
+  # for the registered Talos service: the service's `identity_jwt_audience` if
+  # you set one at registration, otherwise the service's registered base_url
+  # (e.g. "https://talos.example.com").
+  TALOS_NYXID_AUDIENCE: "REPLACE_ME_registered_base_url_or_audience"

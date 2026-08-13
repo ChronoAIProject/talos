@@ -3,3 +3,4 @@ coverage/
 **/dist/
 **/*.tsbuildinfo
 .DS_Store
+deploy/k8s/secret.yaml
