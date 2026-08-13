@@ -91,6 +91,7 @@ export * from './domain/types.js';
 export * from './domain/schemas.js';
 export * from './domain/errors.js';
 export * from './services/task-service.js';
+export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';
 export * from './services/webhook-signer.js';
