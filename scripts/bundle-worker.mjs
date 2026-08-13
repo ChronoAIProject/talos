@@ -6,7 +6,6 @@ import { build } from 'esbuild';
 const root = resolve(import.meta.dirname, '..');
 const releaseRoot = resolve(root, 'worker', 'release');
 const packageDirectory = resolve(releaseRoot, 'talos-worker');
-const rootPackage = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const workerPackage = JSON.parse(await readFile(resolve(root, 'worker', 'package.json'), 'utf8'));
 const version = process.env.TALOS_WORKER_VERSION ?? workerPackage.version;
 const archive = resolve(releaseRoot, `talos-worker-${version}.tar.gz`);

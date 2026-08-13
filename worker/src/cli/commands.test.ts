@@ -98,6 +98,7 @@ describe('worker CLI commands', () => {
     await statusCommand(dependencies);
     await serviceCommand('install', dependencies);
     expect(output.join('\n')).toContain('Control plane: unreachable');
+    expect(output.join('\n')).toContain('There is no public worker endpoint');
     expect(output.join('\n')).toContain('Windows background service installation is not automated');
     expect(output.join('\n')).not.toContain('secret-token-123456');
   });

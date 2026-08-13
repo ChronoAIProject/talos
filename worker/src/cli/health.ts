@@ -10,7 +10,7 @@ export const checkControlPlaneHealth = async (
     if (body.status !== 'ok') throw new Error('control plane reported degraded health');
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`cannot reach ${healthUrl.toString()}: ${reason}. Connect this machine to the required VPN or in-network environment, then retry.`);
+    throw new Error(`cannot reach ${healthUrl.toString()}: ${reason}. There is no public worker endpoint; connect this machine to the required VPN or in-network environment, then retry.`);
   }
 };
 
