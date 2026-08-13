@@ -2,7 +2,7 @@ import type { Action, ActionResult } from '../protocol/actions.js';
 import type { Executor, ExecutorContext } from './executor.js';
 
 interface BrowserPage {
-  screenshot(options?: { type: 'png' }): Promise<Buffer>;
+  screenshot(options: { type: 'jpeg'; quality: number } | { type: 'png' }): Promise<Buffer>;
   mouse: { click(x: number, y: number, options?: { button: 'left' | 'middle' | 'right' }): Promise<void>; wheel(x: number, y: number): Promise<void>; };
   keyboard: { type(text: string): Promise<void>; press(key: string): Promise<void>; };
   waitForTimeout(milliseconds: number): Promise<void>;
@@ -29,7 +29,17 @@ export class BrowserExecutor implements Executor {
     switch (action.type) {
       case 'screenshot': {
         const viewport = page.viewportSize() ?? { width: 0, height: 0 };
-        return { screenshot: { mimeType: 'image/png', data: (await page.screenshot({ type: 'png' })).toString('base64'), ...viewport } };
+        const format = action.format ?? 'jpeg';
+        const options = format === 'jpeg'
+          ? { type: 'jpeg' as const, quality: action.quality ?? 70 }
+          : { type: 'png' as const };
+        return {
+          screenshot: {
+            mimeType: format === 'jpeg' ? 'image/jpeg' : 'image/png',
+            data: (await page.screenshot(options)).toString('base64'),
+            ...viewport
+          }
+        };
       }
       case 'click': await page.mouse.click(action.x, action.y, { button: action.button }); return {};
       case 'type': await page.keyboard.type(action.text); return {};

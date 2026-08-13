@@ -37,7 +37,9 @@ export const loadWorkerConfig = (
     ...(env.TALOS_CDP_ENDPOINT === undefined ? {} : { cdpEndpoint: env.TALOS_CDP_ENDPOINT }),
     ...(env.TALOS_HEARTBEAT_MS === undefined ? {} : { heartbeatMs: env.TALOS_HEARTBEAT_MS }),
     ...(env.TALOS_POLL_MS === undefined ? {} : { pollMs: env.TALOS_POLL_MS }),
-    ...(env.TALOS_INPUT_POLL_MS === undefined ? {} : { inputPollMs: env.TALOS_INPUT_POLL_MS })
+    ...(env.TALOS_INPUT_POLL_MS === undefined ? {} : { inputPollMs: env.TALOS_INPUT_POLL_MS }),
+    ...(env.TALOS_ACTION_POLL_MS === undefined ? {} : { actionPollMs: env.TALOS_ACTION_POLL_MS }),
+    ...(env.TALOS_SESSION_IDLE_MS === undefined ? {} : { sessionIdleMs: env.TALOS_SESSION_IDLE_MS })
   });
 };
 
@@ -50,6 +52,8 @@ export const workerConfigToEnv = (config: WorkerConfig): NodeJS.ProcessEnv => ({
   TALOS_HEARTBEAT_MS: String(config.heartbeatMs),
   TALOS_POLL_MS: String(config.pollMs),
   TALOS_INPUT_POLL_MS: String(config.inputPollMs),
+  TALOS_ACTION_POLL_MS: String(config.actionPollMs),
+  TALOS_SESSION_IDLE_MS: String(config.sessionIdleMs),
   ...(config.cdpEndpoint === undefined ? {} : { TALOS_CDP_ENDPOINT: config.cdpEndpoint })
 });
 

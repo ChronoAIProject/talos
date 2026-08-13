@@ -7,12 +7,14 @@ describe('WorkerRuntime', () => {
     const calls: string[] = [];
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => ({ status: 'running' as const }),
         result: async (_id, _token, status) => { calls.push(status); },
         artifact: async () => undefined,
         needsInput: async () => undefined,
-        getInput: async () => undefined
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       planner: { plan: async (_task, last) => last === undefined ? { type: 'action', action: { type: 'screenshot' } } : { type: 'done', findings: [] } },
       executor: { execute: async (action) => { calls.push(action.type); return {}; }, close: async () => { calls.push('close'); } }
@@ -25,12 +27,14 @@ describe('WorkerRuntime', () => {
     const calls: boolean[] = [];
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => ({ status: 'running' as const }),
         result: async (_id, _token, status) => { expect(status).toBe('failed'); },
         artifact: async () => undefined,
         needsInput: async () => undefined,
-        getInput: async () => undefined
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       planner: { plan: async () => ({ type: 'action', action: { type: 'wait', milliseconds: 0 } }) },
       executor: { execute: async (_action, context) => { calls.push(context.masking); if (!context.masking) throw new Error('boom'); return {}; }, close: async () => undefined }
@@ -44,12 +48,14 @@ describe('WorkerRuntime', () => {
     let input: unknown;
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => ({ status: 'running' as const }),
         result: async (_id, _token, status) => { calls.push(status); },
         artifact: async () => undefined,
         needsInput: async () => { calls.push('needs_input'); },
-        getInput: async () => input
+        getInput: async () => input,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       planner: {
         plan: async (_task, last) => last === undefined ? { type: 'needs_input', kind: 'text' } : { type: 'done', findings: [last] }
@@ -66,12 +72,14 @@ describe('WorkerRuntime', () => {
     const warnings: string[] = [];
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => { throw new Error('heartbeat down'); },
         result: async () => undefined,
         artifact: async () => undefined,
         needsInput: async () => undefined,
-        getInput: async () => undefined
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       planner: { plan: async () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
@@ -91,12 +99,14 @@ describe('WorkerRuntime', () => {
     let closed = false;
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => { throw new WorkerClientError('task_cancelled', 'cancelled', 409); },
         result: async () => undefined,
         artifact: async () => undefined,
         needsInput: async () => undefined,
-        getInput: async () => undefined
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       heartbeatMs: 1,
       inputPollMs: 1,
@@ -115,12 +125,14 @@ describe('WorkerRuntime', () => {
     let heartbeats = 0;
     const runtime = new WorkerRuntime({
       client: {
-        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x' }, leaseToken: 'lease_1' }),
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
         heartbeat: async () => ({ status: heartbeats++ < 2 ? 'handoff' as const : 'running' as const }),
         result: async () => undefined,
         artifact: async () => undefined,
         needsInput: async () => undefined,
-        getInput: async () => undefined
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
       },
       heartbeatMs: 1,
       inputPollMs: 1,
@@ -141,5 +153,65 @@ describe('WorkerRuntime', () => {
     await runtime.runOnce();
     expect(heartbeats).toBeGreaterThanOrEqual(3);
     expect(actions).toEqual(['wait']);
+  });
+
+  it('runs interactive actions without invoking the planner and closes on request', async () => {
+    const calls: string[] = [];
+    let polls = 0;
+    const runtime = new WorkerRuntime({
+      client: {
+        claim: async () => ({
+          task: { id: 'session_1', kind: 'browse', goal: 'interactive', interaction: 'interactive' as const },
+          leaseToken: 'lease_1'
+        }),
+        heartbeat: async () => ({ status: 'running' as const }),
+        result: async (_id, _token, status) => { calls.push(status); },
+        artifact: async () => undefined,
+        needsInput: async () => undefined,
+        getInput: async () => undefined,
+        pollAction: async () => polls++ === 0
+          ? { closing: false, action: { id: 'action_1', action: { type: 'navigate' as const, url: 'https://example.com' } } }
+          : { closing: true },
+        actionResult: async (_taskId, actionId) => { calls.push(actionId); }
+      },
+      planner: { plan: async () => { throw new Error('planner must not run'); } },
+      executor: {
+        execute: async (action) => { calls.push(action.type); return { value: 'ok' }; },
+        close: async () => { calls.push('close'); }
+      },
+      actionPollMs: 1
+    });
+
+    await runtime.runOnce();
+    expect(calls).toEqual(['navigate', 'action_1', 'completed', 'close']);
+  });
+
+  it('fails an interactive session after its idle timeout', async () => {
+    const calls: Array<{ status: string; code?: string }> = [];
+    let now = 0;
+    const runtime = new WorkerRuntime({
+      client: {
+        claim: async () => ({
+          task: { id: 'session_1', kind: 'browse', goal: 'interactive', interaction: 'interactive' as const },
+          leaseToken: 'lease_1'
+        }),
+        heartbeat: async () => ({ status: 'running' as const }),
+        result: async (_id, _token, status, _findings, error) => { calls.push({ status, code: error?.code }); },
+        artifact: async () => undefined,
+        needsInput: async () => undefined,
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
+      },
+      planner: { plan: async () => { throw new Error('planner must not run'); } },
+      executor: { execute: async () => ({}), close: async () => undefined },
+      clock: () => now,
+      sleep: async (milliseconds) => { now += milliseconds; },
+      actionPollMs: 250,
+      sessionIdleMs: 500
+    });
+
+    await runtime.runOnce();
+    expect(calls).toEqual([{ status: 'failed', code: 'session_idle_timeout' }]);
   });
 });

@@ -44,4 +44,12 @@ describe('worker file configuration', () => {
     }, stored);
     expect(config.controlPlaneUrl).toBe('https://nyxid.example.com/public/s/talos-worker');
   });
+
+  it('loads interactive polling and idle timeout configuration from the environment', () => {
+    const config = loadWorkerConfig({
+      TALOS_ACTION_POLL_MS: '250',
+      TALOS_SESSION_IDLE_MS: '5000'
+    }, stored);
+    expect(config).toMatchObject({ actionPollMs: 250, sessionIdleMs: 5000 });
+  });
 });

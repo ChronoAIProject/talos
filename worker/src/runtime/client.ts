@@ -3,7 +3,18 @@ import type { Action } from '../protocol/actions.js';
 import { createHandoffPolicy, type HandoffPolicy } from './policy.js';
 import { WorkerClientError } from './errors.js';
 
-export interface TaskEnvelope { id: string; kind: 'browse' | 'computer_use'; goal: string; }
+export interface TaskEnvelope {
+  id: string;
+  kind: 'browse' | 'computer_use';
+  goal: string;
+  interaction: 'autonomous' | 'interactive';
+}
+
+export interface InteractiveActionPoll {
+  closing: boolean;
+  action?: { id: string; action: Action };
+}
+
 export interface WorkerClient {
   claim(): Promise<{ task: TaskEnvelope; leaseToken: string }>;
   heartbeat(taskId: string, leaseToken: string): Promise<TaskHeartbeat>;
@@ -11,9 +22,11 @@ export interface WorkerClient {
   artifact(taskId: string, leaseToken: string, artifact: { name: string; contentType: string; size: number; uri: string }): Promise<void>;
   needsInput(taskId: string, leaseToken: string): Promise<void>;
   getInput(taskId: string, leaseToken: string): Promise<unknown>;
+  pollAction(taskId: string, leaseToken: string): Promise<InteractiveActionPoll>;
+  actionResult(taskId: string, actionId: string, leaseToken: string, result: unknown): Promise<void>;
 }
 
-export type TaskHeartbeat = { status: 'submitted' | 'claimed' | 'running' | 'needs_input' | 'handoff' | 'completed' | 'failed' | 'cancelled' };
+export type TaskHeartbeat = { status: 'submitted' | 'claimed' | 'running' | 'needs_input' | 'handoff' | 'closing' | 'completed' | 'failed' | 'cancelled' };
 
 export const workerConfigSchema = z.object({
   controlPlaneUrl: z.string().url(),
@@ -24,7 +37,9 @@ export const workerConfigSchema = z.object({
   cdpEndpoint: z.string().url().optional(),
   heartbeatMs: z.coerce.number().int().positive().default(20000),
   pollMs: z.coerce.number().int().positive().default(1000),
-  inputPollMs: z.coerce.number().int().positive().default(1000)
+  inputPollMs: z.coerce.number().int().positive().default(1000),
+  actionPollMs: z.coerce.number().int().positive().default(1000),
+  sessionIdleMs: z.coerce.number().int().positive().default(600000)
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;
@@ -51,6 +66,10 @@ export interface RuntimeOptions {
   heartbeatMs?: number;
   logger?: RuntimeLogger;
   inputPollMs?: number;
+  actionPollMs?: number;
+  sessionIdleMs?: number;
+  clock?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 export class WorkerRuntime {
@@ -78,6 +97,10 @@ export class WorkerRuntime {
         });
     }, this.options.heartbeatMs ?? 20000);
     try {
+      if (lease.task.interaction === 'interactive') {
+        await this.runInteractive(lease.task, lease.leaseToken, () => taskStatus, () => cancellationError);
+        return;
+      }
       while (true) {
         if (cancellationError !== undefined) throw cancellationError;
         if (this.policy.isMasked) {
@@ -116,6 +139,53 @@ export class WorkerRuntime {
     } finally {
       clearInterval(interval);
       await this.options.executor.close();
+    }
+  }
+
+  private async runInteractive(
+    task: TaskEnvelope,
+    leaseToken: string,
+    status: () => string,
+    heartbeatError: () => unknown
+  ): Promise<void> {
+    const clock = this.options.clock ?? Date.now;
+    const sleep = this.options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    const pollMs = this.options.actionPollMs ?? 1000;
+    const idleMs = this.options.sessionIdleMs ?? 600000;
+    let lastActivityAt = clock();
+    while (true) {
+      const error = heartbeatError();
+      if (error !== undefined) throw error;
+      if (status() === 'closing') {
+        await this.options.client.result(task.id, leaseToken, 'completed', []);
+        return;
+      }
+      if (this.policy.isMasked) {
+        await sleep(pollMs);
+        continue;
+      }
+      const polled = await this.options.client.pollAction(task.id, leaseToken);
+      if (polled.closing) {
+        await this.options.client.result(task.id, leaseToken, 'completed', []);
+        return;
+      }
+      if (polled.action === undefined) {
+        if (clock() - lastActivityAt >= idleMs) {
+          await this.options.client.result(task.id, leaseToken, 'failed', [], {
+            code: 'session_idle_timeout',
+            message: 'interactive session exceeded its idle timeout'
+          });
+          return;
+        }
+        await sleep(pollMs);
+        continue;
+      }
+      const result = await this.options.executor.execute(polled.action.action, {
+        taskId: task.id,
+        masking: this.policy.isMasked
+      });
+      await this.options.client.actionResult(task.id, polled.action.id, leaseToken, result);
+      lastActivityAt = clock();
     }
   }
 
