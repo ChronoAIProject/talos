@@ -24,7 +24,7 @@ const initFlags = new Map([
 
 export const parseCliArguments = (arguments_: readonly string[]): CliArguments => {
   const [command, ...rest] = arguments_;
-  if (command === undefined || command === '--help' || command === '-h' || rest.includes('--help') || rest.includes('-h')) return { command: 'help' };
+  if (command === undefined || command === 'help' || command === '--help' || command === '-h' || rest.includes('--help') || rest.includes('-h')) return { command: 'help' };
   if (command === 'run' || command === 'status') {
     if (rest.length !== 0) throw new Error(`${command} does not accept arguments`);
     return { command };

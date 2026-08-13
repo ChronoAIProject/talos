@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
 import { cliHelp, parseCliArguments } from './args.js';
+import { isMainModule } from './entry.js';
 import { initCommand, runCommand, serviceCommand, statusCommand, type CommandDependencies } from './commands.js';
 import { createPrinter } from './printer.js';
 import { createPrompter } from './prompts.js';
@@ -30,6 +30,6 @@ export const runCli = async (
 };
 
 /* c8 ignore next 4: process entrypoint delegates to the tested runCli function. */
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   process.exitCode = await runCli();
 }
