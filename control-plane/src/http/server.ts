@@ -17,7 +17,10 @@ import {
   heartbeatSchema,
   resultSchema,
   taskInputSchema,
-  workerClaimSchema
+  workerBodyCredentialsSchema,
+  workerClaimSchema,
+  workerInputPollSchema,
+  workerNeedsInputSchema
 } from '../domain/schemas.js';
 import { TalosError, conflict, forbidden, notFound, notImplemented, payloadTooLarge, unauthorized } from '../domain/errors.js';
 import type { TaskService } from '../services/task-service.js';
@@ -316,27 +319,32 @@ const workerRoute = async (
   parts: readonly string[],
   options: ServerOptions
 ): Promise<void> => {
-  const machineId = await requireWorker(request, repository);
   const method = request.method ?? 'GET';
+  const body = method === 'POST' ? await readBody(request, options.maxBodyBytes) : undefined;
+  const workerIdentity = await requireWorker(request, repository, body);
   if (method === 'POST' && parts[2] === 'claim') {
-    const input = workerClaimSchema.parse(await readBody(request, options.maxBodyBytes));
-    if (input.machine_id !== machineId) throw unauthorized('machine header does not match claim machine');
-    if (input.worker_id !== request.headers['x-talos-worker-id']?.toString()) throw unauthorized('worker header does not match claim worker');
+    const input = workerClaimSchema.parse(body);
+    if (input.machine_id !== workerIdentity.machineId) throw unauthorized('authenticated machine does not match claim machine');
+    if (input.worker_id !== workerIdentity.workerId) throw unauthorized('authenticated worker does not match claim worker');
     const claimed = await service.claim(input.worker_id, input.machine_id);
     return send(response, 200, { task: service.toPublicTask(claimed.task), lease: claimed.lease, leaseToken: claimed.leaseToken });
   }
   if (parts[2] !== 'tasks' || parts[3] === undefined) return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
   const taskId = parts[3];
   const task = await repository.getTask(taskId);
-  if (task?.machineId !== machineId) throw unauthorized('task is assigned to another machine');
-  const worker = request.headers['x-talos-worker-id']?.toString() ?? '';
+  if (task?.machineId !== workerIdentity.machineId) throw unauthorized('task is assigned to another machine');
+  const worker = workerIdentity.workerId;
   if (method === 'POST' && parts[4] === 'heartbeat') {
-    const input = heartbeatSchema.parse(await readBody(request, options.maxBodyBytes));
+    const input = heartbeatSchema.parse(body);
     return send(response, 200, service.toPublicTask(await service.heartbeat(taskId, worker, input.lease_token, input.extend_seconds)));
   }
   if (method === 'POST' && parts[4] === 'needs-input') {
-    const input = z.object({ lease_token: z.string().min(1) }).parse(await readBody(request, options.maxBodyBytes));
+    const input = workerNeedsInputSchema.parse(body);
     return send(response, 200, service.toPublicTask(await service.needsInput(taskId, worker, input.lease_token)));
+  }
+  if (method === 'POST' && parts[4] === 'input' && parts[5] === 'poll') {
+    const input = workerInputPollSchema.parse(body);
+    return send(response, 200, { input: await service.getWorkerInput(taskId, worker, input.lease_token) });
   }
   if (method === 'GET' && parts[4] === 'input') {
     const leaseToken = request.headers['x-talos-lease-token']?.toString();
@@ -344,11 +352,11 @@ const workerRoute = async (
     return send(response, 200, { input: await service.getWorkerInput(taskId, worker, leaseToken) });
   }
   if (method === 'POST' && parts[4] === 'result') {
-    const input = resultSchema.parse(await readBody(request, options.maxBodyBytes));
+    const input = resultSchema.parse(body);
     return send(response, 200, service.toPublicTask(await service.complete(taskId, worker, input.lease_token, input.status, input.findings, input.error)));
   }
   if (method === 'POST' && parts[4] === 'artifacts') {
-    const input = artifactSchema.parse(await readBody(request, options.maxBodyBytes));
+    const input = artifactSchema.parse(body);
     const artifact = { id: newId('artifact'), name: input.name, contentType: input.content_type, size: input.size, uri: input.uri, createdAt: new Date(options.clock?.() ?? Date.now()).toISOString() };
     return send(response, 201, service.toPublicTask(await service.addArtifact(taskId, worker, input.lease_token, artifact)));
   }
@@ -363,20 +371,36 @@ const requireIdentity = async (request: IncomingMessage, resolver: IdentityResol
   return identity;
 };
 
-const requireWorker = async (request: IncomingMessage, repository: Repository): Promise<string> => {
+interface WorkerIdentity {
+  machineId: string;
+  workerId: string;
+}
+
+const requireWorker = async (
+  request: IncomingMessage,
+  repository: Repository,
+  body: unknown
+): Promise<WorkerIdentity> => {
   const auth = request.headers.authorization;
   const headerToken = request.headers['x-talos-worker-token']?.toString();
-  const machineId = request.headers['x-talos-machine-id']?.toString();
+  const headerMachineId = request.headers['x-talos-machine-id']?.toString();
+  const headerWorkerId = request.headers['x-talos-worker-id']?.toString();
   const bearerToken = auth?.startsWith('Bearer ') === true ? auth.slice(7) : undefined;
-  const token = headerToken ?? bearerToken;
-  if (token === undefined || machineId === undefined) throw unauthorized('worker token and machine header are required');
+  const bodyCredentials = workerBodyCredentialsSchema.safeParse(body);
+  const bodyData = bodyCredentials.success ? bodyCredentials.data : {};
+  const headersSelected = headerToken !== undefined || bearerToken !== undefined;
+  const token = headerToken ?? bearerToken ?? bodyData.worker_token;
+  const machineId = headersSelected ? headerMachineId : bodyData.machine_id;
+  const workerId = headersSelected ? headerWorkerId : bodyData.worker_id;
+  if (token === undefined || machineId === undefined || workerId === undefined) {
+    throw unauthorized('worker token, machine id, and worker id are required');
+  }
   const machine = await repository.getMachine(machineId);
   if (machine === undefined) throw unauthorized('invalid worker token');
   const expected = Buffer.from(machine.workerTokenHash);
   const actual = Buffer.from(hashWorkerToken(token));
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized('invalid worker token');
-  if (request.headers['x-talos-worker-id'] === undefined) throw unauthorized('worker id is required');
-  return machineId;
+  return { machineId, workerId };
 };
 
 const readBody = async (request: IncomingMessage, maxBytes = 1024 * 1024): Promise<unknown> => {

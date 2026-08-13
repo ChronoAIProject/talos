@@ -190,7 +190,7 @@ paths:
       operationId: claimTask
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [worker_id, machine_id], properties: { worker_id: { type: string }, machine_id: { type: string } } } } }
+        content: { application/json: { schema: { $ref: '#/components/schemas/WorkerClaim' } } }
       responses:
         '200': { description: Claimed task, content: { application/json: { schema: { $ref: '#/components/schemas/ClaimResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -214,7 +214,7 @@ paths:
     post:
       security: [{ workerToken: [] }]
       operationId: signalNeedsInput
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LeaseToken' } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerLeaseRequest' } } } }
       responses:
         '200': { description: Task waiting for input, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -226,6 +226,7 @@ paths:
     get:
       security: [{ workerToken: [] }]
       operationId: getRelayedInput
+      description: Direct-connection compatibility route. Proxy-connected workers use POST /v1/worker/tasks/{id}/input/poll so credentials are carried in the body rather than query strings.
       parameters: [{ name: X-Talos-Lease-Token, in: header, required: true, schema: { type: string } }]
       responses:
         '200':
@@ -234,6 +235,21 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/tasks/{id}/input/poll:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: pollRelayedInput
+      description: Proxy-compatible input poll. NyxID forwards the JSON body while stripping worker authentication headers.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerLeaseRequest' } } } }
+      responses:
+        '200':
+          description: Private input relay; input is omitted until human input is available.
+          content: { application/json: { schema: { type: object, properties: { input: { $ref: '#/components/schemas/TaskInput' } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/result:
     post:
       security: [{ workerToken: [] }]
@@ -330,7 +346,7 @@ components:
     workerToken:
       type: http
       scheme: bearer
-      description: Rotatable machine worker token. Workers send it in both Authorization Bearer and X-Talos-Worker-Token; either carrier is accepted, with X-Talos-Worker-Token taking precedence when both are present because the NyxID public anonymous proxy strips Authorization but forwards X-Talos-* headers. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header.
+      description: Rotatable machine worker token. Direct requests may use X-Talos-Worker-Token with X-Talos-Worker-Id and X-Talos-Machine-Id, or Authorization Bearer with the two identity headers. Stock NyxID strips Authorization and all X-Talos-* headers, so proxy-compatible POST requests also carry worker_token, worker_id, and machine_id in their JSON body. Precedence is X-Talos-* headers, then Bearer plus identity headers, then body fields. The token remains bound to the selected machine id.
     adminToken: { type: apiKey, in: header, name: X-Talos-Admin-Token, description: Startup-configured administrative registration token. }
   responses:
     BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -401,22 +417,41 @@ components:
       type: object
       required: [taskId, workerId, machineId, expiresAt]
       properties: { taskId: { type: string }, workerId: { type: string }, machineId: { type: string }, expiresAt: { type: string, format: date-time } }
+    WorkerCredentials:
+      type: object
+      properties:
+        worker_token: { type: string, minLength: 1, writeOnly: true, description: Proxy-compatible worker token body carrier. }
+        worker_id: { type: string, minLength: 1, description: Proxy-compatible worker id body carrier. }
+        machine_id: { type: string, minLength: 1, description: Proxy-compatible machine id body carrier. }
+    WorkerClaim:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [worker_id, machine_id]
     Heartbeat:
-      type: object
-      required: [lease_token]
-      properties: { lease_token: { type: string }, extend_seconds: { type: integer, minimum: 1, maximum: 300 } }
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [lease_token]
+          properties: { lease_token: { type: string }, extend_seconds: { type: integer, minimum: 1, maximum: 300 } }
     Result:
-      type: object
-      required: [lease_token, status]
-      properties: { lease_token: { type: string }, status: { type: string, enum: [completed, failed] }, findings: { type: array, items: { type: object } }, error: { type: object } }
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [lease_token, status]
+          properties: { lease_token: { type: string }, status: { type: string, enum: [completed, failed] }, findings: { type: array, items: { type: object } }, error: { type: object } }
     ArtifactUpload:
-      type: object
-      required: [lease_token, name, content_type, size, uri]
-      properties: { lease_token: { type: string }, name: { type: string }, content_type: { type: string }, size: { type: integer }, uri: { type: string, format: uri } }
-    LeaseToken:
-      type: object
-      required: [lease_token]
-      properties: { lease_token: { type: string } }
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [lease_token, name, content_type, size, uri]
+          properties: { lease_token: { type: string }, name: { type: string }, content_type: { type: string }, size: { type: integer }, uri: { type: string, format: uri } }
+    WorkerLeaseRequest:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [lease_token]
+          properties: { lease_token: { type: string } }
     AdminPool:
       type: object
       required: [id, visibility]
