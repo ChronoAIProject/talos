@@ -29,7 +29,7 @@ export class BrowserExecutor implements Executor {
     switch (action.type) {
       case 'screenshot': {
         const viewport = page.viewportSize() ?? { width: 0, height: 0 };
-        const format = action.format ?? 'jpeg';
+        const format = action.format ?? 'png';
         const options = format === 'jpeg'
           ? { type: 'jpeg' as const, quality: action.quality ?? 70 }
           : { type: 'png' as const };

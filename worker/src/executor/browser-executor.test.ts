@@ -9,12 +9,12 @@ describe('BrowserExecutor', () => {
     const executor = new BrowserExecutor({ profilePath: '/tmp/profile', cdpEndpoint: 'http://localhost:9222', provider: { connectOverCDP: async (endpoint) => { calls.push(endpoint); return { contexts: () => [context], close: async () => undefined }; }, launchPersistentContext: async () => context } });
     const result = await executor.execute({ type: 'screenshot' }, { taskId: 't', masking: false });
     expect(result.screenshot?.width).toBe(10);
-    expect(result.screenshot?.mimeType).toBe('image/jpeg');
+    expect(result.screenshot?.mimeType).toBe('image/png');
     expect(calls).toEqual(['http://localhost:9222']);
     await executor.close();
   });
 
-  it('keeps PNG available as an explicit screenshot format', async () => {
+  it('supports JPEG screenshots with configurable quality', async () => {
     const options: unknown[] = [];
     const page = {
       screenshot: async (input: unknown) => { options.push(input); return Buffer.from('png'); },
@@ -28,9 +28,9 @@ describe('BrowserExecutor', () => {
     const context = { newPage: async () => page, close: async () => undefined };
     const executor = new BrowserExecutor({ profilePath: '/tmp/profile', provider: { launchPersistentContext: async () => context } });
 
-    const result = await executor.execute({ type: 'screenshot', format: 'png' }, { taskId: 't', masking: false });
-    expect(result.screenshot?.mimeType).toBe('image/png');
-    expect(options).toEqual([{ type: 'png' }]);
+    const result = await executor.execute({ type: 'screenshot', format: 'jpeg', quality: 72 }, { taskId: 't', masking: false });
+    expect(result.screenshot?.mimeType).toBe('image/jpeg');
+    expect(options).toEqual([{ type: 'jpeg', quality: 72 }]);
   });
 
   it('executes all action primitives and masked actions are no-ops', async () => {

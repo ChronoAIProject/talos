@@ -100,7 +100,8 @@ export const workerActionResultSchema = workerBodyCredentialsSchema.extend({
       width: z.number().int().nonnegative(),
       height: z.number().int().nonnegative()
     }).optional(),
-    value: z.unknown().optional()
+    value: z.unknown().optional(),
+    error: z.object({ code: z.string().min(1), message: z.string().min(1) }).optional()
   }).strict()
 });
 

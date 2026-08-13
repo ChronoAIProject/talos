@@ -19,4 +19,8 @@ export const actionSchema = z.discriminatedUnion('type', [
 export type Action = z.infer<typeof actionSchema>;
 
 export interface Screenshot { mimeType: 'image/jpeg' | 'image/png'; data: string; width: number; height: number; }
-export interface ActionResult { screenshot?: Screenshot; value?: unknown; }
+export interface ActionResult {
+  screenshot?: Screenshot;
+  value?: unknown;
+  error?: { code: string; message: string };
+}

@@ -214,4 +214,36 @@ describe('WorkerRuntime', () => {
     await runtime.runOnce();
     expect(calls).toEqual([{ status: 'failed', code: 'session_idle_timeout' }]);
   });
+
+  it('resolves the current interactive action when execution fails', async () => {
+    const calls: Array<{ kind: string; code?: string }> = [];
+    let polls = 0;
+    const runtime = new WorkerRuntime({
+      client: {
+        claim: async () => ({
+          task: { id: 'session_1', kind: 'browse', goal: 'interactive', interaction: 'interactive' as const },
+          leaseToken: 'lease_1'
+        }),
+        heartbeat: async () => ({ status: 'running' as const }),
+        result: async (_id, _token, status, _findings, error) => { calls.push({ kind: status, code: error?.code }); },
+        artifact: async () => undefined,
+        needsInput: async () => undefined,
+        getInput: async () => undefined,
+        pollAction: async () => polls++ === 0
+          ? { closing: false, action: { id: 'action_1', action: { type: 'click' as const, x: 1, y: 1, button: 'left' as const } } }
+          : { closing: false },
+        actionResult: async (_taskId, _actionId, _token, result) => {
+          calls.push({ kind: 'action', code: (result as { error?: { code?: string } }).error?.code });
+        }
+      },
+      planner: { plan: async () => { throw new Error('planner must not run'); } },
+      executor: { execute: async () => { throw new Error('click failed'); }, close: async () => undefined }
+    });
+
+    await runtime.runOnce();
+    expect(calls).toEqual([
+      { kind: 'action', code: 'executor_failed' },
+      { kind: 'failed', code: 'executor_failed' }
+    ]);
+  });
 });

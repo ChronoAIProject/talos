@@ -180,11 +180,23 @@ export class WorkerRuntime {
         await sleep(pollMs);
         continue;
       }
-      const result = await this.options.executor.execute(polled.action.action, {
-        taskId: task.id,
-        masking: this.policy.isMasked
-      });
-      await this.options.client.actionResult(task.id, polled.action.id, leaseToken, result);
+      try {
+        const result = await this.options.executor.execute(polled.action.action, {
+          taskId: task.id,
+          masking: this.policy.isMasked
+        });
+        await this.options.client.actionResult(task.id, polled.action.id, leaseToken, result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'executor failed';
+        await this.options.client.actionResult(task.id, polled.action.id, leaseToken, {
+          error: { code: 'executor_failed', message }
+        });
+        await this.options.client.result(task.id, leaseToken, 'failed', [], {
+          code: 'executor_failed',
+          message
+        });
+        return;
+      }
       lastActivityAt = clock();
     }
   }
