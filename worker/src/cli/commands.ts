@@ -58,7 +58,8 @@ export const initCommand = async (arguments_: InitArguments, dependencies: Comma
 export const runCommand = async (dependencies: CommandDependencies): Promise<void> => {
   const home = dependencies.home ?? homedir();
   const configPath = dependencies.configPath ?? defaultWorkerConfigPath(home);
-  const stored = (dependencies.readConfig ?? readWorkerConfigFile)(configPath);
+  const exists = (dependencies.configExists ?? existsSync)(configPath);
+  const stored = exists ? (dependencies.readConfig ?? readWorkerConfigFile)(configPath) : {};
   const config = loadWorkerConfig(dependencies.env ?? process.env, stored);
   await (dependencies.startDaemon ?? runWorkerDaemon)(workerConfigToEnv(config));
 };

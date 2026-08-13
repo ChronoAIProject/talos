@@ -18,4 +18,4 @@ COPY --from=build /app/worker/dist ./worker/dist
 RUN chown -R pwuser:pwuser /app
 USER pwuser
 WORKDIR /app/worker
-ENTRYPOINT ["node", "dist/index.js"]
+ENTRYPOINT ["node", "dist/cli/main.js", "run"]

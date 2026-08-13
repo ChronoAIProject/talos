@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 
 export const installChromium = async (): Promise<void> => {
   const require = createRequire(import.meta.url);
-  const cliPath = require.resolve('playwright/cli');
+  const cliPath = join(dirname(require.resolve('playwright/package.json')), 'cli.js');
   await new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, 'install', 'chromium'], { stdio: 'inherit' });
     child.once('error', reject);

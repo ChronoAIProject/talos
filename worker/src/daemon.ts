@@ -1,4 +1,3 @@
-import { pathToFileURL } from 'node:url';
 import { BrowserExecutor } from './executor/browser-executor.js';
 import { HttpWorkerClient } from './runtime/http-client.js';
 import { WorkerRuntime } from './runtime/client.js';
@@ -66,8 +65,3 @@ export const runWorkerDaemon = async (
     process.off('SIGTERM', signalStop);
   };
 };
-
-/* c8 ignore next: process entrypoint branch is exercised by the deployed daemon, not unit imports. */
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runWorkerDaemon();
-}

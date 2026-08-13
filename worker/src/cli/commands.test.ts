@@ -55,6 +55,7 @@ describe('worker CLI commands', () => {
     await runCommand({
       ...baseDependencies(printer),
       env: { TALOS_MACHINE_ID: 'env-machine' },
+      configExists: () => true,
       readConfig: () => ({ controlPlaneUrl: 'http://talos', machineId: 'file-machine', workerId: 'worker', workerToken: 'worker-token-123456', profilePath: '/profile' }),
       startDaemon: async (env) => {
         daemonEnvironment = env;
@@ -63,6 +64,26 @@ describe('worker CLI commands', () => {
     });
     expect(daemonEnvironment?.TALOS_MACHINE_ID).toBe('env-machine');
     expect(daemonEnvironment?.TALOS_WORKER_TOKEN).toBe('worker-token-123456');
+  });
+
+  it('starts from environment-only configuration when no file exists', async () => {
+    const { printer } = outputPrinter();
+    let started = false;
+    await runCommand({
+      ...baseDependencies(printer),
+      env: {
+        TALOS_CONTROL_PLANE_URL: 'http://talos',
+        TALOS_MACHINE_ID: 'machine',
+        TALOS_WORKER_ID: 'worker',
+        TALOS_WORKER_TOKEN: 'worker-token-123456'
+      },
+      configExists: () => false,
+      startDaemon: async () => {
+        started = true;
+        return async () => undefined;
+      }
+    });
+    expect(started).toBe(true);
   });
 
   it('shows status without printing the token and prints Windows service guidance', async () => {

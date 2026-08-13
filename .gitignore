@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 **/dist/
+worker/release/
 **/*.tsbuildinfo
 .DS_Store
 deploy/k8s/secret.yaml
