@@ -40,17 +40,29 @@ export const handoffRequestSchema = z.object({
   expires_in_seconds: z.number().int().positive().max(3600).default(900)
 });
 
-export const workerClaimSchema = z.object({
+export const workerBodyCredentialsSchema = z.object({
+  worker_token: z.string().min(1).optional(),
+  worker_id: z.string().trim().min(1).max(255).optional(),
+  machine_id: z.string().trim().min(1).max(255).optional()
+});
+
+export const workerClaimSchema = workerBodyCredentialsSchema.extend({
   worker_id: z.string().trim().min(1).max(255),
   machine_id: z.string().trim().min(1).max(255)
 });
 
-export const heartbeatSchema = z.object({
+export const heartbeatSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
   extend_seconds: z.number().int().positive().max(300).default(60)
 });
 
-export const resultSchema = z.object({
+export const workerNeedsInputSchema = workerBodyCredentialsSchema.extend({
+  lease_token: z.string().min(1)
+});
+
+export const workerInputPollSchema = workerNeedsInputSchema;
+
+export const resultSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
   status: z.enum(['completed', 'failed']),
   findings: z
@@ -64,7 +76,7 @@ export const resultSchema = z.object({
   error: z.object({ code: z.string().min(1), message: z.string().min(1) }).optional()
 });
 
-export const artifactSchema = z.object({
+export const artifactSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
   name: z.string().min(1).max(255),
   content_type: z.string().min(1).max(255),

@@ -60,4 +60,20 @@ describe('worker token carriers', () => {
     });
     expect(response.status).toBe(expectedStatus);
   });
+
+  it.each([
+    ['body credentials only', {}, { worker_token: 'worker-token-123456', worker_id: 'worker', machine_id: 'machine' }, 404],
+    ['custom headers override mismatched body', { 'x-talos-worker-token': 'worker-token-123456', 'x-talos-machine-id': 'machine', 'x-talos-worker-id': 'worker' }, { worker_token: 'wrong-token', worker_id: 'wrong', machine_id: 'wrong' }, 404],
+    ['Bearer headers override mismatched body', { authorization: 'Bearer worker-token-123456', 'x-talos-machine-id': 'machine', 'x-talos-worker-id': 'worker' }, { worker_token: 'wrong-token', worker_id: 'wrong', machine_id: 'wrong' }, 404],
+    ['wrong custom-header token overrides valid body', { 'x-talos-worker-token': 'wrong-token', 'x-talos-machine-id': 'machine', 'x-talos-worker-id': 'worker' }, { worker_token: 'worker-token-123456', worker_id: 'worker', machine_id: 'machine' }, 401],
+    ['wrong Bearer token overrides valid body', { authorization: 'Bearer wrong-token', 'x-talos-machine-id': 'machine', 'x-talos-worker-id': 'worker' }, { worker_token: 'worker-token-123456', worker_id: 'worker', machine_id: 'machine' }, 401],
+    ['wrong body token', {}, { worker_token: 'wrong-token', worker_id: 'worker', machine_id: 'machine' }, 401]
+  ])('%s', async (_name, headers, body, expectedStatus) => {
+    const response = await fetch(`${baseUrl}/v1/worker/unknown`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    expect(response.status).toBe(expectedStatus);
+  });
 });

@@ -301,6 +301,20 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/worker/tasks/${inputTask}/needs-input`, { method: 'POST', headers: leaseHeaders, body: JSON.stringify({ lease_token: claim.leaseToken }) })).status).toBe(200);
     expect((await fetch(`${base}/v1/tasks/${inputTask}/input`, { method: 'POST', headers: publicHeaders, body: JSON.stringify({ kind: 'text', value: 'answer' }) })).status).toBe(200);
     expect((await fetch(`${base}/v1/worker/tasks/${inputTask}/input`, { headers: { ...workerHeaders, 'x-talos-lease-token': claim.leaseToken } })).status).toBe(200);
+    await fetch(`${base}/v1/worker/tasks/${inputTask}/needs-input`, { method: 'POST', headers: leaseHeaders, body: JSON.stringify({ lease_token: claim.leaseToken }) });
+    await fetch(`${base}/v1/tasks/${inputTask}/input`, { method: 'POST', headers: publicHeaders, body: JSON.stringify({ kind: 'text', value: 'second answer' }) });
+    const proxyPoll = await fetch(`${base}/v1/worker/tasks/${inputTask}/input/poll`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        lease_token: claim.leaseToken,
+        worker_token: 'worker-token-123456',
+        worker_id: 'w',
+        machine_id: 'machine'
+      })
+    });
+    expect(proxyPoll.status).toBe(200);
+    expect(await proxyPoll.json()).toEqual({ input: { kind: 'text', value: 'second answer' } });
     expect((await fetch(`${base}/v1/worker/tasks/${inputTask}/artifacts`, { method: 'POST', headers: leaseHeaders, body: JSON.stringify({ lease_token: claim.leaseToken, name: 'a', content_type: 'text/plain', size: 1, uri: 'https://example.com/a' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/worker/tasks/${inputTask}/result`, { method: 'POST', headers: leaseHeaders, body: JSON.stringify({ lease_token: claim.leaseToken, status: 'completed' }) })).status).toBe(200);
     const handoffTask = await create('handoff');
