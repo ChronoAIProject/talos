@@ -38,7 +38,9 @@ The worker image is for Linux platform-pool workers and includes Playwright brow
 
 Platform pools, cross-user profiles, and initial machine enrollment use the `X-Talos-Admin-Token` routes. Users can enroll their own private or org fleet without platform-admin involvement using the NyxID-authenticated `POST /v1/pools`, `POST /v1/pools/{id}/machines`, `POST /v1/machines/{id}/rotate-token`, and `POST /v1/profiles` routes. Pool owners share org pools by setting group slugs in `shared_with_groups`; members submit tasks with `pool_id` using their personal NyxID keys. Submit tasks with `pool_id` to select a local/private or remote/platform pool. An org-owned API key also works because `sub` is treated as the opaque owner id.
 
-Register the service base URL in the NyxID catalog and set `openapi_spec_url` to `http://talos-control-plane.talos.svc.cluster.local/openapi.json`. The control plane also serves the source YAML at `/openapi.yaml`; `/healthz` remains the Kubernetes probe. These unauthenticated metadata endpoints are intentionally omitted from the catalog operations.
+Register the service base URL in the NyxID catalog. The control plane serves its spec at `/openapi.json` (and the source YAML at `/openapi.yaml`); `/healthz` remains the Kubernetes probe. These unauthenticated metadata endpoints are intentionally omitted from the catalog operations.
+
+Hosted-mode NyxID refuses to fetch `openapi_spec_url` targets that resolve to private addresses, so the in-cluster URL cannot be used directly. The working pattern (in production): a second minimal catalog entry `talos-spec` (auth `none`, `identity_propagation_mode: none`) with an admin anonymous-endpoint rule for `GET /openapi.json`, which publishes the live spec at `https://nyxid.example.com/public/s/talos-spec/openapi.json`; set the main `talos` service's `openapi_spec_url` to that public URL. The mirror always serves whatever the deployed pod serves, so the spec never drifts. (Anonymous endpoints cannot live on the main `talos` entry because they require identity propagation `none`, while `talos` uses `jwt`.)
 
 ## Scaling Constraint
 
