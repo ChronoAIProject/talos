@@ -6,8 +6,31 @@ import { TaskService } from '../services/task-service.js';
 import { WebhookSigner } from '../services/webhook-signer.js';
 import { MemoryRepository } from '../storage/memory-repository.js';
 import { createApiServer } from './server.js';
+import { loadOpenApiDocument } from '../openapi.js';
 
 describe('control-plane HTTP API', () => {
+  it('serves cached OpenAPI JSON and YAML without authentication', async () => {
+    const repository = new MemoryRepository();
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const document = loadOpenApiDocument();
+    const server = createApiServer(service, repository, { openApiDocument: document });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const jsonResponse = await fetch(`${base}/openapi.json`);
+    expect(jsonResponse.status).toBe(200);
+    expect(jsonResponse.headers.get('content-type')).toBe('application/json');
+    const json = await jsonResponse.json() as { openapi: string; paths: Record<string, unknown> };
+    expect(json.openapi.startsWith('3.1')).toBe(true);
+    expect(Object.keys(json.paths).length).toBeGreaterThan(0);
+    const yamlResponse = await fetch(`${base}/openapi.yaml`);
+    expect(yamlResponse.status).toBe(200);
+    expect(yamlResponse.headers.get('content-type')).toBe('application/yaml');
+    expect(await yamlResponse.text()).toBe(document.raw);
+    server.close();
+  });
+
   it('serves an unauthenticated repository health check', async () => {
     const repository = new MemoryRepository();
     const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));

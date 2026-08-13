@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
 import { createLogger } from './util/logger.js';
 import { DevIdentityResolver, JwtIdentityResolver, type IdentityResolver } from './identity.js';
+import { loadOpenApiDocument } from './openapi.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -29,6 +30,7 @@ export const createControlPlane = (
     identityResolver?: IdentityResolver;
     sweepIntervalMs?: number;
     webhook?: Omit<WebhookDispatcherOptions, 'clock'>;
+    openApiPath?: string;
   } = {}
 ): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
@@ -37,6 +39,7 @@ export const createControlPlane = (
   const signer = new WebhookSigner(webhookSecret);
   const dispatcher = new WebhookDispatcher(repository, signer, options.webhook);
   const logger = createLogger();
+  const openApiDocument = loadOpenApiDocument(options.openApiPath);
   const service = new TaskService(repository, scheduler, profiles, signer, {
     validateCallback: (callback) => dispatcher.validateCallback(callback),
     onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
@@ -45,6 +48,7 @@ export const createControlPlane = (
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
     identityResolver: options.identityResolver,
+    openApiDocument,
     clock: Date.now
   }) as ControlPlaneServer;
   server.repository = repository;
@@ -96,3 +100,4 @@ export * from './storage/mongo-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';
 export * from './identity.js';
+export * from './openapi.js';

@@ -25,12 +25,14 @@ import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
 import { newId } from '../util/id.js';
 import { DevIdentityResolver, type IdentityResolver, type ResolvedIdentity } from '../identity.js';
+import type { OpenApiDocument } from '../openapi.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
   adminToken?: string;
   maxBodyBytes?: number;
   clock?: () => number;
+  openApiDocument?: OpenApiDocument;
 }
 
 export const defaultIdentityResolver: IdentityResolver = new DevIdentityResolver();
@@ -43,7 +45,14 @@ export const createApiServer = (
   const identities = options.identityResolver ?? defaultIdentityResolver;
   return createServer(async (request, response) => {
     try {
-      if (request.method === 'GET' && new URL(request.url ?? '/', 'http://talos.local').pathname === '/healthz') {
+      const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
+      if (request.method === 'GET' && path === '/openapi.json' && options.openApiDocument !== undefined) {
+        return sendSerialized(response, 200, options.openApiDocument.json, 'application/json');
+      }
+      if (request.method === 'GET' && path === '/openapi.yaml' && options.openApiDocument !== undefined) {
+        return sendSerialized(response, 200, options.openApiDocument.raw, 'application/yaml');
+      }
+      if (request.method === 'GET' && path === '/healthz') {
         try {
           await repository.ping();
           return send(response, 200, { status: 'ok' });
@@ -390,9 +399,13 @@ const requireAdmin = (request: IncomingMessage, expected?: string): void => {
 const issueWorkerToken = (): string => `tw_${randomBytes(24).toString('base64url')}`;
 
 const send = (response: ServerResponse, status: number, payload: unknown): void => {
+  sendSerialized(response, status, JSON.stringify(payload), 'application/json');
+};
+
+const sendSerialized = (response: ServerResponse, status: number, payload: string, contentType: string): void => {
   response.statusCode = status;
-  response.setHeader('content-type', 'application/json');
-  response.end(JSON.stringify(payload));
+  response.setHeader('content-type', contentType);
+  response.end(payload);
 };
 
 export const parseError = z.object({ error: z.object({ code: z.string(), message: z.string() }) });

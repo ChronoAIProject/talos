@@ -15,6 +15,12 @@ describe('control-plane factory', () => {
     expect(() => createControlPlane(undefined, undefined)).toThrow('TALOS_WEBHOOK_SECRET');
   });
 
+  it('fails fast when the OpenAPI spec is unreadable', () => {
+    expect(() => createControlPlane(new MemoryRepository(), 'webhook-secret-1234', {
+      openApiPath: '/missing/talos-openapi.yaml'
+    })).toThrow('failed to load OpenAPI spec');
+  });
+
   it('periodically expires active leases', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2000);
