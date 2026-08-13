@@ -40,7 +40,10 @@ export class HttpWorkerClient implements WorkerClient {
   }
 
   public async getInput(taskId: string, leaseToken: string): Promise<unknown> {
-    const response = inputResponseSchema.parse(await this.request(`/v1/worker/tasks/${encodeURIComponent(taskId)}/input`, undefined, 'GET', { 'X-Talos-Lease-Token': leaseToken }));
+    const response = inputResponseSchema.parse(await this.request(
+      `/v1/worker/tasks/${encodeURIComponent(taskId)}/input/poll`,
+      { lease_token: leaseToken }
+    ));
     return response.input;
   }
 
@@ -76,10 +79,16 @@ export class HttpWorkerClient implements WorkerClient {
 
   private async request(
     path: string,
-    payload?: unknown,
+    payload: Readonly<Record<string, unknown>>,
     method = 'POST',
     extraHeaders: Record<string, string> = {}
   ): Promise<unknown> {
+    const body = {
+      ...payload,
+      worker_token: this.config.workerToken,
+      worker_id: this.config.workerId,
+      machine_id: this.config.machineId
+    };
     const response = await fetch(resolveControlPlaneUrl(this.config.controlPlaneUrl, path), {
       method,
       headers: {
@@ -90,7 +99,7 @@ export class HttpWorkerClient implements WorkerClient {
         'content-type': 'application/json',
         ...extraHeaders
       },
-      ...(payload === undefined ? {} : { body: JSON.stringify(payload) })
+      body: JSON.stringify(body)
     });
     const text = await response.text();
     let json: unknown = {};

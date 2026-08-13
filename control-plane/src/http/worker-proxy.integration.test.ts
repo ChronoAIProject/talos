@@ -11,6 +11,9 @@ import { createApiServer } from './server.js';
 interface TestWorkerClient {
   claim(): Promise<{ task: { id: string }; leaseToken: string }>;
   heartbeat(taskId: string, leaseToken: string): Promise<{ status: string }>;
+  needsInput(taskId: string, leaseToken: string): Promise<void>;
+  getInput(taskId: string, leaseToken: string): Promise<unknown>;
+  result(taskId: string, leaseToken: string, status: 'completed' | 'failed', findings: readonly unknown[]): Promise<void>;
 }
 
 interface HttpWorkerClientConstructor {
@@ -30,10 +33,8 @@ const close = async (server: Server): Promise<void> => {
 
 const forwardedHeaders = (headers: IncomingHttpHeaders): Headers => {
   const result = new Headers();
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || ['authorization', 'connection', 'content-length', 'host'].includes(name)) continue;
-    result.set(name, Array.isArray(value) ? value.join(', ') : value);
-  }
+  const contentType = headers['content-type'];
+  if (contentType !== undefined) result.set('content-type', Array.isArray(contentType) ? contentType.join(', ') : contentType);
   return result;
 };
 
@@ -50,7 +51,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
     await Promise.all(servers.splice(0).map(close));
   });
 
-  it('claims and heartbeats when the proxy strips Authorization under a path prefix', async () => {
+  it('completes the worker flow when the proxy strips all authentication headers', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({
@@ -72,7 +73,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
     const apiServer = createApiServer(service, repository);
     servers.push(apiServer);
     const apiBase = await listen(apiServer);
-    let authorizationWasForwarded = false;
+    const receivedHeaderNames: string[][] = [];
     const prefix = '/public/s/talos-worker';
     const proxy = createServer(async (request, response) => {
       try {
@@ -86,7 +87,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
           ? undefined
           : await readRequestBody(request);
         const headers = forwardedHeaders(request.headers);
-        authorizationWasForwarded = headers.has('authorization');
+        receivedHeaderNames.push([...headers.keys()]);
         const upstream = await fetch(`${apiBase}${upstreamPath}`, {
           method: request.method,
           headers,
@@ -115,6 +116,17 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
     const claim = await client.claim();
     expect(claim.task.id).toBe(task.id);
     expect(await client.heartbeat(task.id, claim.leaseToken)).toEqual({ status: 'running' });
-    expect(authorizationWasForwarded).toBe(false);
+    await client.needsInput(task.id, claim.leaseToken);
+    await service.provideInput(task.id, 'user-a', { kind: 'text', value: 'proxy answer' });
+    expect(await client.getInput(task.id, claim.leaseToken)).toEqual({ kind: 'text', value: 'proxy answer' });
+    await client.result(task.id, claim.leaseToken, 'completed', []);
+    expect((await repository.getTask(task.id))?.status).toBe('completed');
+    expect(receivedHeaderNames).toEqual([
+      ['content-type'],
+      ['content-type'],
+      ['content-type'],
+      ['content-type'],
+      ['content-type']
+    ]);
   });
 });

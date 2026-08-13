@@ -11,6 +11,11 @@ describe('HttpWorkerClient', () => {
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get('authorization')).toBe('Bearer worker-token-123456');
     expect(headers.get('x-talos-worker-token')).toBe('worker-token-123456');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      worker_token: 'worker-token-123456',
+      worker_id: 'w',
+      machine_id: 'm'
+    });
     fetchMock.mockResolvedValueOnce(new Response('not json', { status: 409 }));
     await expect(client.heartbeat('t', 'lease_1')).rejects.toThrow('409');
     fetchMock.mockRestore();
@@ -34,6 +39,15 @@ describe('HttpWorkerClient', () => {
     await client.result('t', 'lease_1', 'completed', []);
     await client.artifact('t', 'lease_1', { name: 'a', contentType: 'text/plain', size: 1, uri: 'https://example.com/a' });
     expect(fetchMock).toHaveBeenCalledTimes(6);
+    for (const call of fetchMock.mock.calls) {
+      expect(JSON.parse(String(call[1]?.body))).toMatchObject({
+        worker_token: 'worker-token-123456',
+        worker_id: 'w',
+        machine_id: 'm'
+      });
+    }
+    expect(fetchMock.mock.calls[3]?.[0].toString()).toBe('http://localhost:8080/v1/worker/tasks/t/input/poll');
+    expect(fetchMock.mock.calls[3]?.[1]?.method).toBe('POST');
     fetchMock.mockRestore();
   });
 
