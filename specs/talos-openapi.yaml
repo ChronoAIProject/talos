@@ -7,9 +7,10 @@ info:
     Public requests are scoped by X-NyxID-Identity-Token. Worker endpoints use rotatable
     pool worker tokens and are intended for outbound-only worker connections. Production verifies
     NyxID's short-lived RS256 assertions (sub, iss, aud, exp, iat and groups) using configured key material.
+    /healthz, /openapi.json, and /openapi.yaml are unauthenticated operational metadata endpoints
+    and are intentionally not listed as catalog operations below.
 servers:
-  - url: https://talos.example.invalid
-  # /healthz is an operational Kubernetes probe and is intentionally omitted from the NyxID catalog contract.
+  - url: http://talos-control-plane.talos.svc.cluster.local
 security:
   - nyxIdentity: []
 paths:

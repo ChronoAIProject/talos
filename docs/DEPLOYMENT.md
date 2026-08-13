@@ -38,7 +38,7 @@ The worker image is for Linux platform-pool workers and includes Playwright brow
 
 Platform pools, cross-user profiles, and initial machine enrollment use the `X-Talos-Admin-Token` routes. Users can enroll their own private or org fleet without platform-admin involvement using the NyxID-authenticated `POST /v1/pools`, `POST /v1/pools/{id}/machines`, `POST /v1/machines/{id}/rotate-token`, and `POST /v1/profiles` routes. Pool owners share org pools by setting group slugs in `shared_with_groups`; members submit tasks with `pool_id` using their personal NyxID keys. Submit tasks with `pool_id` to select a local/private or remote/platform pool. An org-owned API key also works because `sub` is treated as the opaque owner id.
 
-Register the OpenAPI document at `specs/talos-openapi.yaml` in the NyxID catalog. `/healthz` is an operational Kubernetes probe and is intentionally omitted from that catalog contract.
+Register the service base URL in the NyxID catalog and set `openapi_spec_url` to `http://talos-control-plane.talos.svc.cluster.local/openapi.json`. The control plane also serves the source YAML at `/openapi.yaml`; `/healthz` remains the Kubernetes probe. These unauthenticated metadata endpoints are intentionally omitted from the catalog operations.
 
 ## Scaling Constraint
 

@@ -14,6 +14,7 @@ COPY package.json package-lock.json ./
 COPY control-plane/package.json ./control-plane/
 RUN npm ci --omit=dev --workspace @talos/control-plane --include-workspace-root=false
 COPY --from=build /app/control-plane/dist ./control-plane/dist
+COPY specs ./specs
 RUN chown -R node:node /app
 USER node
 WORKDIR /app/control-plane
