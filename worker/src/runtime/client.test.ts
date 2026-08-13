@@ -95,6 +95,42 @@ describe('WorkerRuntime', () => {
     expect(warnings).toContain('lease heartbeat failed');
   });
 
+  it('waits for an in-flight heartbeat before closing the executor', async () => {
+    const calls: string[] = [];
+    let releaseHeartbeat: (() => void) | undefined;
+    const runtime = new WorkerRuntime({
+      client: {
+        claim: async () => ({ task: { id: 'task_1', kind: 'browse', goal: 'x', interaction: 'autonomous' as const }, leaseToken: 'lease_1' }),
+        heartbeat: async () => {
+          calls.push('heartbeat-start');
+          await new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
+          calls.push('heartbeat-end');
+          return { status: 'running' as const };
+        },
+        result: async () => { calls.push('result'); },
+        artifact: async () => undefined,
+        needsInput: async () => undefined,
+        getInput: async () => undefined,
+        pollAction: async () => ({ closing: false }),
+        actionResult: async () => undefined
+      },
+      heartbeatMs: 1,
+      planner: { plan: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { type: 'done', findings: [] };
+      } },
+      executor: { execute: async () => ({}), close: async () => { calls.push('close'); } }
+    });
+
+    const running = runtime.runOnce();
+    while (releaseHeartbeat === undefined) await new Promise((resolve) => setTimeout(resolve, 1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls.filter((call) => call === 'heartbeat-start')).toHaveLength(1);
+    releaseHeartbeat();
+    await running;
+    expect(calls.slice(-2)).toEqual(['heartbeat-end', 'close']);
+  });
+
   it('stops the planner when heartbeat discovers cancellation', async () => {
     let closed = false;
     const runtime = new WorkerRuntime({

@@ -84,8 +84,10 @@ export class WorkerRuntime {
     let lastResult: unknown = undefined;
     let cancellationError: unknown;
     let taskStatus = 'claimed';
-    const interval = setInterval(() => {
-      void this.options.client.heartbeat(lease.task.id, lease.leaseToken)
+    let heartbeatInFlight: Promise<void> | undefined;
+    const heartbeat = (): void => {
+      if (heartbeatInFlight !== undefined) return;
+      heartbeatInFlight = this.options.client.heartbeat(lease.task.id, lease.leaseToken)
         .then((heartbeat) => {
           if (heartbeat.status === 'handoff' && taskStatus !== 'handoff') this.policy = this.policy.startHandoff();
           if (heartbeat.status !== 'handoff' && taskStatus === 'handoff') this.policy = this.policy.endHandoff();
@@ -94,8 +96,12 @@ export class WorkerRuntime {
         .catch((error: unknown) => {
           this.options.logger?.warn('lease heartbeat failed', { taskId: lease.task.id, error: error instanceof Error ? error.message : 'unknown' });
           if (error instanceof WorkerClientError && error.code === 'task_cancelled') cancellationError = error;
+        })
+        .finally(() => {
+          heartbeatInFlight = undefined;
         });
-    }, this.options.heartbeatMs ?? 20000);
+    };
+    const interval = setInterval(heartbeat, this.options.heartbeatMs ?? 20000);
     try {
       if (lease.task.interaction === 'interactive') {
         await this.runInteractive(lease.task, lease.leaseToken, () => taskStatus, () => cancellationError);
@@ -138,6 +144,7 @@ export class WorkerRuntime {
       }
     } finally {
       clearInterval(interval);
+      await heartbeatInFlight;
       await this.options.executor.close();
     }
   }
