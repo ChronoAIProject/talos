@@ -24,6 +24,8 @@ docker push registry.example/talos-worker:0.1.0
 
 The worker image is for Linux platform-pool workers and includes Playwright browsers. Private and org pool machines, especially those requiring headed display, residential IPs, or computer-use capabilities, run the daemon directly with Node on the real macOS/Windows/Linux machine rather than in Kubernetes.
 
+End-user machines use the GitHub Release installer and `talos-worker` CLI documented in [WORKER.md](WORKER.md). They require Node.js 22+ and VPN or in-network access to the private control-plane URL. The release bundle is platform-independent JavaScript; Playwright supplies the machine-specific browser runtime during installation.
+
 ## Kubernetes Apply Order
 
 1. Replace placeholders in `deploy/k8s/secret.example.yaml` and apply `namespace.yaml` followed by the secret.

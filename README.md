@@ -54,6 +54,8 @@ For deployment, set the validated control-plane and worker environment variables
 
 ## Worker installation
 
-Playwright is an optional dependency so a control-plane-only deployment can skip its browser binaries. A worker machine must install Playwright and its browser runtime; otherwise `BrowserExecutor` fails clearly when it receives its first claim.
+End users install the release artifact and configure their enrolled machine with `talos-worker init`; see [docs/WORKER.md](docs/WORKER.md) for the two-command installation, NyxID enrollment, background service, and token-rotation workflow. Node.js 22+ and private network or VPN reachability to the control plane are required.
+
+Playwright remains an optional workspace dependency so a control-plane-only deployment can skip its browser binaries. The release installer installs Playwright and `talos-worker init` installs Chromium before the first claim.
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker builds, Kubernetes manifests, MongoDB configuration, fleet registration, and the platform-worker versus real-machine deployment matrix.
