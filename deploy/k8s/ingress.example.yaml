@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: talos-control-plane
+  namespace: talos
+  annotations:
+    # Configure your ingress controller and TLS issuer for production.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [talos.example.com]
+      secretName: talos-tls
+  rules:
+    - host: talos.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: talos-control-plane
+                port:
+                  name: http

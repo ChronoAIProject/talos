@@ -1,0 +1,111 @@
+# Talos network policies. Replace the placeholder CIDRs with your cluster's
+# node, pod, service, and database ranges before applying.
+#
+# IMPORTANT: NetworkPolicy allows are unioned. If your namespace already has a
+# blanket policy that allows ingress from all pods in the namespace
+# (podSelector: {}), the tighter rules below cannot override it -- exclude the
+# Talos pods from that blanket policy's selector to truly enforce
+# "only NyxID calls Talos", e.g.:
+#   matchExpressions:
+#     - {key: app, operator: NotIn, values: [nyxid-backend, talos-control-plane]}
+# Even without that exclusion, Talos still enforces auth at the application
+# layer: user routes need a verified NyxID JWT, worker routes a machine-bound
+# worker token, admin routes the admin token.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: talos-control-plane
+  namespace: talos
+spec:
+  podSelector:
+    matchLabels:
+      app: talos-control-plane
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # NyxID backend (production) is the only intended external caller.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nyxid-backend
+      ports:
+        - port: 8080
+          protocol: TCP
+    # In-cluster platform workers (claim/heartbeat/result). Remove this rule if
+    # no worker Deployment runs in this namespace.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: talos-platform-worker
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Node CIDR (REPLACE 192.0.2.0/24 with your cluster's node range), needed
+    # for kubelet liveness/readiness probes with some CNIs.
+    - from:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # DNS (kube-dns pods and the GKE metadata DNS used by standard-egress).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # MongoDB (REPLACE 198.51.100.0/24 with your database network range, or
+    # remove if you use a public endpoint like Atlas).
+    - to:
+        - ipBlock:
+            cidr: 198.51.100.0/24
+      ports:
+        - port: 27017
+          protocol: TCP
+    # Public internet, excluding cluster pod/service ranges (matching the
+    # standard-egress except list): JWKS fetch from
+    # https://nyxid.example.com and signed webhook callbacks.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16
+              - 10.96.0.0/12
+              - 169.254.0.0/16
+---
+# Additive egress for the NyxID backend. If your NyxID backend runs under a
+# default-deny egress policy, this standalone policy grants it egress to the
+# Talos control plane (allows are unioned; nothing existing is modified).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nyxid-backend-egress-to-talos
+  namespace: talos
+spec:
+  podSelector:
+    matchLabels:
+      app: nyxid-backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: talos-control-plane
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Some setups also list the Service ClusterIP as a /32 ipBlock. Calico
+    # matches post-DNAT pod IPs, so the selector rule should suffice; if proxy
+    # calls time out after apply, add the Talos Service ClusterIP on port 80.

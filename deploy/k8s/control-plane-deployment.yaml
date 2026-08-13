@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talos-control-plane
+  namespace: talos
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: talos-control-plane
+  template:
+    metadata:
+      labels:
+        app: talos-control-plane
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # Numeric UID required: kubelet cannot verify the image's named user.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          # 0.0.2 pinned by digest (pushed 2026-08-13, linux/amd64)
+          image: REGISTRY/talos-control-plane@sha256:ebaa47909934411c804c32b8260b5458e04fc8cf9cd0549e3466b63cbac5b7a3
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: talos-secrets
+            - configMapRef:
+                name: talos-config
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: talos-control-plane
+  namespace: talos
+spec:
+  type: ClusterIP
+  selector:
+    app: talos-control-plane
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

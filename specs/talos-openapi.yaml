@@ -1,0 +1,559 @@
+openapi: 3.1.0
+info:
+  title: Talos Task API
+  version: 0.1.0
+  description: |
+    Capability-neutral asynchronous machine-operation tasks for NyxID catalog registration.
+    Public requests are scoped by X-NyxID-Identity-Token. Worker endpoints use rotatable
+    pool worker tokens and are intended for outbound-only worker connections. Production verifies
+    NyxID's short-lived RS256 assertions (sub, iss, aud, exp, iat and groups) using configured key material.
+    /healthz, /openapi.json, and /openapi.yaml are unauthenticated operational metadata endpoints
+    and are intentionally not listed as catalog operations below.
+servers:
+  - url: http://talos-control-plane.talos.svc.cluster.local
+security:
+  - nyxIdentity: []
+paths:
+  /v1/tasks:
+    post:
+      operationId: submitTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/tasks/{id}:
+    parameters: [{ $ref: '#/components/parameters/TaskId' }]
+    get:
+      operationId: getTask
+      responses:
+        '200': { description: Task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/tasks/{id}/input:
+    post:
+      operationId: provideTaskInput
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TaskInput' } } }
+      responses:
+        '200': { description: Updated task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/tasks/{id}/handoff:
+    post:
+      operationId: requestTaskHandoff
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { expires_in_seconds: { type: integer, minimum: 1, maximum: 3600, default: 900 } } } } }
+      responses:
+        '200': { description: Handoff link, content: { application/json: { schema: { $ref: '#/components/schemas/Handoff' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+  /v1/tasks/{id}/cancel:
+    post:
+      operationId: cancelTask
+      responses:
+        '200': { description: Cancelled task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/pools:
+    get:
+      operationId: listOwnedPools
+      description: Lists pools owned by the authenticated NyxID user, including any admin-provisioned org pool with that owner.
+      responses:
+        '200':
+          description: Caller-owned pools.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Pool' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createOwnedPool
+      description: Creates a private or org pool owned by the authenticated NyxID user. Org visibility requires a matching propagated group; an empty shared_with_groups list is owner-only. Platform creation remains admin-only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivatePoolCreate' } } }
+      responses:
+        '201': { description: Created private or org pool., content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/pools/{id}:
+    parameters: [{ $ref: '#/components/parameters/PoolId' }]
+    patch:
+      operationId: updateOwnedPool
+      description: Owner-only update of private/org visibility, tags, and group sharing. Platform visibility is admin-only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PoolPatch' } } }
+      responses:
+        '200': { description: Updated pool, content: { application/json: { schema: { $ref: '#/components/schemas/Pool' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/pools/{id}/machines:
+    parameters: [{ $ref: '#/components/parameters/PoolId' }]
+    get:
+      operationId: listOwnedPoolMachines
+      description: Lists machines in a pool owned by the authenticated NyxID user. Worker token hashes are never returned.
+      responses:
+        '200':
+          description: Machines enrolled in the pool.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Machine' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: enrollOwnedPoolMachine
+      description: Enrolls a machine and returns its server-issued worker token once.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivateMachineCreate' } } }
+      responses:
+        '201': { description: Enrolled machine with one-time worker token., content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/machines/{id}/rotate-token:
+    parameters: [{ $ref: '#/components/parameters/MachineId' }]
+    post:
+      operationId: rotateOwnedMachineToken
+      description: Rotates the server-issued worker token for a machine in a caller-owned pool and returns it once.
+      requestBody:
+        content: { application/json: { schema: { type: object, additionalProperties: false, maxProperties: 0 } } }
+      responses:
+        '200': { description: Rotated worker token., content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/profiles:
+    get:
+      operationId: listOwnedProfiles
+      description: Lists profiles owned by the authenticated NyxID user without lock internals.
+      responses:
+        '200':
+          description: Caller-owned profiles.
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Profile' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createOwnedProfile
+      description: Creates a profile owned by the authenticated NyxID user. A pinned machine must belong to a caller-owned pool.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PrivateProfileCreate' } } }
+      responses:
+        '201': { description: Created profile., content: { application/json: { schema: { $ref: '#/components/schemas/Profile' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/profiles/{id}/login-link:
+    parameters: [{ $ref: '#/components/parameters/ProfileId' }]
+    post:
+      operationId: createProfileLoginLink
+      responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+  /v1/worker/claim:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: claimTask
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [worker_id, machine_id], properties: { worker_id: { type: string }, machine_id: { type: string } } } } }
+      responses:
+        '200': { description: Claimed task, content: { application/json: { schema: { $ref: '#/components/schemas/ClaimResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/heartbeat:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: heartbeatTask
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Heartbeat' } } } }
+      responses:
+        '200': { description: Running task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/needs-input:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: signalNeedsInput
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LeaseToken' } } } }
+      responses:
+        '200': { description: Task waiting for input, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/input:
+    get:
+      security: [{ workerToken: [] }]
+      operationId: getRelayedInput
+      parameters: [{ name: X-Talos-Lease-Token, in: header, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: Private input relay; input is omitted until human input is available.
+          content: { application/json: { schema: { type: object, properties: { input: { $ref: '#/components/schemas/TaskInput' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/tasks/{id}/result:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: submitTaskResult
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Result' } } } }
+      responses:
+        '200': { description: Final task, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/artifacts:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: uploadArtifact
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ArtifactUpload' } } } }
+      responses:
+        '201': { description: Task with artifact, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/admin/pools:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerPool
+      description: Administrative registration for org/platform pools and cross-user setup. User-owned private or org pools use POST /v1/pools.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPool' } } } }
+      responses:
+        '201': { description: Registered pool, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/admin/machines:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerMachine
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMachine' } } } }
+      responses:
+        '201': { description: Registered machine with worker token, content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/admin/machines/{id}/rotate-token:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: rotateMachineToken
+      parameters: [{ $ref: '#/components/parameters/MachineId' }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { worker_token: { type: string, minLength: 16 } } } } } }
+      responses:
+        '200': { description: Rotated worker token, content: { application/json: { schema: { $ref: '#/components/schemas/MachineTokenResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/admin/profiles:
+    post:
+      security: [{ adminToken: [] }]
+      operationId: registerProfile
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdminProfile' } } } }
+      responses:
+        '201': { description: Registered profile, content: { application/json: { schema: { $ref: '#/components/schemas/RegisteredResource' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/handoffs/{id}:
+    get:
+      security: [{ nyxIdentity: [] }]
+      operationId: consumeHandoff
+      description: Phase 1 validates ownership and expiry, marks a valid link used, then returns 501 because the hosted view is not implemented. Phase 3 will authenticate the hosted view through NyxID connect-link authorization instead of X-NyxID-Identity-Token.
+      parameters: [{ $ref: '#/components/parameters/HandoffId' }]
+      responses:
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+components:
+  parameters:
+    TaskId: { name: id, in: path, required: true, schema: { type: string } }
+    ProfileId: { name: id, in: path, required: true, schema: { type: string } }
+    MachineId: { name: id, in: path, required: true, schema: { type: string } }
+    HandoffId: { name: id, in: path, required: true, schema: { type: string } }
+    PoolId: { name: id, in: path, required: true, schema: { type: string } }
+  securitySchemes:
+    nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
+    workerToken: { type: http, scheme: bearer, description: Rotatable machine worker token. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header. }
+    adminToken: { type: apiKey, in: header, name: X-Talos-Admin-Token, description: Startup-configured administrative registration token. }
+  responses:
+    BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: Missing or invalid identity, worker, or admin credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    PayloadTooLarge: { description: Request body exceeds 1 MiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: State conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Identity-scoped resource belongs to another user, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotImplemented:
+      description: Phase 2/3 machinery is not implemented in Phase 1.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    TaskCreate:
+      type: object
+      required: [kind, goal]
+      properties:
+        kind: { type: string, enum: [browse, computer_use] }
+        goal: { type: string }
+        site_hint: { type: string }
+        profile_id: { type: string }
+        pool_id: { type: string, description: Restricts scheduling to this visible pool. Foreign private pools are rejected. }
+        constraints: { type: object, description: Budget is advisory-only in Phase 1; deadline is enforced by the expiry sweep., properties: { budget: { type: number }, deadline: { type: string, format: date-time }, requirements: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } } } }
+        mode: { type: string, enum: [read_only, act], default: read_only }
+        callback: { type: string, format: uri }
+    TaskInput:
+      type: object
+      required: [kind, value]
+      properties: { kind: { type: string, enum: [choice, text, otp] }, value: { type: string } }
+    Task:
+      type: object
+      required: [id, userId, kind, goal, status, createdAt, updatedAt, findings, artifacts]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        kind: { type: string, enum: [browse, computer_use] }
+        goal: { type: string }
+        siteHint: { type: string }
+        profileId: { type: string }
+        poolId: { type: string }
+        constraints: { type: object }
+        mode: { type: string, enum: [read_only, act] }
+        callback: { type: string, format: uri }
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        claimedAt: { type: string, format: date-time }
+        findings: { type: array, items: { type: object } }
+        artifacts: { type: array, items: { $ref: '#/components/schemas/Artifact' } }
+        error: { $ref: '#/components/schemas/TaskError' }
+        handoff: { type: object, required: [url, expiresAt], properties: { url: { type: string }, expiresAt: { type: string, format: date-time } } }
+    Handoff:
+      type: object
+      required: [handoff_url, expires]
+      properties: { handoff_url: { type: string }, expires: { type: string, format: date-time } }
+    Artifact:
+      type: object
+      required: [id, name, contentType, size, uri, createdAt]
+      properties: { id: { type: string }, name: { type: string }, contentType: { type: string }, size: { type: integer }, uri: { type: string, format: uri }, createdAt: { type: string, format: date-time } }
+    ClaimResponse:
+      type: object
+      required: [task, lease, leaseToken]
+      properties:
+        task: { $ref: '#/components/schemas/Task' }
+        lease: { $ref: '#/components/schemas/Lease' }
+        leaseToken: { type: string, minLength: 1 }
+    Lease:
+      type: object
+      required: [taskId, workerId, machineId, expiresAt]
+      properties: { taskId: { type: string }, workerId: { type: string }, machineId: { type: string }, expiresAt: { type: string, format: date-time } }
+    Heartbeat:
+      type: object
+      required: [lease_token]
+      properties: { lease_token: { type: string }, extend_seconds: { type: integer, minimum: 1, maximum: 300 } }
+    Result:
+      type: object
+      required: [lease_token, status]
+      properties: { lease_token: { type: string }, status: { type: string, enum: [completed, failed] }, findings: { type: array, items: { type: object } }, error: { type: object } }
+    ArtifactUpload:
+      type: object
+      required: [lease_token, name, content_type, size, uri]
+      properties: { lease_token: { type: string }, name: { type: string }, content_type: { type: string }, size: { type: integer }, uri: { type: string, format: uri } }
+    LeaseToken:
+      type: object
+      required: [lease_token]
+      properties: { lease_token: { type: string } }
+    AdminPool:
+      type: object
+      required: [id, visibility]
+      properties: { id: { type: string }, visibility: { type: string, enum: [private, org, platform] }, owner_user_id: { type: string }, tags: { type: object }, shared_with_groups: { type: array, items: { type: string } } }
+    AdminMachine:
+      type: object
+      required: [id, pool_id]
+      properties: { id: { type: string }, pool_id: { type: string }, tags: { type: object }, capacity: { type: integer }, online: { type: boolean }, worker_token: { type: string, minLength: 16, description: Omit to have Talos issue a rotatable token. } }
+    AdminProfile:
+      type: object
+      required: [id, user_id]
+      properties: { id: { type: string }, user_id: { type: string }, machine_id: { type: string } }
+    PrivatePoolCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Omit for a server-generated id. }
+        visibility: { type: string, enum: [private, org], default: private }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        shared_with_groups: { type: array, items: { type: string }, description: Group slugs allowed to see an org pool; empty is owner-only. }
+    PoolPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        visibility: { type: string, enum: [private, org] }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        shared_with_groups: { type: array, items: { type: string }, description: Group slugs allowed to see an org pool; empty is owner-only. }
+    Pool:
+      type: object
+      required: [id, visibility, ownerUserId, tags]
+      properties:
+        id: { type: string }
+        visibility: { type: string, enum: [private, org, platform] }
+        ownerUserId: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        sharedWithGroups: { type: array, items: { type: string }, description: Groups with visibility to an org pool. }
+    PrivateMachineCreate:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        capacity: { type: integer, minimum: 1, default: 1 }
+        online: { type: boolean, default: true }
+    Machine:
+      type: object
+      required: [id, tags, capacity, online, activeLeases]
+      properties:
+        id: { type: string }
+        tags: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } }
+        capacity: { type: integer, minimum: 1 }
+        online: { type: boolean }
+        activeLeases: { type: integer, minimum: 0 }
+    PrivateProfileCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Omit for a server-generated id. }
+        machine_id: { type: string }
+    Profile:
+      type: object
+      required: [id, userId]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        machineId: { type: string }
+    RegisteredResource:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+    MachineTokenResponse:
+      type: object
+      required: [id, worker_token]
+      properties:
+        id: { type: string }
+        worker_token: { type: string, minLength: 16 }
+        rotated: { type: boolean }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { $ref: '#/components/schemas/TaskError' } }
+    WebhookEvent:
+      type: object
+      required: [id, type, taskId, userId, timestamp, payload]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [task.state_changed, task.needs_input, task.handoff_requested, task.completed] }
+        taskId: { type: string }
+        userId: { type: string }
+        timestamp: { type: string, format: date-time }
+        payload:
+          oneOf:
+            - { $ref: '#/components/schemas/StateChangedPayload' }
+            - { $ref: '#/components/schemas/NeedsInputPayload' }
+            - { $ref: '#/components/schemas/HandoffRequestedPayload' }
+            - { $ref: '#/components/schemas/CompletedPayload' }
+        delivery: { $ref: '#/components/schemas/WebhookDelivery' }
+    StateChangedPayload:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        error: { $ref: '#/components/schemas/TaskError' }
+    NeedsInputPayload:
+      type: object
+      required: [status]
+      properties: { status: { type: string, const: needs_input } }
+    HandoffRequestedPayload:
+      type: object
+      required: [handoff_url, expires]
+      properties: { handoff_url: { type: string }, expires: { type: string, format: date-time } }
+    CompletedPayload:
+      type: object
+      required: [status]
+      properties: { status: { type: string, const: completed } }
+    WebhookDelivery:
+      type: object
+      required: [status, attempts]
+      properties:
+        status: { type: string, enum: [pending, delivered, failed] }
+        attempts: { type: integer, minimum: 0 }
+        lastAttemptAt: { type: string, format: date-time }
+        lastError: { type: string }
+    TaskError:
+      type: object
+      required: [code, message]
+      properties: { code: { type: string }, message: { type: string } }
+x-webhook-signing:
+  scheme: HMAC-SHA256
+  headers: X-Talos-Webhook-Timestamp, X-Talos-Webhook-Signature
+  signed_payload: '{timestamp}.{raw_json_body}'
+  replay_tolerance_seconds: 300
+x-webhooks:
+  task.state_changed:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.needs_input:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.handoff_requested:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
+  task.completed:
+    payload: { $ref: '#/components/schemas/WebhookEvent' }
