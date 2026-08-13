@@ -27,6 +27,8 @@ export const workerConfigSchema = z.object({
   inputPollMs: z.coerce.number().int().positive().default(1000)
 });
 
+export type WorkerConfig = z.infer<typeof workerConfigSchema>;
+
 export type PlannerDecision =
   | { type: 'action'; action: Action }
   | { type: 'needs_input'; kind: 'choice' | 'text' | 'otp' }

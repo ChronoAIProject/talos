@@ -1,23 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { BrowserExecutor } from './executor/browser-executor.js';
-import { workerConfigSchema } from './runtime/client.js';
 import { HttpWorkerClient } from './runtime/http-client.js';
 import { WorkerRuntime } from './runtime/client.js';
 import { ScriptedPlanner } from './runtime/planner.js';
 import { createWorkerLogger } from './runtime/logger.js';
+import { loadWorkerConfig } from './config.js';
 
-export const loadWorkerConfig = (env: NodeJS.ProcessEnv = process.env) =>
-  workerConfigSchema.parse({
-    controlPlaneUrl: env.TALOS_CONTROL_PLANE_URL,
-    workerId: env.TALOS_WORKER_ID,
-    machineId: env.TALOS_MACHINE_ID,
-    workerToken: env.TALOS_WORKER_TOKEN,
-    profilePath: env.TALOS_PROFILE_PATH ?? './talos-profile',
-    cdpEndpoint: env.TALOS_CDP_ENDPOINT,
-    heartbeatMs: env.TALOS_HEARTBEAT_MS,
-    pollMs: env.TALOS_POLL_MS,
-    inputPollMs: env.TALOS_INPUT_POLL_MS
-  });
+export { loadWorkerConfig } from './config.js';
 
 export interface DaemonDependencies {
   createClient?: (config: ReturnType<typeof loadWorkerConfig>) => HttpWorkerClient;

@@ -8,3 +8,8 @@ export * from './runtime/logger.js';
 export * from './runtime/policy.js';
 export * from './runtime/planner.js';
 export * from './daemon.js';
+export * from './config.js';
+export * from './cli/args.js';
+export * from './cli/commands.js';
+export * from './cli/health.js';
+export * from './cli/service.js';
