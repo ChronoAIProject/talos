@@ -19,6 +19,8 @@ import {
   taskInputSchema,
   workerBodyCredentialsSchema,
   workerClaimSchema,
+  workerActionPollSchema,
+  workerActionResultSchema,
   workerInputPollSchema,
   workerNeedsInputSchema
 } from '../domain/schemas.js';
@@ -29,6 +31,8 @@ import { hashWorkerToken } from '../config.js';
 import { newId } from '../util/id.js';
 import { DevIdentityResolver, type IdentityResolver, type ResolvedIdentity } from '../identity.js';
 import type { OpenApiDocument } from '../openapi.js';
+import { SessionService, type SessionServiceOptions } from '../services/session-service.js';
+import { routeSessionRequest } from './session-routes.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -36,6 +40,8 @@ export interface ServerOptions {
   maxBodyBytes?: number;
   clock?: () => number;
   openApiDocument?: OpenApiDocument;
+  sessionService?: SessionService;
+  session?: SessionServiceOptions;
 }
 
 export const defaultIdentityResolver: IdentityResolver = new DevIdentityResolver();
@@ -46,6 +52,7 @@ export const createApiServer = (
   options: ServerOptions = {}
 ): Server => {
   const identities = options.identityResolver ?? defaultIdentityResolver;
+  const sessions = options.sessionService ?? new SessionService(service, repository, options.session);
   return createServer(async (request, response) => {
     try {
       const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
@@ -63,7 +70,7 @@ export const createApiServer = (
           return send(response, 503, { status: 'degraded' });
         }
       }
-      await route(request, response, service, repository, identities, options);
+      await route(request, response, service, sessions, repository, identities, options);
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;
       const validation = error instanceof z.ZodError
@@ -91,6 +98,7 @@ const route = async (
   request: IncomingMessage,
   response: ServerResponse,
   service: TaskService,
+  sessions: SessionService,
   repository: Repository,
   identities: IdentityResolver,
   options: ServerOptions
@@ -112,10 +120,15 @@ const route = async (
     throw notImplemented('hosted handoff views are planned for Phase 3');
   }
   if (parts[1] === 'admin') return adminRoute(request, response, repository, parts, options);
-  if (parts[1] === 'worker') return workerRoute(request, response, service, repository, parts, options);
+  if (parts[1] === 'worker') return workerRoute(request, response, service, sessions, repository, parts, options);
 
   const identity = await requireIdentity(request, identities);
   const userId = identity.userId;
+  if (parts[1] === 'sessions') {
+    const body = method === 'POST' ? await readBody(request, options.maxBodyBytes) : {};
+    const routed = await routeSessionRequest({ method, parts, searchParams: url.searchParams, body, identity, sessions });
+    if (routed !== undefined) return send(response, routed.status, routed.body);
+  }
   if (parts[1] === 'pools') return fleetPoolRoute(request, response, repository, parts, identity, options);
   if (parts[1] === 'machines' && parts[2] !== undefined && parts[3] === 'rotate-token' && method === 'POST') {
     const machine = await repository.getMachine(parts[2]);
@@ -315,12 +328,15 @@ const workerRoute = async (
   request: IncomingMessage,
   response: ServerResponse,
   service: TaskService,
+  sessions: SessionService,
   repository: Repository,
   parts: readonly string[],
   options: ServerOptions
 ): Promise<void> => {
   const method = request.method ?? 'GET';
-  const body = method === 'POST' ? await readBody(request, options.maxBodyBytes) : undefined;
+  const isActionResult = parts[2] === 'tasks' && parts[4] === 'actions' && parts[6] === 'result';
+  const maxBodyBytes = isActionResult ? 8 * 1024 * 1024 : options.maxBodyBytes;
+  const body = method === 'POST' ? await readBody(request, maxBodyBytes) : undefined;
   const workerIdentity = await requireWorker(request, repository, body);
   if (method === 'POST' && parts[2] === 'claim') {
     const input = workerClaimSchema.parse(body);
@@ -345,6 +361,15 @@ const workerRoute = async (
   if (method === 'POST' && parts[4] === 'input' && parts[5] === 'poll') {
     const input = workerInputPollSchema.parse(body);
     return send(response, 200, { input: await service.getWorkerInput(taskId, worker, input.lease_token) });
+  }
+  if (method === 'POST' && parts[4] === 'actions' && parts[5] === 'poll') {
+    const input = workerActionPollSchema.parse(body);
+    return send(response, 200, await sessions.pollWorkerAction(taskId, worker, input.lease_token));
+  }
+  if (method === 'POST' && parts[4] === 'actions' && parts[5] !== undefined && parts[6] === 'result') {
+    const input = workerActionResultSchema.parse(body);
+    await sessions.saveWorkerResult(taskId, parts[5], worker, input.lease_token, input.result);
+    return send(response, 200, { stored: true });
   }
   if (method === 'GET' && parts[4] === 'input') {
     const leaseToken = request.headers['x-talos-lease-token']?.toString();

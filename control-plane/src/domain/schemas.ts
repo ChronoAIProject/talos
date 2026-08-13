@@ -38,6 +38,7 @@ export const sessionCreateSchema = z.object({
 }).strict();
 
 export const sessionActionRequestSchema = z.object({ action: sessionActionSchema }).strict();
+export const sessionCloseSchema = z.object({}).strict();
 export const sessionWaitSchema = z.coerce.number().int().min(0).max(25).default(25);
 
 export const taskCreateSchema = z.object({
