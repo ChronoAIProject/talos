@@ -122,6 +122,18 @@ export class MemoryRepository implements Repository {
     return dispatched;
   }
 
+  public async requeueSessionAction(taskId: string): Promise<void> {
+    const action = this.pendingActions.get(taskId);
+    if (action?.state === 'dispatched') this.pendingActions.set(taskId, { ...action, state: 'pending' });
+  }
+
+  public async cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean> {
+    const action = this.pendingActions.get(taskId);
+    if (action?.id !== actionId || action.state !== 'pending') return false;
+    this.pendingActions.delete(taskId);
+    return true;
+  }
+
   public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
     const action = this.pendingActions.get(taskId);
     if (action?.id === actionId) this.pendingActions.delete(taskId);

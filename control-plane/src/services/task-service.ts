@@ -272,9 +272,20 @@ export class TaskService {
       }
       if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running', 'closing'].includes(current.status)) {
         if (current.status === 'closing') {
+          const pending = await this.repository.getPendingSessionAction(current.id);
+          if (pending !== undefined) {
+            await this.repository.saveSessionActionResult({
+              actionId: pending.id,
+              taskId: current.id,
+              result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
+              completedAt: new Date(now).toISOString()
+            });
+            await this.repository.completeSessionAction(current.id, pending.id);
+          }
           const completed: Task = {
             ...current,
             status: 'completed',
+            pendingActionId: undefined,
             updatedAt: new Date(now).toISOString()
           };
           await this.repository.saveTask(completed);
@@ -293,6 +304,7 @@ export class TaskService {
           machineId: undefined,
           queuePriority: -1
         };
+        if (current.interaction === 'interactive') await this.repository.requeueSessionAction(current.id);
         await this.repository.saveTask(requeued);
         await this.releaseLease(current);
         expired.push(requeued);

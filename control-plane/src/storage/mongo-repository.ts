@@ -167,6 +167,18 @@ export class MongoRepository implements Repository {
     return document === null ? undefined : sessionActionFromDocument(document);
   }
 
+  public async requeueSessionAction(taskId: string): Promise<void> {
+    await this.pendingActions.updateOne(
+      { _id: taskId, state: 'dispatched' },
+      { $set: { state: 'pending' } }
+    );
+  }
+
+  public async cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean> {
+    const result = await this.pendingActions.deleteOne({ _id: taskId, id: actionId, state: 'pending' });
+    return result.deletedCount === 1;
+  }
+
   public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
     await this.pendingActions.deleteOne({ _id: taskId, id: actionId });
   }

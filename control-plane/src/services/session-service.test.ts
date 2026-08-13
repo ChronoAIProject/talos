@@ -122,10 +122,29 @@ describe('session service', () => {
     await expect(tasks.requestHandoff(created.id, 'user-a', 10)).rejects.toMatchObject({ code: 'conflict' });
     await expect(tasks.cancel(created.id, 'user-a')).rejects.toMatchObject({ code: 'conflict' });
 
+    const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
     await sessions.close(created.id, 'user-a');
     clock.value = 12_000;
     await tasks.expireLeases();
     expect((await repository.getTask(created.id))?.status).toBe('completed');
     expect((await repository.getMachine('machine'))?.activeLeases).toBe(0);
+    expect(await sessions.getAction(created.id, sent.action_id, 'user-a', 0)).toMatchObject({
+      status: 'completed',
+      result: { error: { code: 'session_closed' } }
+    });
+  });
+
+  it('returns a dispatched action to pending when an interactive lease is requeued', async () => {
+    const { clock, sessions, tasks } = await setup();
+    const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
+    const claim = await tasks.claim('worker-one', 'machine');
+    const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    expect((await sessions.pollWorkerAction(created.id, 'worker-one', claim.leaseToken)).action?.id).toBe(sent.action_id);
+
+    clock.value = 12_000;
+    await tasks.expireLeases();
+    const replacement = await tasks.claim('worker-two', 'machine');
+    expect((await sessions.pollWorkerAction(created.id, 'worker-two', replacement.leaseToken)).action?.id).toBe(sent.action_id);
   });
 });

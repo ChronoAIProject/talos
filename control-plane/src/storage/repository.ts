@@ -26,6 +26,8 @@ export interface Repository {
   enqueueSessionAction(action: PendingSessionAction): Promise<boolean>;
   getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
   takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
+  requeueSessionAction(taskId: string): Promise<void>;
+  cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean>;
   completeSessionAction(taskId: string, actionId: string): Promise<void>;
   saveSessionActionResult(result: SessionActionResult): Promise<void>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
