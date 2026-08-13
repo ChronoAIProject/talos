@@ -37,8 +37,10 @@ describe('worker token carriers', () => {
     baseUrl = `http://127.0.0.1:${address.port}`;
   });
 
-  afterEach(() => {
-    server.close();
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error));
+    });
   });
 
   it.each([

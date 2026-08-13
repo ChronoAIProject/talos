@@ -50,7 +50,9 @@ Workers need only outbound HTTPS access when NyxID fronts the worker surface. Cr
 
 NyxID strips `Authorization` and all custom `X-Talos-*` headers on this public route. It preserves request bodies, so workers include `worker_token`, `worker_id`, and `machine_id` in every worker POST body. Proxy input polling uses `POST /v1/worker/tasks/{id}/input/poll` with the lease token in the body rather than a query string. Direct deployments retain Bearer and `X-Talos-*` headers for compatibility. Talos gives those direct headers precedence over body credentials, but all carriers use the same timing-safe machine-token validation and task-to-machine binding; the anonymous catalog entry never replaces Talos authentication.
 
-Set anonymous quotas for the expected machine count before rollout. A 20-second heartbeat alone generates about 4,320 requests per machine per day, and NyxID counts anonymous requests before Talos token validation. Allow additional capacity for claim polling, inputs, artifacts, and task results.
+Set anonymous quotas for the expected machine count before rollout. A 20-second heartbeat alone generates about 4,320 requests per machine per day, and NyxID counts anonymous requests before Talos token validation. Each active interactive session also polls for actions at about one request per second by default, or roughly 86,400 requests per day if continuously active. Allow additional capacity for claims, inputs, action results, artifacts, and task results. Tune worker-side `TALOS_ACTION_POLL_MS` and `TALOS_SESSION_IDLE_MS` when deployment latency and quota requirements differ.
+
+Interactive sessions use the same singleton scheduling, leases, pool visibility, profile locks, and MongoDB repository as autonomous tasks. Agent callers use the catalog operations `createSession`, `sendSessionAction`, `getSessionAction`, `getSession`, and `closeSession`; the worker remains outbound-only.
 
 ## Scaling Constraint
 

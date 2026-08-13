@@ -13,7 +13,7 @@ interface Harness {
 
 const baseTask = (overrides: Partial<Task> = {}): Task => ({
   id: 'task-1', userId: 'user-1', kind: 'browse', goal: 'check status', constraints: {}, mode: 'read_only',
-  status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
+  interaction: 'autonomous', status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
 });
 
 const memoryHarness = async (): Promise<Harness> => {
@@ -98,6 +98,40 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
       expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['requeued', 'fresh']);
       await repository.saveTask(baseTask({ id: 'fresh', status: 'running' }));
       expect((await repository.listQueuedTasks()).map((task) => task.id)).toEqual(['requeued']);
+    } finally {
+      await close();
+    }
+  });
+
+  it('atomically relays one interactive action and correlates its result', async () => {
+    if (allowUnavailable && mongoUrl === undefined) {
+      expect(mongoUnavailable).toBeTypeOf('string');
+      return;
+    }
+    const { repository, close } = await makeHarness();
+    try {
+      const action = {
+        id: 'action-1',
+        taskId: 'task-1',
+        action: { type: 'navigate' as const, url: 'https://example.com' },
+        state: 'pending' as const,
+        createdAt: '2025-01-01T00:00:00.000Z'
+      };
+      expect(await repository.enqueueSessionAction(action)).toBe(true);
+      expect(await repository.enqueueSessionAction({ ...action, id: 'action-2' })).toBe(false);
+      expect(await repository.getPendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'pending' });
+      expect(await repository.takePendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'dispatched' });
+      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      await repository.requeueSessionAction(action.taskId);
+      expect(await repository.takePendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'dispatched' });
+      await repository.saveSessionActionResult({ actionId: action.id, taskId: action.taskId, result: { value: 'ok' }, completedAt: '2025-01-01T00:00:01.000Z' });
+      expect(await repository.getSessionActionResult(action.id)).toMatchObject({ taskId: action.taskId, result: { value: 'ok' } });
+      await repository.completeSessionAction(action.taskId, action.id);
+      expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
+      const pending = { ...action, id: 'action-cancel', state: 'pending' as const };
+      expect(await repository.enqueueSessionAction(pending)).toBe(true);
+      expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(true);
+      expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(false);
     } finally {
       await close();
     }

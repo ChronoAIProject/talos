@@ -73,6 +73,75 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /v1/sessions:
+    post:
+      operationId: createSession
+      description: Creates an interactive browser session. The external calling agent is the planner; Talos schedules a worker and retains its browser context until close or idle timeout.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SessionCreate' } } }
+      responses:
+        '201': { description: Created session, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/sessions/{id}:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    get:
+      operationId: getSession
+      description: Returns session state and pending/last action correlation ids.
+      responses:
+        '200': { description: Session state, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/sessions/{id}/close:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    post:
+      operationId: closeSession
+      description: Completes a queued session immediately or marks an active session closing so its worker closes the browser and completes the underlying task.
+      requestBody: { content: { application/json: { schema: { type: object, additionalProperties: false, maxProperties: 0 } } } }
+      responses:
+        '200': { description: Closing or completed session, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/sessions/{id}/actions:
+    parameters: [{ $ref: '#/components/parameters/SessionId' }]
+    post:
+      operationId: sendSessionAction
+      description: Enqueues exactly one action and waits up to wait_seconds for its correlated result. A pending response can be resumed through getSessionAction. A second in-flight action returns 409. read_only mode rejects click, type, key, and act-on-a11y-node with mode_forbidden.
+      parameters: [{ $ref: '#/components/parameters/WaitSeconds' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SessionActionRequest' } } }
+      responses:
+        '200': { description: Completed action or pending correlation id, content: { application/json: { schema: { $ref: '#/components/schemas/SessionActionResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/sessions/{id}/actions/{actionId}:
+    parameters:
+      - { $ref: '#/components/parameters/SessionId' }
+      - { $ref: '#/components/parameters/ActionId' }
+    get:
+      operationId: getSessionAction
+      description: Long-polls a previously returned action id for up to wait_seconds. pending means the caller may poll again.
+      parameters: [{ $ref: '#/components/parameters/WaitSeconds' }]
+      responses:
+        '200': { description: Completed or pending action, content: { application/json: { schema: { $ref: '#/components/schemas/SessionActionResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/pools:
     get:
       operationId: listOwnedPools
@@ -250,6 +319,36 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/actions/poll:
+    parameters: [{ $ref: '#/components/parameters/TaskId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: pollSessionAction
+      description: Worker-only proxy-compatible poll for an interactive action or closing signal.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerLeaseRequest' } } } }
+      responses:
+        '200': { description: Pending worker action or closing signal, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerActionPoll' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /v1/worker/tasks/{id}/actions/{actionId}/result:
+    parameters:
+      - { $ref: '#/components/parameters/TaskId' }
+      - { $ref: '#/components/parameters/ActionId' }
+    post:
+      security: [{ workerToken: [] }]
+      operationId: submitSessionActionResult
+      description: Stores a correlated interactive action result. This route alone permits an 8 MiB JSON body for encoded screenshots.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerActionResult' } } } }
+      responses:
+        '200': { description: Stored result, content: { application/json: { schema: { type: object, required: [stored], properties: { stored: { type: boolean, const: true } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/result:
     post:
       security: [{ workerToken: [] }]
@@ -341,6 +440,9 @@ components:
     MachineId: { name: id, in: path, required: true, schema: { type: string } }
     HandoffId: { name: id, in: path, required: true, schema: { type: string } }
     PoolId: { name: id, in: path, required: true, schema: { type: string } }
+    SessionId: { name: id, in: path, required: true, schema: { type: string } }
+    ActionId: { name: actionId, in: path, required: true, schema: { type: string } }
+    WaitSeconds: { name: wait_seconds, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 25, default: 25 }, description: Bounded long-poll duration, capped below upstream proxy timeouts. }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
     workerToken:
@@ -351,7 +453,7 @@ components:
   responses:
     BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: Missing or invalid identity, worker, or admin credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    PayloadTooLarge: { description: Request body exceeds 1 MiB, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    PayloadTooLarge: { description: Request body exceeds its route limit (1 MiB normally; 8 MiB for interactive action results), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: State conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Forbidden: { description: Identity-scoped resource belongs to another user, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -378,7 +480,7 @@ components:
       properties: { kind: { type: string, enum: [choice, text, otp] }, value: { type: string } }
     Task:
       type: object
-      required: [id, userId, kind, goal, status, createdAt, updatedAt, findings, artifacts]
+      required: [id, userId, kind, goal, interaction, status, createdAt, updatedAt, findings, artifacts]
       properties:
         id: { type: string }
         userId: { type: string }
@@ -389,8 +491,9 @@ components:
         poolId: { type: string }
         constraints: { type: object }
         mode: { type: string, enum: [read_only, act] }
+        interaction: { type: string, enum: [autonomous, interactive] }
         callback: { type: string, format: uri }
-        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, closing, completed, failed, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         claimedAt: { type: string, format: date-time }
@@ -398,6 +501,62 @@ components:
         artifacts: { type: array, items: { $ref: '#/components/schemas/Artifact' } }
         error: { $ref: '#/components/schemas/TaskError' }
         handoff: { type: object, required: [url, expiresAt], properties: { url: { type: string }, expiresAt: { type: string, format: date-time } } }
+    SessionCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        pool_id: { type: string, description: Restricts scheduling to a pool visible to the caller. }
+        profile_id: { type: string }
+        mode: { type: string, enum: [read_only, act], default: read_only }
+        constraints: { type: object, properties: { budget: { type: number, minimum: 0 }, deadline: { type: string, format: date-time }, requirements: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } } } }
+    Session:
+      type: object
+      required: [id, status, mode, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [submitted, claimed, running, closing, completed, failed, cancelled] }
+        mode: { type: string, enum: [read_only, act] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        pendingActionId: { type: string }
+        lastActionId: { type: string }
+    SessionActionRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties: { action: { $ref: '#/components/schemas/SessionAction' } }
+    SessionAction:
+      oneOf:
+        - { type: object, additionalProperties: false, required: [type], properties: { type: { const: screenshot }, format: { type: string, enum: [jpeg, png], default: jpeg }, quality: { type: integer, minimum: 1, maximum: 100, default: 70 } } }
+        - { type: object, additionalProperties: false, required: [type, x, y], properties: { type: { const: click }, x: { type: number }, y: { type: number }, button: { type: string, enum: [left, middle, right], default: left } } }
+        - { type: object, additionalProperties: false, required: [type, text], properties: { type: { const: type }, text: { type: string, maxLength: 10000 } } }
+        - { type: object, additionalProperties: false, required: [type, key], properties: { type: { const: key }, key: { type: string } } }
+        - { type: object, additionalProperties: false, required: [type, deltaY], properties: { type: { const: scroll }, deltaX: { type: number, default: 0 }, deltaY: { type: number } } }
+        - { type: object, additionalProperties: false, required: [type, milliseconds], properties: { type: { const: wait }, milliseconds: { type: integer, minimum: 0, maximum: 60000 } } }
+        - { type: object, additionalProperties: false, required: [type, url], properties: { type: { const: navigate }, url: { type: string, format: uri } } }
+        - { type: object, additionalProperties: false, required: [type, selector], properties: { type: { const: extract-structured-dom }, selector: { type: string } } }
+        - { type: object, additionalProperties: false, required: [type, nodeId, action], properties: { type: { const: act-on-a11y-node }, nodeId: { type: string }, action: { type: string, enum: [click, type] }, text: { type: string } } }
+    SessionActionResponse:
+      type: object
+      required: [action_id, status]
+      properties:
+        action_id: { type: string }
+        status: { type: string, enum: [completed, pending] }
+        result: { $ref: '#/components/schemas/ActionResult' }
+    ActionResult:
+      type: object
+      additionalProperties: false
+      properties:
+        screenshot:
+          type: object
+          required: [mimeType, data, width, height]
+          properties:
+            mimeType: { type: string, enum: [image/jpeg, image/png] }
+            data: { type: string, contentEncoding: base64 }
+            width: { type: integer, minimum: 0 }
+            height: { type: integer, minimum: 0 }
+        value: {}
+        error: { $ref: '#/components/schemas/TaskError' }
     Handoff:
       type: object
       required: [handoff_url, expires]
@@ -452,6 +611,23 @@ components:
         - type: object
           required: [lease_token]
           properties: { lease_token: { type: string } }
+    WorkerActionPoll:
+      type: object
+      required: [closing]
+      properties:
+        closing: { type: boolean }
+        action:
+          type: object
+          required: [id, action]
+          properties: { id: { type: string }, action: { $ref: '#/components/schemas/SessionAction' } }
+    WorkerActionResult:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerCredentials' }
+        - type: object
+          required: [lease_token, result]
+          properties:
+            lease_token: { type: string }
+            result: { $ref: '#/components/schemas/ActionResult' }
     AdminPool:
       type: object
       required: [id, visibility]
@@ -555,7 +731,7 @@ components:
       type: object
       required: [status]
       properties:
-        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, completed, failed, cancelled] }
+        status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, closing, completed, failed, cancelled] }
         error: { $ref: '#/components/schemas/TaskError' }
     NeedsInputPayload:
       type: object

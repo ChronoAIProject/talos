@@ -35,6 +35,8 @@ export const runWorkerDaemon = async (
     ]),
     heartbeatMs: config.heartbeatMs,
     inputPollMs: config.inputPollMs,
+    actionPollMs: config.actionPollMs,
+    sessionIdleMs: config.sessionIdleMs,
     logger: createWorkerLogger()
   });
   let stopped = false;

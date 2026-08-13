@@ -1,9 +1,15 @@
 import { z } from 'zod';
-import { workerConfigSchema, type TaskEnvelope, type TaskHeartbeat, type WorkerClient } from './client.js';
+import { actionSchema } from '../protocol/actions.js';
+import { workerConfigSchema, type InteractiveActionPoll, type TaskEnvelope, type TaskHeartbeat, type WorkerClient } from './client.js';
 import { WorkerClientError } from './errors.js';
 import { resolveControlPlaneUrl } from './url.js';
 
-const taskSchema = z.object({ id: z.string(), kind: z.enum(['browse', 'computer_use']), goal: z.string() });
+const taskSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['browse', 'computer_use']),
+  goal: z.string(),
+  interaction: z.enum(['autonomous', 'interactive']).default('autonomous')
+});
 const claimSchema = z.object({
   task: taskSchema,
   lease: z.object({
@@ -16,8 +22,13 @@ const claimSchema = z.object({
 });
 const inputResponseSchema = z.object({ input: z.unknown().optional() });
 const errorResponseSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
-const taskStatusSchema = z.enum(['submitted', 'claimed', 'running', 'needs_input', 'handoff', 'completed', 'failed', 'cancelled']);
+const taskStatusSchema = z.enum(['submitted', 'claimed', 'running', 'needs_input', 'handoff', 'closing', 'completed', 'failed', 'cancelled']);
 const publicTaskSchema = taskSchema.extend({ status: taskStatusSchema }).passthrough();
+const actionPollSchema = z.object({
+  closing: z.boolean(),
+  action: z.object({ id: z.string().min(1), action: actionSchema }).optional()
+}).strict();
+const storedActionResultSchema = z.object({ stored: z.literal(true) }).strict();
 
 export class HttpWorkerClient implements WorkerClient {
   private readonly config: ReturnType<typeof workerConfigSchema.parse>;
@@ -45,6 +56,25 @@ export class HttpWorkerClient implements WorkerClient {
       { lease_token: leaseToken }
     ));
     return response.input;
+  }
+
+  public async pollAction(taskId: string, leaseToken: string): Promise<InteractiveActionPoll> {
+    return actionPollSchema.parse(await this.request(
+      `/v1/worker/tasks/${encodeURIComponent(taskId)}/actions/poll`,
+      { lease_token: leaseToken }
+    ));
+  }
+
+  public async actionResult(
+    taskId: string,
+    actionId: string,
+    leaseToken: string,
+    result: unknown
+  ): Promise<void> {
+    storedActionResultSchema.parse(await this.request(
+      `/v1/worker/tasks/${encodeURIComponent(taskId)}/actions/${encodeURIComponent(actionId)}/result`,
+      { lease_token: leaseToken, result }
+    ));
   }
 
   public async result(

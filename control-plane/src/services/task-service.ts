@@ -1,7 +1,7 @@
 import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, PublicTask, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
+import type { Lease, PublicTask, Task, TaskFinding, TaskInteraction, WebhookEvent } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -38,7 +38,12 @@ export class TaskService {
     this.logger = options.logger;
   }
 
-  public async createTask(userId: string, input: unknown, requesterGroups: readonly string[] = []): Promise<Task> {
+  public async createTask(
+    userId: string,
+    input: unknown,
+    requesterGroups: readonly string[] = [],
+    interaction: TaskInteraction = 'autonomous'
+  ): Promise<Task> {
     const data = taskCreateSchema.parse(input);
     if (data.callback !== undefined) this.validateCallback?.(data.callback);
     const profile = data.profile_id === undefined
@@ -66,6 +71,7 @@ export class TaskService {
       ...(requesterGroups.length === 0 ? {} : { requesterGroups: [...requesterGroups] }),
       constraints: data.constraints,
       mode: data.mode,
+      interaction,
       ...(data.callback === undefined ? {} : { callback: data.callback }),
       status: 'submitted',
       createdAt: now,
@@ -118,7 +124,7 @@ export class TaskService {
   }
 
   public async heartbeat(taskId: string, workerId: string, leaseToken: string, extendSeconds: number): Promise<Task> {
-    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     const now = this.clock();
     const nextStatus = task.status === 'claimed' ? 'running' : task.status;
     const updated: Task = {
@@ -134,7 +140,7 @@ export class TaskService {
   }
 
   public async complete(taskId: string, workerId: string, leaseToken: string, status: 'completed' | 'failed', findings: readonly TaskFinding[], error?: { code: string; message: string }): Promise<Task> {
-    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     const updated: Task = {
       ...task,
       status,
@@ -150,7 +156,7 @@ export class TaskService {
   }
 
   public async addArtifact(taskId: string, workerId: string, leaseToken: string, artifact: Task['artifacts'][number]): Promise<Task> {
-    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     const updated: Task = {
       ...task,
       updatedAt: new Date(this.clock()).toISOString(),
@@ -162,6 +168,7 @@ export class TaskService {
 
   public async provideInput(id: string, userId: string, input: NonNullable<Task['input']>): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
     if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
     const now = this.clock();
     await this.repository.savePendingInput(id, input);
@@ -178,7 +185,8 @@ export class TaskService {
   }
 
   public async needsInput(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
-    const task = await this.workerTask(taskId, workerId, leaseToken);
+    const task = await this.getWorkerTask(taskId, workerId, leaseToken);
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
     const updated: Task = {
       ...task,
       status: 'needs_input',
@@ -190,12 +198,14 @@ export class TaskService {
   }
 
   public async getWorkerInput(taskId: string, workerId: string, leaseToken: string): Promise<Task['input']> {
-    await this.workerTask(taskId, workerId, leaseToken);
+    const task = await this.getWorkerTask(taskId, workerId, leaseToken);
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
     return this.repository.takePendingInput(taskId);
   }
 
   public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
     const task = await this.authorizedTask(id, userId);
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not support handoff');
     if (!['running', 'claimed'].includes(task.status)) throw conflict('task cannot request handoff in current state');
     const expires = new Date(this.clock() + expiresInSeconds * 1000).toISOString();
     const linkId = newId('handoff');
@@ -214,6 +224,7 @@ export class TaskService {
 
   public async cancel(id: string, userId: string): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
+    if (task.interaction === 'interactive') throw conflict('interactive sessions must be closed through the session API');
     if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('task is already terminal');
     const updated: Task = {
       ...task,
@@ -223,6 +234,23 @@ export class TaskService {
     await this.repository.saveTask(updated);
     await this.releaseLease(updated);
     await this.emit(updated, 'task.state_changed', { status: updated.status });
+    return updated;
+  }
+
+  public async closeInteractive(id: string, userId: string): Promise<Task> {
+    const task = await this.authorizedTask(id, userId);
+    if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('session is already terminal');
+    const status = task.status === 'submitted' ? 'completed' : 'closing';
+    const updated: Task = {
+      ...task,
+      status,
+      updatedAt: new Date(this.clock()).toISOString()
+    };
+    await this.repository.saveTask(updated);
+    if (status === 'completed') await this.releaseLease(updated);
+    await this.emit(updated, 'task.state_changed', { status });
+    if (status === 'completed') await this.emit(updated, 'task.completed', { status });
     return updated;
   }
 
@@ -242,7 +270,30 @@ export class TaskService {
         await this.emit(failed, 'task.state_changed', { status: failed.status, error: failed.error });
         continue;
       }
-      if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running'].includes(current.status)) {
+      if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running', 'closing'].includes(current.status)) {
+        if (current.status === 'closing') {
+          const pending = await this.repository.getPendingSessionAction(current.id);
+          if (pending !== undefined) {
+            await this.repository.saveSessionActionResult({
+              actionId: pending.id,
+              taskId: current.id,
+              result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
+              completedAt: new Date(now).toISOString()
+            });
+            await this.repository.completeSessionAction(current.id, pending.id);
+          }
+          const completed: Task = {
+            ...current,
+            status: 'completed',
+            pendingActionId: undefined,
+            updatedAt: new Date(now).toISOString()
+          };
+          await this.repository.saveTask(completed);
+          await this.releaseLease(current);
+          await this.emit(completed, 'task.state_changed', { status: completed.status });
+          await this.emit(completed, 'task.completed', { status: completed.status });
+          continue;
+        }
         const requeued: Task = {
           ...current,
           status: 'submitted',
@@ -253,6 +304,7 @@ export class TaskService {
           machineId: undefined,
           queuePriority: -1
         };
+        if (current.interaction === 'interactive') await this.repository.requeueSessionAction(current.id);
         await this.repository.saveTask(requeued);
         await this.releaseLease(current);
         expired.push(requeued);
@@ -268,10 +320,10 @@ export class TaskService {
     return task;
   }
 
-  private async workerTask(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
+  public async getWorkerTask(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
     const task = await this.repository.getTask(taskId);
     if (task === undefined) throw notFound('task not found');
-    if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff', 'cancelled'].includes(task.status)) throw unauthorized('worker does not own active lease');
+    if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff', 'closing', 'cancelled'].includes(task.status)) throw unauthorized('worker does not own active lease');
     const expected = Buffer.from(task.leaseToken);
     const actual = Buffer.from(leaseToken);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized('invalid lease token');
@@ -321,8 +373,11 @@ export class TaskService {
       'input',
       'requesterGroups'
     ]);
-    return Object.fromEntries(
+    return {
+      interaction: task.interaction ?? 'autonomous',
+      ...Object.fromEntries(
       Object.entries(task).filter(([key]) => !hidden.has(key))
-    ) as unknown as PublicTask;
+      )
+    } as unknown as PublicTask;
   }
 }

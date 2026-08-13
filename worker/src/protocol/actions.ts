@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 export const actionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('screenshot') }),
+  z.object({
+    type: z.literal('screenshot'),
+    format: z.enum(['jpeg', 'png']).optional(),
+    quality: z.number().int().min(1).max(100).optional()
+  }),
   z.object({ type: z.literal('click'), x: z.number().finite(), y: z.number().finite(), button: z.enum(['left', 'middle', 'right']).default('left') }),
   z.object({ type: z.literal('type'), text: z.string().max(10000) }),
   z.object({ type: z.literal('key'), key: z.string().min(1).max(100) }),
@@ -14,5 +18,9 @@ export const actionSchema = z.discriminatedUnion('type', [
 
 export type Action = z.infer<typeof actionSchema>;
 
-export interface Screenshot { mimeType: 'image/png'; data: string; width: number; height: number; }
-export interface ActionResult { screenshot?: Screenshot; value?: unknown; }
+export interface Screenshot { mimeType: 'image/jpeg' | 'image/png'; data: string; width: number; height: number; }
+export interface ActionResult {
+  screenshot?: Screenshot;
+  value?: unknown;
+  error?: { code: string; message: string };
+}

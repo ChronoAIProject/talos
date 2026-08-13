@@ -27,7 +27,7 @@ describe('control-plane factory', () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'm', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 1, online: true, workerTokenHash: 'x' });
-    await repository.saveTask({ id: 't', userId: 'u', kind: 'browse', goal: 'x', constraints: {}, mode: 'read_only', status: 'running', createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), leaseExpiresAt: new Date(1000).toISOString(), workerId: 'w', machineId: 'm', findings: [], artifacts: [] });
+    await repository.saveTask({ id: 't', userId: 'u', kind: 'browse', goal: 'x', constraints: {}, mode: 'read_only', interaction: 'autonomous', status: 'running', createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), leaseExpiresAt: new Date(1000).toISOString(), workerId: 'w', machineId: 'm', findings: [], artifacts: [] });
     const server = createControlPlane(repository, 'webhook-secret-1234', { sweepIntervalMs: 10, adminToken: 'admin-token-123456' });
     await vi.advanceTimersByTimeAsync(11);
     expect((await repository.getTask('t'))?.status).toBe('submitted');

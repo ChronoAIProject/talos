@@ -28,7 +28,9 @@ describe('HttpWorkerClient', () => {
       { id: 't', kind: 'browse', goal: 'x', status: 'needs_input' },
       { input: { kind: 'text', value: 'ok' } },
       { id: 't', kind: 'browse', goal: 'x', status: 'completed' },
-      { id: 't', kind: 'browse', goal: 'x', status: 'running' }
+      { id: 't', kind: 'browse', goal: 'x', status: 'running' },
+      { closing: false, action: { id: 'action_1', action: { type: 'screenshot', format: 'jpeg', quality: 70 } } },
+      { stored: true }
     ];
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(responses.shift() ?? {}), { status: 200 }));
     const client = new HttpWorkerClient({ controlPlaneUrl: 'http://localhost:8080', workerId: 'w', machineId: 'm', workerToken: 'worker-token-123456' });
@@ -38,7 +40,9 @@ describe('HttpWorkerClient', () => {
     expect(await client.getInput('t', 'lease_1')).toMatchObject({ value: 'ok' });
     await client.result('t', 'lease_1', 'completed', []);
     await client.artifact('t', 'lease_1', { name: 'a', contentType: 'text/plain', size: 1, uri: 'https://example.com/a' });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(await client.pollAction('t', 'lease_1')).toMatchObject({ action: { id: 'action_1' } });
+    await client.actionResult('t', 'action_1', 'lease_1', { value: 'ok' });
+    expect(fetchMock).toHaveBeenCalledTimes(8);
     for (const call of fetchMock.mock.calls) {
       expect(JSON.parse(String(call[1]?.body))).toMatchObject({
         worker_token: 'worker-token-123456',
@@ -48,6 +52,8 @@ describe('HttpWorkerClient', () => {
     }
     expect(fetchMock.mock.calls[3]?.[0].toString()).toBe('http://localhost:8080/v1/worker/tasks/t/input/poll');
     expect(fetchMock.mock.calls[3]?.[1]?.method).toBe('POST');
+    expect(fetchMock.mock.calls[6]?.[0].toString()).toContain('/actions/poll');
+    expect(fetchMock.mock.calls[7]?.[0].toString()).toContain('/actions/action_1/result');
     fetchMock.mockRestore();
   });
 
