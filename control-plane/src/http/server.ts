@@ -365,9 +365,11 @@ const requireIdentity = async (request: IncomingMessage, resolver: IdentityResol
 
 const requireWorker = async (request: IncomingMessage, repository: Repository): Promise<string> => {
   const auth = request.headers.authorization;
+  const headerToken = request.headers['x-talos-worker-token']?.toString();
   const machineId = request.headers['x-talos-machine-id']?.toString();
-  if (auth === undefined || !auth.startsWith('Bearer ') || machineId === undefined) throw unauthorized('worker token and machine header are required');
-  const token = auth.slice(7);
+  const bearerToken = auth?.startsWith('Bearer ') === true ? auth.slice(7) : undefined;
+  const token = headerToken ?? bearerToken;
+  if (token === undefined || machineId === undefined) throw unauthorized('worker token and machine header are required');
   const machine = await repository.getMachine(machineId);
   if (machine === undefined) throw unauthorized('invalid worker token');
   const expected = Buffer.from(machine.workerTokenHash);
