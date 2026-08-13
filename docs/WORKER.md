@@ -19,7 +19,9 @@ The control-plane operator creates a separate NyxID catalog entry such as `talos
 - `GET /v1/worker/**`
 - `GET /healthz`, used by `talos-worker init` and `talos-worker status`
 
-NyxID removes `Authorization` from public anonymous proxy requests but forwards custom `X-Talos-*` headers. The daemon sends the worker token in both carriers; Talos authenticates the forwarded `X-Talos-Worker-Token` against the enrolled machine token hash. If both carriers reach Talos, the custom header takes precedence.
+NyxID's public proxy strips `Authorization` and all custom `X-Talos-*` headers. It forwards JSON bodies unchanged, so the daemon includes `worker_token`, `worker_id`, and `machine_id` in every worker POST body. Input polling uses `POST /v1/worker/tasks/{id}/input/poll`, carrying the lease and worker credentials in its body. Tokens are therefore not placed in URLs or proxy access logs.
+
+For direct connections, the daemon also sends the existing Bearer and `X-Talos-*` headers. Talos selects credentials in this order: `X-Talos-*` headers, Bearer plus worker/machine headers, then body fields. Every carrier is checked against the same enrolled machine token hash and task-to-machine binding.
 
 Anonymous-endpoint quotas are charged before Talos authenticates the worker. At the default 20-second heartbeat interval, budget approximately 4,320 heartbeat requests per machine per day, plus claim polling and task traffic. Set the catalog entry's `daily_quota` accordingly and retain Talos machine-token authentication as the authorization boundary.
 
