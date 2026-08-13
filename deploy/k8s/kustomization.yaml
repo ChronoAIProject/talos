@@ -6,6 +6,7 @@ resources:
   # secret.yaml holds real values and is gitignored; apply it separately or keep it listed here for local kubectl -k use.
   - secret.example.yaml
   - config.yaml
+  - networkpolicy.yaml
   - control-plane-deployment.yaml
   - control-plane-service.yaml
   # Apply mongodb.example.yaml only for development/testing.
