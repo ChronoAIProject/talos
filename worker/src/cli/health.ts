@@ -1,8 +1,10 @@
+import { resolveControlPlaneUrl } from '../runtime/url.js';
+
 export const checkControlPlaneHealth = async (
   controlPlaneUrl: string,
   fetcher: typeof fetch = fetch
 ): Promise<void> => {
-  const healthUrl = new URL('/healthz', ensureTrailingSlash(controlPlaneUrl));
+  const healthUrl = resolveControlPlaneUrl(controlPlaneUrl, '/healthz');
   try {
     const response = await fetcher(healthUrl, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -10,8 +12,6 @@ export const checkControlPlaneHealth = async (
     if (body.status !== 'ok') throw new Error('control plane reported degraded health');
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown error';
-    throw new Error(`cannot reach ${healthUrl.toString()}: ${reason}. There is no public worker endpoint; connect this machine to the required VPN or in-network environment, then retry.`);
+    throw new Error(`cannot reach ${healthUrl.toString()}: ${reason}. Check the NyxID public worker URL, or connect this machine to the required VPN or in-network environment, then retry.`);
   }
 };
-
-const ensureTrailingSlash = (value: string): string => value.endsWith('/') ? value : `${value}/`;

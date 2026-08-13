@@ -56,7 +56,7 @@ For deployment, set the validated control-plane and worker environment variables
 
 ## Worker installation
 
-End users install the release artifact and configure their enrolled machine with `talos-worker init`; see [docs/WORKER.md](docs/WORKER.md) for the two-command installation, NyxID enrollment, background service, and token-rotation workflow. Node.js 22+ and private network or VPN reachability to the control plane are required.
+End users install the release artifact and configure their enrolled machine with `talos-worker init`; see [docs/WORKER.md](docs/WORKER.md) for the two-command installation, NyxID public rendezvous or direct private-network connection, enrollment, background service, and token-rotation workflow. Node.js 22+ is required.
 
 Playwright remains an optional workspace dependency so a control-plane-only deployment can skip its browser binaries. The release installer installs Playwright and `talos-worker init` installs Chromium before the first claim.
 

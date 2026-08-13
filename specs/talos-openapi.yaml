@@ -327,7 +327,10 @@ components:
     PoolId: { name: id, in: path, required: true, schema: { type: string } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
-    workerToken: { type: http, scheme: bearer, description: Rotatable machine worker token. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header. }
+    workerToken:
+      type: http
+      scheme: bearer
+      description: Rotatable machine worker token. Workers send it in both Authorization Bearer and X-Talos-Worker-Token; either carrier is accepted, with X-Talos-Worker-Token taking precedence when both are present because the NyxID public anonymous proxy strips Authorization but forwards X-Talos-* headers. Include required X-Talos-Worker-Id and X-Talos-Machine-Id headers; the token is bound to the machine header.
     adminToken: { type: apiKey, in: header, name: X-Talos-Admin-Token, description: Startup-configured administrative registration token. }
   responses:
     BadRequest: { description: Invalid JSON or boundary validation failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }

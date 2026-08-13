@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { workerConfigSchema, type TaskEnvelope, type TaskHeartbeat, type WorkerClient } from './client.js';
 import { WorkerClientError } from './errors.js';
+import { resolveControlPlaneUrl } from './url.js';
 
 const taskSchema = z.object({ id: z.string(), kind: z.enum(['browse', 'computer_use']), goal: z.string() });
 const claimSchema = z.object({
@@ -79,10 +80,11 @@ export class HttpWorkerClient implements WorkerClient {
     method = 'POST',
     extraHeaders: Record<string, string> = {}
   ): Promise<unknown> {
-    const response = await fetch(new URL(path, this.config.controlPlaneUrl), {
+    const response = await fetch(resolveControlPlaneUrl(this.config.controlPlaneUrl, path), {
       method,
       headers: {
         authorization: `Bearer ${this.config.workerToken}`,
+        'x-talos-worker-token': this.config.workerToken,
         'x-talos-worker-id': this.config.workerId,
         'x-talos-machine-id': this.config.machineId,
         'content-type': 'application/json',
