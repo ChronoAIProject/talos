@@ -15,14 +15,18 @@ spec:
       labels:
         app: talos-control-plane
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        # Numeric UID required: kubelet cannot verify the image's named user.
+        runAsUser: 1000
+        runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: control-plane
           # 0.0.1 pinned by digest (pushed 2026-08-13, linux/amd64)
-          image: REGISTRY/talos-control-plane@sha256:715199b5907f03c00bdf6366179459afd3b927362aafd6b872ddb0336fd9bb8f
+          image: REGISTRY/talos-control-plane@sha256:67ced4c5c78ba6ac1bca026f79f25309cf4ad47540a43331ac3bf4d6562bb45d
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
