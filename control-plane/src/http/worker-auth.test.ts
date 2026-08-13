@@ -44,6 +44,7 @@ describe('worker token carriers', () => {
   it.each([
     ['Authorization only', { authorization: 'Bearer worker-token-123456' }, 404],
     ['custom header only', { 'x-talos-worker-token': 'worker-token-123456' }, 404],
+    ['both valid carriers', { authorization: 'Bearer worker-token-123456', 'x-talos-worker-token': 'worker-token-123456' }, 404],
     ['valid custom header takes precedence', { authorization: 'Bearer wrong-token', 'x-talos-worker-token': 'worker-token-123456' }, 404],
     ['neither carrier', {}, 401],
     ['wrong Authorization token', { authorization: 'Bearer wrong-token' }, 401],
