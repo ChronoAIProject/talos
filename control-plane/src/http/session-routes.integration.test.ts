@@ -61,6 +61,16 @@ describe('interactive session HTTP API', () => {
     expect(session.mode).toBe('read_only');
     expect((await fetch(`${base}/v1/sessions/${session.id}`, { headers: alice })).status).toBe(200);
     expect((await fetch(`${base}/v1/sessions/${session.id}`, { headers: bob })).status).toBe(403);
+    expect((await fetch(`${base}/v1/sessions/${session.id}/actions?wait_seconds=0`, {
+      method: 'POST',
+      headers: bob,
+      body: JSON.stringify({ action: { type: 'screenshot' } })
+    })).status).toBe(403);
+    expect((await fetch(`${base}/v1/sessions/${session.id}/close`, {
+      method: 'POST',
+      headers: bob,
+      body: '{}'
+    })).status).toBe(403);
     expect((await fetch(`${base}/v1/sessions/${session.id}/actions?wait_seconds=26`, {
       method: 'POST',
       headers: alice,

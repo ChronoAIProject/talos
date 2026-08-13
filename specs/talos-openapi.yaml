@@ -320,6 +320,7 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/actions/poll:
+    parameters: [{ $ref: '#/components/parameters/TaskId' }]
     post:
       security: [{ workerToken: [] }]
       operationId: pollSessionAction
@@ -333,7 +334,9 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
   /v1/worker/tasks/{id}/actions/{actionId}/result:
-    parameters: [{ $ref: '#/components/parameters/ActionId' }]
+    parameters:
+      - { $ref: '#/components/parameters/TaskId' }
+      - { $ref: '#/components/parameters/ActionId' }
     post:
       security: [{ workerToken: [] }]
       operationId: submitSessionActionResult
