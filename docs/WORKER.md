@@ -16,15 +16,11 @@ Before publishing the repository, replace `OWNER/talos` in `scripts/install-work
 Use your personal NyxID key. These requests are proxied with your verified identity, so the pool is owned by your NyxID `sub`.
 
 ```sh
-nyxid proxy request talos \
-  --method POST \
-  --path /v1/pools \
-  --json '{"id":"my-mac-pool","visibility":"private","tags":{"region":"home"}}'
+nyxid proxy request talos /v1/pools -m POST \
+  -d '{"id":"my-mac-pool","visibility":"private","tags":{"region":"home"}}'
 
-nyxid proxy request talos \
-  --method POST \
-  --path /v1/pools/my-mac-pool/machines \
-  --json '{"id":"my-mac","tags":{"os":"macos","browser":true,"headed_display":true,"residential_ip":true},"capacity":1,"online":true}'
+nyxid proxy request talos /v1/pools/my-mac-pool/machines -m POST \
+  -d '{"id":"my-mac","tags":{"os":"macos","browser":true,"headed_display":true,"residential_ip":true},"capacity":1,"online":true}'
 ```
 
 The enrollment response contains `worker_token` exactly once. Store it in a password manager or temporary environment variable immediately. Talos stores only its hash and cannot show it again.
@@ -90,16 +86,14 @@ Windows users should run `talos-worker run` through Task Scheduler, configured t
 ## 5. Verify With a Task
 
 ```sh
-nyxid proxy request talos \
-  --method POST \
-  --path /v1/tasks \
-  --json '{"kind":"browse","goal":"Return the page title from example.com","pool_id":"my-mac-pool","mode":"read_only"}'
+nyxid proxy request talos /v1/tasks -m POST \
+  -d '{"kind":"browse","goal":"Return the page title from example.com","pool_id":"my-mac-pool","mode":"read_only"}'
 ```
 
 Use the returned task id to check completion:
 
 ```sh
-nyxid proxy request talos --method GET --path /v1/tasks/TASK_ID
+nyxid proxy request talos /v1/tasks/TASK_ID
 ```
 
 ## 6. Rotate a Worker Token
@@ -107,10 +101,8 @@ nyxid proxy request talos --method GET --path /v1/tasks/TASK_ID
 Rotation invalidates the previous token immediately and returns the replacement once:
 
 ```sh
-nyxid proxy request talos \
-  --method POST \
-  --path /v1/machines/my-mac/rotate-token \
-  --json '{}'
+nyxid proxy request talos /v1/machines/my-mac/rotate-token -m POST \
+  -d '{}'
 
 export TALOS_WORKER_TOKEN='tw_new-value-returned-once'
 talos-worker init \
