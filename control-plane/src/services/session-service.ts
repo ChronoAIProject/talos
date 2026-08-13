@@ -86,7 +86,22 @@ export class SessionService {
   }
 
   public async close(id: string, userId: string): Promise<SessionView> {
-    return this.toView(await this.tasks.closeInteractive(id, userId));
+    await this.sessionTask(id, userId);
+    const pending = await this.repository.getPendingSessionAction(id);
+    const closed = await this.tasks.closeInteractive(id, userId);
+    if (pending?.state === 'pending') {
+      await this.repository.saveSessionActionResult({
+        actionId: pending.id,
+        taskId: id,
+        result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
+        completedAt: new Date(this.clock()).toISOString()
+      });
+      await this.repository.completeSessionAction(id, pending.id);
+      const updated = { ...closed, pendingActionId: undefined };
+      await this.repository.saveTask(updated);
+      return this.toView(updated);
+    }
+    return this.toView(closed);
   }
 
   public async sendAction(

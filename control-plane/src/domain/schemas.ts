@@ -93,7 +93,15 @@ export const workerActionPollSchema = workerNeedsInputSchema;
 
 export const workerActionResultSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
-  result: z.unknown()
+  result: z.object({
+    screenshot: z.object({
+      mimeType: z.enum(['image/jpeg', 'image/png']),
+      data: z.string(),
+      width: z.number().int().nonnegative(),
+      height: z.number().int().nonnegative()
+    }).optional(),
+    value: z.unknown().optional()
+  }).strict()
 });
 
 export const resultSchema = workerBodyCredentialsSchema.extend({

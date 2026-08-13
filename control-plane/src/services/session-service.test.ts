@@ -69,6 +69,11 @@ describe('session service', () => {
     await expect(sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0))
       .rejects.toMatchObject({ code: 'conflict' });
     expect((await repository.getTask(created.id))?.pendingActionId).toBe(first.action_id);
+    await sessions.close(created.id, 'user-a');
+    await expect(sessions.getAction(created.id, first.action_id, 'user-a', 0)).resolves.toMatchObject({
+      status: 'completed',
+      result: { error: { code: 'session_closed' } }
+    });
   });
 
   it('long-polls until a late worker result and correlates action ids', async () => {
