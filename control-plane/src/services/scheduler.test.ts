@@ -14,6 +14,7 @@ const task = (
   goal: 'x',
   constraints: { requirements },
   mode: 'read_only' as const,
+  interaction: 'autonomous' as const,
   status: 'submitted' as const,
   createdAt: '2020-01-01T00:00:00.000Z',
   updatedAt: '2020-01-01T00:00:00.000Z',

@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 
 export interface Repository {
   ping(): Promise<void>;
@@ -23,4 +23,10 @@ export interface Repository {
   listWebhooks(): Promise<readonly WebhookEvent[]>;
   savePendingInput(taskId: string, input: TaskInput): Promise<void>;
   takePendingInput(taskId: string): Promise<TaskInput | undefined>;
+  enqueueSessionAction(action: PendingSessionAction): Promise<boolean>;
+  getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
+  takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
+  completeSessionAction(taskId: string, actionId: string): Promise<void>;
+  saveSessionActionResult(result: SessionActionResult): Promise<void>;
+  getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
 }

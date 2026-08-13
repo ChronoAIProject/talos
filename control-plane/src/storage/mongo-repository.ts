@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
-import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { Repository } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
@@ -19,6 +19,8 @@ export class MongoRepository implements Repository {
   private readonly handoffs: Collection<Document>;
   private readonly webhooks: Collection<Document>;
   private readonly pendingInputs: Collection<Document>;
+  private readonly pendingActions: Collection<Document>;
+  private readonly actionResults: Collection<Document>;
 
   public constructor(url: string, databaseName = 'talos', options: MongoRepositoryOptions = {}) {
     this.client = options.client ?? new MongoClient(url, { ...options.clientOptions, ignoreUndefined: true });
@@ -30,6 +32,8 @@ export class MongoRepository implements Repository {
     this.handoffs = this.database.collection('handoffs');
     this.webhooks = this.database.collection('webhooks');
     this.pendingInputs = this.database.collection('pending_inputs');
+    this.pendingActions = this.database.collection('pending_actions');
+    this.actionResults = this.database.collection('action_results');
   }
 
   public async initialize(): Promise<void> {
@@ -38,7 +42,8 @@ export class MongoRepository implements Repository {
       this.tasks.createIndex({ status: 1, queuePriority: 1, createdAt: 1 }),
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
-      this.machines.createIndex({ poolId: 1 })
+      this.machines.createIndex({ poolId: 1 }),
+      this.actionResults.createIndex({ taskId: 1 })
     ]);
   }
 
@@ -138,15 +143,60 @@ export class MongoRepository implements Repository {
     const document = result ?? null;
     return document === null ? undefined : document.input as TaskInput;
   }
+
+  public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
+    const result = await this.pendingActions.updateOne(
+      { _id: action.taskId },
+      { $setOnInsert: { ...action, _id: action.taskId } },
+      { upsert: true }
+    );
+    return result.upsertedCount === 1;
+  }
+
+  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const document = await this.pendingActions.findOne({ _id: taskId });
+    return document === null ? undefined : sessionActionFromDocument(document);
+  }
+
+  public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const document = await this.pendingActions.findOneAndUpdate(
+      { _id: taskId, state: 'pending' },
+      { $set: { state: 'dispatched' } },
+      { returnDocument: 'after' }
+    );
+    return document === null ? undefined : sessionActionFromDocument(document);
+  }
+
+  public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
+    await this.pendingActions.deleteOne({ _id: taskId, id: actionId });
+  }
+
+  public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
+    await this.actionResults.replaceOne(
+      { _id: result.actionId },
+      { ...result, _id: result.actionId },
+      { upsert: true }
+    );
+  }
+
+  public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
+    const document = await this.actionResults.findOne({ _id: actionId });
+    return document === null ? undefined : sessionActionResultFromDocument(document);
+  }
 }
 
 const withoutId = (document: Document): Record<string, unknown> => {
   return Object.fromEntries(Object.entries(document).filter(([key, value]) => key !== '_id' && value !== null));
 };
 
-const taskFromDocument = (document: Document): Task => withoutId(document) as unknown as Task;
+const taskFromDocument = (document: Document): Task => ({
+  interaction: 'autonomous',
+  ...withoutId(document)
+}) as unknown as Task;
 const poolFromDocument = (document: Document): Pool => withoutId(document) as unknown as Pool;
 const machineFromDocument = (document: Document): Machine => withoutId(document) as unknown as Machine;
 const profileFromDocument = (document: Document): Profile => withoutId(document) as unknown as Profile;
 const handoffFromDocument = (document: Document): HandoffLink => withoutId(document) as unknown as HandoffLink;
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
+const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
+const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;

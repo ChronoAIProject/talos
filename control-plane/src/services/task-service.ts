@@ -66,6 +66,7 @@ export class TaskService {
       ...(requesterGroups.length === 0 ? {} : { requesterGroups: [...requesterGroups] }),
       constraints: data.constraints,
       mode: data.mode,
+      interaction: 'autonomous',
       ...(data.callback === undefined ? {} : { callback: data.callback }),
       status: 'submitted',
       createdAt: now,
@@ -321,8 +322,11 @@ export class TaskService {
       'input',
       'requesterGroups'
     ]);
-    return Object.fromEntries(
+    return {
+      interaction: task.interaction ?? 'autonomous',
+      ...Object.fromEntries(
       Object.entries(task).filter(([key]) => !hidden.has(key))
-    ) as unknown as PublicTask;
+      )
+    } as unknown as PublicTask;
   }
 }

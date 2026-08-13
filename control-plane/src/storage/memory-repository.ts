@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, Pool, Profile, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { Repository } from './repository.js';
 
 export class MemoryRepository implements Repository {
@@ -9,6 +9,8 @@ export class MemoryRepository implements Repository {
   private readonly handoffs = new Map<string, HandoffLink>();
   private readonly webhooks = new Map<string, WebhookEvent>();
   private readonly pendingInputs = new Map<string, TaskInput>();
+  private readonly pendingActions = new Map<string, PendingSessionAction>();
+  private readonly actionResults = new Map<string, SessionActionResult>();
 
   public async ping(): Promise<void> {}
 
@@ -100,5 +102,36 @@ export class MemoryRepository implements Repository {
     const input = this.pendingInputs.get(taskId);
     this.pendingInputs.delete(taskId);
     return input;
+  }
+
+  public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
+    if (this.pendingActions.has(action.taskId)) return false;
+    this.pendingActions.set(action.taskId, action);
+    return true;
+  }
+
+  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    return this.pendingActions.get(taskId);
+  }
+
+  public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const action = this.pendingActions.get(taskId);
+    if (action === undefined || action.state !== 'pending') return undefined;
+    const dispatched: PendingSessionAction = { ...action, state: 'dispatched' };
+    this.pendingActions.set(taskId, dispatched);
+    return dispatched;
+  }
+
+  public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
+    const action = this.pendingActions.get(taskId);
+    if (action?.id === actionId) this.pendingActions.delete(taskId);
+  }
+
+  public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
+    this.actionResults.set(result.actionId, result);
+  }
+
+  public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
+    return this.actionResults.get(actionId);
   }
 }

@@ -1,11 +1,13 @@
 export type TaskKind = 'browse' | 'computer_use';
 export type TaskMode = 'read_only' | 'act';
+export type TaskInteraction = 'autonomous' | 'interactive';
 export type TaskStatus =
   | 'submitted'
   | 'claimed'
   | 'running'
   | 'needs_input'
   | 'handoff'
+  | 'closing'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -54,6 +56,7 @@ export interface Task {
   requesterGroups?: readonly string[];
   constraints: TaskConstraints;
   mode: TaskMode;
+  interaction: TaskInteraction;
   callback?: string;
   status: TaskStatus;
   queuePriority?: number;
@@ -69,6 +72,8 @@ export interface Task {
   input?: TaskInput;
   error?: { code: string; message: string };
   handoff?: { url: string; expiresAt: string };
+  pendingActionId?: string;
+  lastActionId?: string;
 }
 
 export interface PublicTask {
@@ -81,6 +86,7 @@ export interface PublicTask {
   poolId?: string;
   constraints: TaskConstraints;
   mode: TaskMode;
+  interaction: TaskInteraction;
   callback?: string;
   status: TaskStatus;
   createdAt: string;
@@ -90,6 +96,32 @@ export interface PublicTask {
   artifacts: readonly Artifact[];
   error?: { code: string; message: string };
   handoff?: { url: string; expiresAt: string };
+}
+
+export type SessionAction =
+  | { type: 'screenshot'; format: 'jpeg' | 'png'; quality?: number }
+  | { type: 'click'; x: number; y: number; button: 'left' | 'middle' | 'right' }
+  | { type: 'type'; text: string }
+  | { type: 'key'; key: string }
+  | { type: 'scroll'; deltaX: number; deltaY: number }
+  | { type: 'wait'; milliseconds: number }
+  | { type: 'act-on-a11y-node'; nodeId: string; action: 'click' | 'type'; text?: string }
+  | { type: 'extract-structured-dom'; selector: string }
+  | { type: 'navigate'; url: string };
+
+export interface PendingSessionAction {
+  id: string;
+  taskId: string;
+  action: SessionAction;
+  state: 'pending' | 'dispatched';
+  createdAt: string;
+}
+
+export interface SessionActionResult {
+  actionId: string;
+  taskId: string;
+  result: unknown;
+  completedAt: string;
 }
 
 export interface Pool {
