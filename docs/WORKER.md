@@ -9,7 +9,7 @@ Talos workers must reach the private control-plane address. There is no public w
 - Windows can run the same JavaScript release under Node.js 22, but service installation is manual through Task Scheduler or another supervisor.
 - Access to the org-shared `talos` service in NyxID.
 
-Before publishing the repository, replace `OWNER/talos` in `scripts/install-worker.sh`. Until then, set `TALOS_GITHUB_REPO=owner/repository` when invoking the installer.
+The installer defaults to the `ChronoAIProject/talos` repository; set `TALOS_GITHUB_REPO=owner/repository` to install from a fork.
 
 ## 1. Create a Pool and Enroll the Machine
 
@@ -34,19 +34,19 @@ export TALOS_WORKER_TOKEN='tw_value-returned-by-enrollment'
 Once the repository has a real GitHub location:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/talos/main/scripts/install-worker.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ChronoAIProject/talos/main/scripts/install-worker.sh | bash
 ```
 
 Until the placeholder is replaced, or when using a fork:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/talos/main/scripts/install-worker.sh | TALOS_GITHUB_REPO=OWNER/talos bash
+curl -fsSL https://raw.githubusercontent.com/ChronoAIProject/talos/main/scripts/install-worker.sh | bash -s -- --version worker-v0.1.0
 ```
 
 To pin a release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/talos/main/scripts/install-worker.sh | TALOS_GITHUB_REPO=OWNER/talos bash -s -- --version worker-v0.1.0
+curl -fsSL https://raw.githubusercontent.com/ChronoAIProject/talos/main/scripts/install-worker.sh | bash -s -- --version worker-v0.1.0 -s -- --version worker-v0.1.0
 ```
 
 The installer verifies Node.js 22+, downloads the platform-independent JavaScript release, installs Playwright beside it, and links `~/.local/bin/talos-worker`.

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # REQUIRED BEFORE PUBLISHING: replace this placeholder or set TALOS_GITHUB_REPO.
-REPO="${TALOS_GITHUB_REPO:-OWNER/talos}"
+REPO="${TALOS_GITHUB_REPO:-ChronoAIProject/talos}"
 VERSION="latest"
 
 while [[ $# -gt 0 ]]; do
