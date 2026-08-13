@@ -37,7 +37,7 @@ Once the repository has a real GitHub location:
 curl -fsSL https://raw.githubusercontent.com/ChronoAIProject/talos/main/scripts/install-worker.sh | bash
 ```
 
-Until the placeholder is replaced, or when using a fork:
+To pin a specific release version:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ChronoAIProject/talos/main/scripts/install-worker.sh | bash -s -- --version worker-v0.1.0
