@@ -37,4 +37,11 @@ describe('worker file configuration', () => {
     expect(readWorkerConfigFile(path)).toEqual(config);
     expect(readFileSync(path, 'utf8')).toContain('stored-machine');
   });
+
+  it('accepts a control-plane URL with a NyxID public-proxy path prefix', () => {
+    const config = loadWorkerConfig({
+      TALOS_CONTROL_PLANE_URL: 'https://nyxid.example.com/public/s/talos-worker'
+    }, stored);
+    expect(config.controlPlaneUrl).toBe('https://nyxid.example.com/public/s/talos-worker');
+  });
 });
