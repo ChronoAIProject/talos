@@ -13,6 +13,9 @@ A standalone service (never part of the NyxID codebase) that:
 
 - exposes an async task API following the Oracle relay pattern:
   submit -> worker claim -> lease heartbeat -> result -> webhook
+- exposes interactive browser sessions where an external agent is the planner and
+  sends one typed action at a time while Talos retains the worker's live browser;
+  this extends Oracle's outbound relay lineage without replacing autonomous tasks
 - executes tasks on pools of real machines (macOS / Windows / Linux) running an
   outbound-connecting worker daemon
 - is registered in the NyxID catalog with an OpenAPI spec, so Aevatar workflows can
@@ -45,7 +48,7 @@ Architecture overview page (diagrams, decisions, weekly deliverables):
 
 ## Status
 
-Phase 1 is implemented. The control plane, durable MongoDB-backed registry (with an
+Phase 1 plus interactive browser sessions are implemented. The control plane, durable MongoDB-backed registry (with an
 in-memory fallback for local development), signed webhook
 dispatcher, lease sweep, authenticated admin registration, worker runtime, scripted
 planner, BrowserExecutor, and catalog OpenAPI spec are available. Phase 2/3 hosted

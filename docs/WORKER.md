@@ -23,7 +23,7 @@ NyxID's public proxy strips `Authorization` and all custom `X-Talos-*` headers. 
 
 For direct connections, the daemon also sends the existing Bearer and `X-Talos-*` headers. Talos selects credentials in this order: `X-Talos-*` headers, Bearer plus worker/machine headers, then body fields. Every carrier is checked against the same enrolled machine token hash and task-to-machine binding.
 
-Anonymous-endpoint quotas are charged before Talos authenticates the worker. At the default 20-second heartbeat interval, budget approximately 4,320 heartbeat requests per machine per day, plus claim polling and task traffic. Set the catalog entry's `daily_quota` accordingly and retain Talos machine-token authentication as the authorization boundary.
+Anonymous-endpoint quotas are charged before Talos authenticates the worker. At the default 20-second heartbeat interval, budget approximately 4,320 heartbeat requests per machine per day, plus claim polling and task traffic. An active interactive session adds about one action-poll request per second by default, up to roughly 86,400 requests per day for a continuously active session. Set the catalog entry's `daily_quota` accordingly and retain Talos machine-token authentication as the authorization boundary.
 
 Use the complete public service prefix during setup:
 
@@ -32,6 +32,8 @@ https://nyxid.example.com/public/s/talos-worker
 ```
 
 The worker preserves that path prefix when calling `/healthz` and `/v1/worker/**`. Direct private URLs such as `http://talos-control-plane.talos.svc.cluster.local` remain supported.
+
+Interactive sessions keep one browser context open while the external NyxID caller plans and submits one action at a time. The daemon skips its autonomous planner for these claims, polls with `TALOS_ACTION_POLL_MS` (default 1000), and fails idle sessions after `TALOS_SESSION_IDLE_MS` (default 600000). Closing the session causes the worker to close the browser and complete the underlying task.
 
 ## 1. Create a Pool and Enroll the Machine
 
