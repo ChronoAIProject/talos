@@ -28,9 +28,9 @@ A standalone service (never part of the NyxID codebase) that:
 - Aevatar: purchase/errand workflows submit tasks and suspend on `wait_signal`
 - Managed Codex: a codex agent can chain tasks to Talos through the NyxID proxy
 - Ornn: task playbooks (site-specific know-how) publishable as versioned skills
-- Oracle: the proven ancestor of the worker protocol. the Oracle relay
-  runs the same submit/claim/lease/heartbeat mechanics in production inside NyxID,
-  and its CDP worker is the starting point for our worker daemon; Talos Phase 1 is
+- Oracle: the proven ancestor of the worker protocol. The Oracle relay runs the
+  same submit/claim/lease/heartbeat mechanics in production inside NyxID, and its
+  CDP worker is the starting point for our worker daemon; Talos Phase 1 is
   deliberately "Oracle with a different task kind"
 
 Architecture overview page (diagrams, decisions, weekly deliverables):
