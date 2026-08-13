@@ -1,6 +1,6 @@
 # Talos Worker Installation
 
-Talos workers must reach the private control-plane address. There is no public worker endpoint. Connect the machine to the organization network or its VPN before running `talos-worker init` or the daemon.
+Talos workers make outbound-only requests. They can rendezvous through NyxID's public anonymous proxy without a VPN, or connect directly to a private control-plane address from the organization network.
 
 ## Requirements
 
@@ -10,6 +10,26 @@ Talos workers must reach the private control-plane address. There is no public w
 - Access to the org-shared `talos` service in NyxID.
 
 The installer defaults to the `ChronoAIProject/talos` repository; set `TALOS_GITHUB_REPO=owner/repository` to install from a fork.
+
+## Connect through NyxID (no VPN required)
+
+The control-plane operator creates a separate NyxID catalog entry such as `talos-worker` with authentication set to `none` and identity propagation set to `none`. Configure anonymous endpoint rules for:
+
+- `POST /v1/worker/**`
+- `GET /v1/worker/**`
+- `GET /healthz`, used by `talos-worker init` and `talos-worker status`
+
+NyxID removes `Authorization` from public anonymous proxy requests but forwards custom `X-Talos-*` headers. The daemon sends the worker token in both carriers; Talos authenticates the forwarded `X-Talos-Worker-Token` against the enrolled machine token hash. If both carriers reach Talos, the custom header takes precedence.
+
+Anonymous-endpoint quotas are charged before Talos authenticates the worker. At the default 20-second heartbeat interval, budget approximately 4,320 heartbeat requests per machine per day, plus claim polling and task traffic. Set the catalog entry's `daily_quota` accordingly and retain Talos machine-token authentication as the authorization boundary.
+
+Use the complete public service prefix during setup:
+
+```text
+https://nyxid.example.com/public/s/talos-worker
+```
+
+The worker preserves that path prefix when calling `/healthz` and `/v1/worker/**`. Direct private URLs such as `http://talos-control-plane.talos.svc.cluster.local` remain supported.
 
 ## 1. Create a Pool and Enroll the Machine
 
@@ -53,19 +73,19 @@ The installer verifies Node.js 22+, downloads the platform-independent JavaScrip
 
 ## 3. Initialize
 
-With the machine connected to the required network or VPN:
+Using either the NyxID public worker URL or a reachable private control-plane URL:
 
 ```sh
 talos-worker init
 ```
 
-The setup prompts for the private control-plane URL, machine and worker ids, token, and browser profile path. The token prompt is hidden. Configuration is stored at `~/.talos-worker/config.json` with mode `0600`, then setup verifies `/healthz` and installs Chromium.
+The setup prompts for the control-plane URL, machine and worker ids, token, and browser profile path. The token prompt is hidden. Configuration is stored at `~/.talos-worker/config.json` with mode `0600`, then setup verifies `/healthz` and installs Chromium.
 
 For non-interactive setup, keep the token in an environment variable rather than a command-line argument:
 
 ```sh
 talos-worker init \
-  --control-plane-url http://talos-control-plane.talos.svc.cluster.local \
+  --control-plane-url https://nyxid.example.com/public/s/talos-worker \
   --machine-id my-mac \
   --worker-id my-mac-worker \
   --token-env TALOS_WORKER_TOKEN \
@@ -106,7 +126,7 @@ nyxid proxy request talos /v1/machines/my-mac/rotate-token -m POST \
 
 export TALOS_WORKER_TOKEN='tw_new-value-returned-once'
 talos-worker init \
-  --control-plane-url http://talos-control-plane.talos.svc.cluster.local \
+  --control-plane-url https://nyxid.example.com/public/s/talos-worker \
   --machine-id my-mac \
   --worker-id my-mac-worker \
   --token-env TALOS_WORKER_TOKEN \
