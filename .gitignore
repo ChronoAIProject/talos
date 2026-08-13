@@ -8,3 +8,4 @@ deploy/k8s/secret.yaml
 *.swp
 .*.swp
 *~
+deploy/prod/

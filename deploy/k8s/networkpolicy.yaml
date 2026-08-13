@@ -1,18 +1,14 @@
-# Talos network policies for the talos namespace.
+# Talos network policies. Replace the placeholder CIDRs with your cluster's
+# node, pod, service, and database ranges before applying.
 #
-# IMPORTANT: the existing managed policy talos-cross-namespace-ingress
-# selects every pod whose app label is NOT nyxid-backend and allows
-# ingress from ALL pods in the namespace (podSelector: {}). NetworkPolicy allows
-# are unioned, so as long as that policy also selects the Talos pods, every pod
-# in talos can reach Talos and the tighter rules below cannot
-# override that. To truly enforce "only NyxID calls Talos", add
-# talos-control-plane (and talos-platform-worker if used) to that policy's
-# NotIn list:
+# IMPORTANT: NetworkPolicy allows are unioned. If your namespace already has a
+# blanket policy that allows ingress from all pods in the namespace
+# (podSelector: {}), the tighter rules below cannot override it -- exclude the
+# Talos pods from that blanket policy's selector to truly enforce
+# "only NyxID calls Talos", e.g.:
 #   matchExpressions:
 #     - {key: app, operator: NotIn, values: [nyxid-backend, talos-control-plane]}
-# The same applies to talos-standard-egress if Talos egress should
-# be limited to the rules below instead of the namespace-wide standard.
-# Until those exclusions are made, Talos still enforces auth at the application
+# Even without that exclusion, Talos still enforces auth at the application
 # layer: user routes need a verified NyxID JWT, worker routes a machine-bound
 # worker token, admin routes the admin token.
 apiVersion: networking.k8s.io/v1
@@ -45,8 +41,8 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
-    # Node CIDR, for kubelet liveness/readiness probes — mirrors the existing
-    # 192.0.2.0/24 allowance used by the NyxID backend policy.
+    # Node CIDR (REPLACE 192.0.2.0/24 with your cluster's node range), needed
+    # for kubelet liveness/readiness probes with some CNIs.
     - from:
         - ipBlock:
             cidr: 192.0.2.0/24
@@ -69,8 +65,8 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # MongoDB — same range the NyxID backend uses. Adjust if Talos gets its
-    # own database elsewhere.
+    # MongoDB (REPLACE 198.51.100.0/24 with your database network range, or
+    # remove if you use a public endpoint like Atlas).
     - to:
         - ipBlock:
             cidr: 198.51.100.0/24
@@ -88,11 +84,9 @@ spec:
               - 10.96.0.0/12
               - 169.254.0.0/16
 ---
-# Additive egress for the NyxID backend: its managed egress policy only lists
-# specific same-namespace pods, so Talos must be granted explicitly. This
-# stands alone next to the managed nyxid-backend-egress policy
-# (allows are unioned) — nothing existing is modified. Mirrors the existing
-# internal-service:8080 rule pattern.
+# Additive egress for the NyxID backend. If your NyxID backend runs under a
+# default-deny egress policy, this standalone policy grants it egress to the
+# Talos control plane (allows are unioned; nothing existing is modified).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -112,7 +106,6 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
-    # House pattern also lists Service ClusterIPs as /32 ipBlocks (service CIDR
-    # 10.96.0.0/12). Calico matches post-DNAT pod IPs, so the selector rule
-    # should suffice; if proxy calls time out after apply, add the Talos
-    # Service ClusterIP here on port 80.
+    # Some setups also list the Service ClusterIP as a /32 ipBlock. Calico
+    # matches post-DNAT pod IPs, so the selector rule should suffice; if proxy
+    # calls time out after apply, add the Talos Service ClusterIP on port 80.
