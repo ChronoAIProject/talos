@@ -15,7 +15,11 @@ interface BrowserContext { close(): Promise<void>; newPage(): Promise<BrowserPag
 interface CdpBrowser { close(): Promise<void>; contexts(): BrowserContext[]; }
 interface BrowserProvider { launchPersistentContext(path: string, options: Record<string, unknown>): Promise<BrowserContext>; connectOverCDP?(endpoint: string): Promise<CdpBrowser>; }
 
-export interface BrowserExecutorOptions { profilePath: string; cdpEndpoint?: string; provider?: BrowserProvider; }
+export interface BrowserExecutorOptions {
+  profilePath: string;
+  cdpEndpoint?: string;
+  provider?: BrowserProvider;
+}
 
 export class BrowserExecutor implements Executor {
   private context?: BrowserContext;

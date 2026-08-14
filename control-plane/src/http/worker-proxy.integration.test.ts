@@ -211,7 +211,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
     const runtime = new workerModule.WorkerRuntime({
       client,
       planner: { plan: async () => { throw new Error('interactive sessions must bypass the planner'); } },
-      executor: {
+      createExecutor: async () => ({
         execute: async (action: { type: string }) => {
           calls.push(action.type);
           if (action.type === 'screenshot') {
@@ -228,7 +228,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
           return {};
         },
         close: async () => { calls.push('close'); }
-      },
+      }),
       heartbeatMs: 5,
       actionPollMs: 1,
       sessionIdleMs: 10_000

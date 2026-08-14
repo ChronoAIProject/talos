@@ -1,4 +1,7 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
+import type { Executor } from '../executor/executor.js';
 import type { Action } from '../protocol/actions.js';
 import { createHandoffPolicy, type HandoffPolicy } from './policy.js';
 import { WorkerClientError } from './errors.js';
@@ -34,7 +37,7 @@ export const workerConfigSchema = z.object({
   workerId: z.string().min(1),
   machineId: z.string().min(1),
   workerToken: z.string().min(16),
-  profilePath: z.string().min(1).default('./talos-profile'),
+  profilePath: z.string().min(1).default(join(homedir(), '.talos-worker', 'profile')),
   cdpEndpoint: z.string().url().optional(),
   heartbeatMs: z.coerce.number().int().positive().default(20000),
   pollMs: z.coerce.number().int().positive().default(1000),
@@ -61,7 +64,7 @@ export interface RuntimeLogger {
 
 export interface RuntimeOptions {
   client: WorkerClient;
-  executor: { execute(action: Action, context: { taskId: string; masking: boolean }): Promise<unknown>; close(): Promise<void> };
+  createExecutor(task: TaskEnvelope): Executor | Promise<Executor>;
   planner: ActionPlanner;
   policy?: HandoffPolicy;
   heartbeatMs?: number;
@@ -86,6 +89,7 @@ export class WorkerRuntime {
     let cancellationError: unknown;
     let taskStatus = 'claimed';
     let heartbeatInFlight: Promise<void> | undefined;
+    let executor: Executor | undefined;
     const heartbeat = (): void => {
       if (heartbeatInFlight !== undefined) return;
       heartbeatInFlight = this.options.client.heartbeat(lease.task.id, lease.leaseToken)
@@ -104,8 +108,15 @@ export class WorkerRuntime {
     };
     const interval = setInterval(heartbeat, this.options.heartbeatMs ?? 20000);
     try {
+      executor = await this.options.createExecutor(lease.task);
       if (lease.task.interaction === 'interactive') {
-        await this.runInteractive(lease.task, lease.leaseToken, () => taskStatus, () => cancellationError);
+        await this.runInteractive(
+          lease.task,
+          lease.leaseToken,
+          executor,
+          () => taskStatus,
+          () => cancellationError
+        );
         return;
       }
       while (true) {
@@ -134,7 +145,10 @@ export class WorkerRuntime {
           await new Promise((resolve) => setTimeout(resolve, this.options.inputPollMs ?? 1000));
           continue;
         }
-        lastResult = await this.options.executor.execute(decision.action, { taskId: lease.task.id, masking: this.policy.isMasked });
+        lastResult = await executor.execute(decision.action, {
+          taskId: lease.task.id,
+          masking: this.policy.isMasked
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'executor failed';
@@ -146,13 +160,14 @@ export class WorkerRuntime {
     } finally {
       clearInterval(interval);
       await heartbeatInFlight;
-      await this.options.executor.close();
+      await executor?.close();
     }
   }
 
   private async runInteractive(
     task: TaskEnvelope,
     leaseToken: string,
+    executor: Executor,
     status: () => string,
     heartbeatError: () => unknown
   ): Promise<void> {
@@ -225,7 +240,7 @@ export class WorkerRuntime {
       const pendingAction = polled.action;
       let result: unknown;
       try {
-        result = await this.options.executor.execute(pendingAction.action, {
+        result = await executor.execute(pendingAction.action, {
           taskId: task.id,
           masking: this.policy.isMasked
         });

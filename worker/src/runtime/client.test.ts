@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { Executor } from '../executor/executor.js';
 import { WorkerRuntime } from './client.js';
 import { WorkerClientError } from './errors.js';
+
+const executorFactory = (executor: Executor) => async () => executor;
 
 describe('WorkerRuntime', () => {
   it('relays actions and reports completion', async () => {
@@ -17,7 +20,7 @@ describe('WorkerRuntime', () => {
         actionResult: async () => undefined
       },
       planner: { plan: async (_task, last) => last === undefined ? { type: 'action', action: { type: 'screenshot' } } : { type: 'done', findings: [] } },
-      executor: { execute: async (action) => { calls.push(action.type); return {}; }, close: async () => { calls.push('close'); } }
+      createExecutor: executorFactory({ execute: async (action) => { calls.push(action.type); return {}; }, close: async () => { calls.push('close'); } })
     });
     await runtime.runOnce();
     expect(calls).toEqual(['screenshot', 'completed', 'close']);
@@ -37,7 +40,7 @@ describe('WorkerRuntime', () => {
         actionResult: async () => undefined
       },
       planner: { plan: async () => ({ type: 'action', action: { type: 'wait', milliseconds: 0 } }) },
-      executor: { execute: async (_action, context) => { calls.push(context.masking); if (!context.masking) throw new Error('boom'); return {}; }, close: async () => undefined }
+      createExecutor: executorFactory({ execute: async (_action, context) => { calls.push(context.masking); if (!context.masking) throw new Error('boom'); return {}; }, close: async () => undefined })
     });
     await runtime.runOnce();
     expect(calls).toEqual([false]);
@@ -61,7 +64,7 @@ describe('WorkerRuntime', () => {
         plan: async (_task, last) => last === undefined ? { type: 'needs_input', kind: 'text' } : { type: 'done', findings: [last] }
       },
       inputPollMs: 1,
-      executor: { execute: async () => { calls.push('execute'); return {}; }, close: async () => undefined }
+      createExecutor: executorFactory({ execute: async () => { calls.push('execute'); return {}; }, close: async () => undefined })
     });
     setTimeout(() => { input = { kind: 'text', value: 'later' }; }, 30);
     await runtime.runOnce();
@@ -88,7 +91,7 @@ describe('WorkerRuntime', () => {
       heartbeatMs: 1,
       inputPollMs: 1,
       logger: { warn: (message) => warnings.push(message), error: () => undefined },
-      executor: { execute: async () => ({}), close: async () => undefined }
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => undefined })
     });
     await runtime.runOnce();
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -119,7 +122,7 @@ describe('WorkerRuntime', () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         return { type: 'done', findings: [] };
       } },
-      executor: { execute: async () => ({}), close: async () => { calls.push('close'); } }
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => { calls.push('close'); } })
     });
 
     const running = runtime.runOnce();
@@ -150,7 +153,7 @@ describe('WorkerRuntime', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
         return { type: 'action', action: { type: 'wait', milliseconds: 0 } };
       } },
-      executor: { execute: async () => ({}), close: async () => { closed = true; } }
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => { closed = true; } })
     });
     await runtime.runOnce();
     expect(closed).toBe(true);
@@ -178,13 +181,13 @@ describe('WorkerRuntime', () => {
           ? { type: 'action', action: { type: 'wait', milliseconds: 0 } }
           : { type: 'done', findings: [] };
       } },
-      executor: {
+      createExecutor: executorFactory({
         execute: async (action) => {
           actions.push(action.type);
           return {};
         },
         close: async () => undefined
-      }
+      })
     });
     await runtime.runOnce();
     expect(heartbeats).toBeGreaterThanOrEqual(3);
@@ -211,10 +214,10 @@ describe('WorkerRuntime', () => {
         actionResult: async (_taskId, actionId) => { calls.push(actionId); }
       },
       planner: { plan: async () => { throw new Error('planner must not run'); } },
-      executor: {
+      createExecutor: executorFactory({
         execute: async (action) => { calls.push(action.type); return { value: 'ok' }; },
         close: async () => { calls.push('close'); }
-      },
+      }),
       actionPollMs: 1
     });
 
@@ -240,7 +243,7 @@ describe('WorkerRuntime', () => {
         actionResult: async () => undefined
       },
       planner: { plan: async () => { throw new Error('planner must not run'); } },
-      executor: { execute: async () => ({}), close: async () => undefined },
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => undefined }),
       clock: () => now,
       sleep: async (milliseconds) => { now += milliseconds; },
       actionPollMs: 250,
@@ -273,7 +276,7 @@ describe('WorkerRuntime', () => {
         }
       },
       planner: { plan: async () => { throw new Error('planner must not run'); } },
-      executor: { execute: async () => { throw new Error('click failed'); }, close: async () => undefined }
+      createExecutor: executorFactory({ execute: async () => { throw new Error('click failed'); }, close: async () => undefined })
     });
 
     await runtime.runOnce();

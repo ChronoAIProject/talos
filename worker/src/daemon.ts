@@ -1,6 +1,7 @@
-import { BrowserExecutor } from './executor/browser-executor.js';
+import { BrowserExecutorFactory } from './executor/browser-executor-factory.js';
+import type { Executor } from './executor/executor.js';
 import { HttpWorkerClient } from './runtime/http-client.js';
-import { WorkerRuntime } from './runtime/client.js';
+import { WorkerRuntime, type TaskEnvelope } from './runtime/client.js';
 import { ScriptedPlanner } from './runtime/planner.js';
 import { createWorkerLogger } from './runtime/logger.js';
 import { loadWorkerConfig } from './config.js';
@@ -9,8 +10,15 @@ export { loadWorkerConfig } from './config.js';
 
 export interface DaemonDependencies {
   createClient?: (config: ReturnType<typeof loadWorkerConfig>) => HttpWorkerClient;
-  createExecutor?: (config: ReturnType<typeof loadWorkerConfig>) => BrowserExecutor;
-  createRuntime?: (client: HttpWorkerClient, executor: BrowserExecutor, config: ReturnType<typeof loadWorkerConfig>) => WorkerRuntime;
+  createExecutor?: (
+    task: TaskEnvelope,
+    config: ReturnType<typeof loadWorkerConfig>
+  ) => Executor | Promise<Executor>;
+  createRuntime?: (
+    client: HttpWorkerClient,
+    createExecutor: (task: TaskEnvelope) => Executor | Promise<Executor>,
+    config: ReturnType<typeof loadWorkerConfig>
+  ) => WorkerRuntime;
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -22,13 +30,15 @@ export const runWorkerDaemon = async (
   const sleep = dependencies.sleep ?? ((milliseconds: number) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const client = dependencies.createClient?.(config) ?? new HttpWorkerClient(config);
-  const executor = dependencies.createExecutor?.(config) ?? new BrowserExecutor({
-    profilePath: config.profilePath,
+  const browserExecutors = new BrowserExecutorFactory({
+    profileRoot: config.profilePath,
     ...(config.cdpEndpoint === undefined ? {} : { cdpEndpoint: config.cdpEndpoint })
   });
-  const runtime = dependencies.createRuntime?.(client, executor, config) ?? new WorkerRuntime({
+  const createExecutor = (task: TaskEnvelope): Executor | Promise<Executor> =>
+    dependencies.createExecutor?.(task, config) ?? browserExecutors.create(task);
+  const runtime = dependencies.createRuntime?.(client, createExecutor, config) ?? new WorkerRuntime({
     client,
-    executor,
+    createExecutor,
     planner: new ScriptedPlanner([
       { type: 'action', action: { type: 'screenshot' } },
       { type: 'done', findings: [] }
@@ -55,7 +65,6 @@ export const runWorkerDaemon = async (
         backoff = Math.min(backoff * 2, 30000);
       }
     }
-    await executor.close();
   };
   process.once('SIGINT', signalStop);
   process.once('SIGTERM', signalStop);

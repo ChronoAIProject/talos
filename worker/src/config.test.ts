@@ -2,7 +2,12 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkerConfig, readWorkerConfigFile, writeWorkerConfigFile } from './config.js';
+import {
+  defaultProfilePath,
+  loadWorkerConfig,
+  readWorkerConfigFile,
+  writeWorkerConfigFile
+} from './config.js';
 
 const stored = {
   controlPlaneUrl: 'http://stored.example',
@@ -55,5 +60,10 @@ describe('worker file configuration', () => {
 
   it('defaults interactive action polling to two seconds', () => {
     expect(loadWorkerConfig({}, stored).actionPollMs).toBe(2000);
+  });
+
+  it('defaults the profile root beneath the worker home directory', () => {
+    const withoutProfile = { ...stored, profilePath: undefined };
+    expect(loadWorkerConfig({}, withoutProfile).profilePath).toBe(defaultProfilePath());
   });
 });

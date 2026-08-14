@@ -15,7 +15,19 @@ describe('worker daemon config', () => {
     const stop = await runWorkerDaemon(config, {
       createClient: () => ({}) as never,
       createExecutor: () => ({ close: async () => { closed = true; } }) as never,
-      createRuntime: () => ({ runOnce: async () => { runs += 1; if (runs === 1) throw Object.assign(new Error('no task'), { code: 'not_found' }); } }) as never
+      createRuntime: (_client, createExecutor) => ({
+        runOnce: async () => {
+          const executor = await createExecutor({
+            id: 'task',
+            kind: 'browse',
+            goal: 'test',
+            interaction: 'autonomous'
+          });
+          runs += 1;
+          await executor.close();
+          if (runs === 1) throw Object.assign(new Error('no task'), { code: 'not_found' });
+        }
+      }) as never
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
     await stop();
