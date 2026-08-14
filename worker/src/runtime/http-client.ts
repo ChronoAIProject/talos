@@ -8,7 +8,8 @@ const taskSchema = z.object({
   id: z.string(),
   kind: z.enum(['browse', 'computer_use']),
   goal: z.string(),
-  interaction: z.enum(['autonomous', 'interactive']).default('autonomous')
+  interaction: z.enum(['autonomous', 'interactive']).default('autonomous'),
+  profileId: z.string().min(1).optional()
 });
 const claimSchema = z.object({
   task: taskSchema,

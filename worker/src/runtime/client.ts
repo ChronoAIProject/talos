@@ -8,6 +8,7 @@ export interface TaskEnvelope {
   kind: 'browse' | 'computer_use';
   goal: string;
   interaction: 'autonomous' | 'interactive';
+  profileId?: string;
 }
 
 export interface InteractiveActionPoll {
