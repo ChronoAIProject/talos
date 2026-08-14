@@ -38,7 +38,7 @@ export const workerConfigSchema = z.object({
   heartbeatMs: z.coerce.number().int().positive().default(20000),
   pollMs: z.coerce.number().int().positive().default(1000),
   inputPollMs: z.coerce.number().int().positive().default(1000),
-  actionPollMs: z.coerce.number().int().positive().default(1000),
+  actionPollMs: z.coerce.number().int().positive().default(2000),
   sessionIdleMs: z.coerce.number().int().positive().default(600000)
 });
 
@@ -157,9 +157,39 @@ export class WorkerRuntime {
   ): Promise<void> {
     const clock = this.options.clock ?? Date.now;
     const sleep = this.options.sleep ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-    const pollMs = this.options.actionPollMs ?? 1000;
+    const basePollMs = this.options.actionPollMs ?? 2000;
     const idleMs = this.options.sessionIdleMs ?? 600000;
+    let pollIntervalMs = basePollMs;
     let lastActivityAt = clock();
+    const requestWithRetry = async <T>(
+      operation: 'poll_action' | 'submit_action_result',
+      request: () => Promise<T>
+    ): Promise<T | undefined> => {
+      let retryInMs = basePollMs;
+      while (true) {
+        try {
+          return await request();
+        } catch (error) {
+          if (isCompletedActionConflict(error, operation)) return undefined;
+          if (!isTransientWorkerRequestError(error)) throw error;
+          if (error instanceof WorkerClientError && error.status === 429) {
+            pollIntervalMs = Math.min(Math.ceil(pollIntervalMs * 1.5), 10000);
+          }
+          this.options.logger?.warn('interactive control plane request failed; retrying', {
+            taskId: task.id,
+            operation,
+            error: error instanceof Error ? error.message : 'unknown',
+            ...(error instanceof WorkerClientError
+              ? { code: error.code, status: error.status }
+              : {}),
+            retryInMs,
+            pollIntervalMs
+          });
+          await sleep(retryInMs);
+          retryInMs = Math.min(retryInMs * 2, 30000);
+        }
+      }
+    };
     while (true) {
       const error = heartbeatError();
       if (error !== undefined) throw error;
@@ -168,10 +198,14 @@ export class WorkerRuntime {
         return;
       }
       if (this.policy.isMasked) {
-        await sleep(pollMs);
+        await sleep(pollIntervalMs);
         continue;
       }
-      const polled = await this.options.client.pollAction(task.id, leaseToken);
+      const polled = await requestWithRetry(
+        'poll_action',
+        () => this.options.client.pollAction(task.id, leaseToken)
+      );
+      if (polled === undefined) continue;
       if (polled.closing) {
         await this.options.client.result(task.id, leaseToken, 'completed', []);
         return;
@@ -184,28 +218,51 @@ export class WorkerRuntime {
           });
           return;
         }
-        await sleep(pollMs);
+        await sleep(pollIntervalMs);
         continue;
       }
+      const pendingAction = polled.action;
+      let result: unknown;
       try {
-        const result = await this.options.executor.execute(polled.action.action, {
+        result = await this.options.executor.execute(pendingAction.action, {
           taskId: task.id,
           masking: this.policy.isMasked
         });
-        await this.options.client.actionResult(task.id, polled.action.id, leaseToken, result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'executor failed';
-        await this.options.client.actionResult(task.id, polled.action.id, leaseToken, {
-          error: { code: 'executor_failed', message }
-        });
+        await requestWithRetry(
+          'submit_action_result',
+          () => this.options.client.actionResult(task.id, pendingAction.id, leaseToken, {
+            error: { code: 'executor_failed', message }
+          })
+        );
         await this.options.client.result(task.id, leaseToken, 'failed', [], {
           code: 'executor_failed',
           message
         });
         return;
       }
+      await requestWithRetry(
+        'submit_action_result',
+        () => this.options.client.actionResult(task.id, pendingAction.id, leaseToken, result)
+      );
       lastActivityAt = clock();
     }
   }
 
 }
+
+const isTransientWorkerRequestError = (error: unknown): boolean => {
+  if (error instanceof WorkerClientError) {
+    return error.status === 429 || error.status >= 500;
+  }
+  return error instanceof TypeError;
+};
+
+const isCompletedActionConflict = (
+  error: unknown,
+  operation: 'poll_action' | 'submit_action_result'
+): boolean => operation === 'submit_action_result'
+  && error instanceof WorkerClientError
+  && error.status === 409
+  && error.code === 'action_already_completed';

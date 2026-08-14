@@ -1,4 +1,4 @@
-import { conflict, forbidden, modeForbidden, notFound } from '../domain/errors.js';
+import { actionAlreadyCompleted, conflict, forbidden, modeForbidden, notFound } from '../domain/errors.js';
 import type {
   PendingSessionAction,
   SessionAction,
@@ -170,6 +170,8 @@ export class SessionService {
   ): Promise<void> {
     const task = await this.tasks.getWorkerTask(taskId, workerId, leaseToken);
     if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
+    const existing = await this.repository.getSessionActionResult(actionId);
+    if (existing?.taskId === taskId) throw actionAlreadyCompleted();
     const pending = await this.repository.getPendingSessionAction(taskId);
     if (pending?.id !== actionId || pending.state !== 'dispatched') throw conflict('session action is not in flight');
     const completedAt = new Date(this.clock()).toISOString();
