@@ -16,6 +16,8 @@ export const unauthorized = (message: string): TalosError =>
 export const forbidden = (message: string): TalosError => new TalosError('forbidden', message, 403);
 export const modeForbidden = (message: string): TalosError => new TalosError('mode_forbidden', message, 403);
 export const conflict = (message: string): TalosError => new TalosError('conflict', message, 409);
+export const actionAlreadyCompleted = (): TalosError =>
+  new TalosError('action_already_completed', 'session action result was already stored', 409);
 export const taskCancelled = (message = 'task was cancelled'): TalosError => new TalosError('task_cancelled', message, 409);
 export const payloadTooLarge = (message = 'request body is too large'): TalosError => new TalosError('payload_too_large', message, 413);
 export const deadlineExceeded = (message = 'task deadline has passed'): TalosError => new TalosError('deadline_exceeded', message, 409);

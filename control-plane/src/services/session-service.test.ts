@@ -112,6 +112,29 @@ describe('session service', () => {
       .rejects.toMatchObject({ code: 'not_found' });
   });
 
+  it('reports a stable conflict when an action result is posted again', async () => {
+    const { sessions, tasks } = await setup();
+    const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
+    const claim = await tasks.claim('worker', 'machine');
+    const pending = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
+    await sessions.saveWorkerResult(
+      created.id,
+      pending.action_id,
+      'worker',
+      claim.leaseToken,
+      { value: 'done' }
+    );
+
+    await expect(sessions.saveWorkerResult(
+      created.id,
+      pending.action_id,
+      'worker',
+      claim.leaseToken,
+      { value: 'done' }
+    )).rejects.toMatchObject({ code: 'action_already_completed', status: 409 });
+  });
+
   it('rejects task-only operations and completes a closing session when its lease expires', async () => {
     const { clock, repository, sessions, tasks } = await setup();
     const created = await sessions.create('user-a', { mode: 'act', constraints: {} });

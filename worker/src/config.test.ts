@@ -52,4 +52,8 @@ describe('worker file configuration', () => {
     }, stored);
     expect(config).toMatchObject({ actionPollMs: 250, sessionIdleMs: 5000 });
   });
+
+  it('defaults interactive action polling to two seconds', () => {
+    expect(loadWorkerConfig({}, stored).actionPollMs).toBe(2000);
+  });
 });
