@@ -4,9 +4,9 @@ import { resolveControlPlaneUrl } from './url.js';
 
 describe('HttpWorkerClient', () => {
   it('validates claim responses and reports structured server errors', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ task: { id: 't', kind: 'browse', goal: 'x' }, lease: { taskId: 't', workerId: 'w', machineId: 'm', expiresAt: new Date().toISOString() }, leaseToken: 'lease_1' }), { status: 200 }));
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ task: { id: 't', kind: 'browse', goal: 'x', profileId: 'profile_a' }, lease: { taskId: 't', workerId: 'w', machineId: 'm', expiresAt: new Date().toISOString() }, leaseToken: 'lease_1' }), { status: 200 }));
     const client = new HttpWorkerClient({ controlPlaneUrl: 'http://localhost:8080', workerId: 'w', machineId: 'm', workerToken: 'worker-token-123456' });
-    expect((await client.claim()).task.id).toBe('t');
+    expect((await client.claim()).task).toMatchObject({ id: 't', profileId: 'profile_a' });
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get('authorization')).toBe('Bearer worker-token-123456');

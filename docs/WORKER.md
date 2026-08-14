@@ -37,6 +37,21 @@ The worker preserves that path prefix when calling `/healthz` and `/v1/worker/**
 
 Interactive sessions keep one browser context open while the external NyxID caller plans and submits one action at a time. The daemon skips its autonomous planner for these claims, polls with `TALOS_ACTION_POLL_MS` (default 2000), and fails idle sessions after `TALOS_SESSION_IDLE_MS` (default 600000). Closing the session causes the worker to close the browser and complete the underlying task.
 
+## Browser profile isolation
+
+`TALOS_PROFILE_PATH` and the `--profile-path` setup flag name a profile root, defaulting to `~/.talos-worker/profile`. They do not identify one shared Chromium profile. A task or interactive session without `profile_id` gets a unique directory beneath `<root>/ephemeral/`; the daemon deletes it after the task closes, including failure paths. Anonymous tasks therefore share no cookies or browser state.
+
+A task with `profile_id` uses `<root>/profiles/<profile_id>`. That directory persists across future tasks for the same profile so logins and cookies can be reused. Create a profile through the identity-authenticated API, optionally pinning it to the enrolled machine:
+
+```sh
+nyxid proxy request talos /v1/profiles -m POST \
+  -d '{"id":"personal-travel","machine_id":"my-mac"}'
+```
+
+Then include `"profile_id":"personal-travel"` when creating a task or session. Profile ids used by workers must contain only letters, digits, `.`, `_`, or `-`, and cannot contain `..`. The control plane permits only one active session per profile and renews that lock with the worker lease.
+
+Named profile directories contain real browser cookies and login state on disk as managed by Chromium; Talos does not add storage encryption. Use persistent profiles only on machines you trust: your own private-pool device or an organization-managed machine governed by its security policy. Encrypted profile backup and transfer are Phase 2 work. The daemon rejects `TALOS_CDP_ENDPOINT` because a fixed externally managed CDP browser cannot honor these per-task profile directories; worker-managed Chromium is required for isolated execution.
+
 ## 1. Create a Pool and Enroll the Machine
 
 Use your personal NyxID key. These requests are proxied with your verified identity, so the pool is owned by your NyxID `sub`.
@@ -85,7 +100,7 @@ Using either the NyxID public worker URL or a reachable private control-plane UR
 talos-worker init
 ```
 
-The setup prompts for the control-plane URL, machine and worker ids, token, and browser profile path. The token prompt is hidden. Configuration is stored at `~/.talos-worker/config.json` with mode `0600`, then setup verifies `/healthz` and installs Chromium.
+The setup prompts for the control-plane URL, machine and worker ids, token, and browser profile root. The token prompt is hidden. Configuration is stored at `~/.talos-worker/config.json` with mode `0600`, then setup verifies `/healthz` and installs Chromium.
 
 For non-interactive setup, keep the token in an environment variable rather than a command-line argument:
 

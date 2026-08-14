@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Executor } from '../executor/executor.js';
 import type { WorkerClient } from './client.js';
 import { WorkerRuntime } from './client.js';
 import { WorkerClientError } from './errors.js';
@@ -31,6 +32,8 @@ const planner = {
   }
 };
 
+const executorFactory = (executor: Executor) => async () => executor;
+
 describe('interactive worker resilience', () => {
   it('backs off after rate-limited polls and then executes the action', async () => {
     const sleeps: number[] = [];
@@ -57,13 +60,13 @@ describe('interactive worker resilience', () => {
         }
       }),
       planner,
-      executor: {
+      createExecutor: executorFactory({
         execute: async (action) => {
           actions.push(action.type);
           return { value: 'ok' };
         },
         close: async () => undefined
-      },
+      }),
       logger: {
         warn: (_message, fields) => warnings.push(fields),
         error: () => undefined
@@ -94,7 +97,7 @@ describe('interactive worker resilience', () => {
         }
       }),
       planner,
-      executor: { execute: async () => ({}), close: async () => undefined },
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => undefined }),
       actionPollMs: 50,
       sleep: async (milliseconds) => {
         sleeps.push(milliseconds);
@@ -121,7 +124,7 @@ describe('interactive worker resilience', () => {
         }
       }),
       planner,
-      executor: { execute: async () => ({}), close: async () => undefined },
+      createExecutor: executorFactory({ execute: async () => ({}), close: async () => undefined }),
       actionPollMs: 50,
       sleep: async () => {
         throw new Error('authentication failures must not sleep');
@@ -158,13 +161,13 @@ describe('interactive worker resilience', () => {
         }
       }),
       planner,
-      executor: {
+      createExecutor: executorFactory({
         execute: async () => {
           executions += 1;
           return { value: 'image' };
         },
         close: async () => undefined
-      },
+      }),
       actionPollMs: 75,
       sleep: async (milliseconds) => {
         sleeps.push(milliseconds);
@@ -206,7 +209,7 @@ describe('interactive worker resilience', () => {
         }
       }),
       planner,
-      executor: { execute: async () => ({ value: 'ok' }), close: async () => undefined },
+      createExecutor: executorFactory({ execute: async () => ({ value: 'ok' }), close: async () => undefined }),
       actionPollMs: 50
     });
 

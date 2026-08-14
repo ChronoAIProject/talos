@@ -63,4 +63,6 @@ End users install the release artifact and configure their enrolled machine with
 
 Playwright remains an optional workspace dependency so a control-plane-only deployment can skip its browser binaries. The release installer installs Playwright and `talos-worker init` installs Chromium before the first claim.
 
+Workers use isolated ephemeral browser storage by default. Supplying a control-plane-owned `profile_id` opts a task into a persistent, locked cookie directory on that trusted worker machine; see [docs/WORKER.md](docs/WORKER.md#browser-profile-isolation) for the storage and trust model.
+
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Docker builds, Kubernetes manifests, MongoDB configuration, fleet registration, and the platform-worker versus real-machine deployment matrix.
