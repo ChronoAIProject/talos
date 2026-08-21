@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@talos/testing-protocol": "0.1.0",
     "jose": "^6.2.8",
     "mongodb": "^7.5.0",
     "yaml": "^2.9.0",

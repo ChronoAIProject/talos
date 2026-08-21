@@ -1,4 +1,4 @@
-import type { Action, ActionResult } from '../protocol/actions.js';
+import { actionSchema, type Action, type ActionResult } from '../protocol/actions.js';
 import type { Executor, ExecutorContext } from './executor.js';
 
 interface BrowserPage {
@@ -30,12 +30,13 @@ export class BrowserExecutor implements Executor {
   public async execute(action: Action, context: ExecutorContext): Promise<ActionResult> {
     if (context.masking) return {};
     const page = await this.getPage();
-    switch (action.type) {
+    const normalized = actionSchema.parse(action);
+    switch (normalized.type) {
       case 'screenshot': {
         const viewport = page.viewportSize() ?? { width: 0, height: 0 };
-        const format = action.format ?? 'png';
+        const format = action.type === 'screenshot' && action.format === undefined ? 'png' : normalized.format;
         const options = format === 'jpeg'
-          ? { type: 'jpeg' as const, quality: action.quality ?? 70 }
+          ? { type: 'jpeg' as const, quality: normalized.quality }
           : { type: 'png' as const };
         return {
           screenshot: {
@@ -45,16 +46,16 @@ export class BrowserExecutor implements Executor {
           }
         };
       }
-      case 'click': await page.mouse.click(action.x, action.y, { button: action.button }); return {};
-      case 'type': await page.keyboard.type(action.text); return {};
-      case 'key': await page.keyboard.press(action.key); return {};
-      case 'scroll': await page.mouse.wheel(action.deltaX, action.deltaY); return {};
-      case 'wait': await page.waitForTimeout(action.milliseconds); return {};
-      case 'navigate': await page.goto(action.url); return {};
-      case 'extract-structured-dom': return { value: await page.locator(action.selector).allTextContents() };
+      case 'click': await page.mouse.click(normalized.x, normalized.y, { button: normalized.button }); return {};
+      case 'type': await page.keyboard.type(normalized.text); return {};
+      case 'key': await page.keyboard.press(normalized.key); return {};
+      case 'scroll': await page.mouse.wheel(normalized.deltaX, normalized.deltaY); return {};
+      case 'wait': await page.waitForTimeout(normalized.milliseconds); return {};
+      case 'navigate': await page.goto(normalized.url); return {};
+      case 'extract-structured-dom': return { value: await page.locator(normalized.selector).allTextContents() };
       case 'act-on-a11y-node': {
-        const locator = page.locator(`[data-talos-a11y-id="${action.nodeId.replaceAll('"', '')}"]`);
-        if (action.action === 'click') await locator.click(); else await locator.fill(action.text ?? '');
+        const locator = page.locator(`[data-talos-a11y-id="${normalized.nodeId.replaceAll('"', '')}"]`);
+        if (normalized.action === 'click') await locator.click(); else await locator.fill(normalized.text ?? '');
         return {};
       }
     }

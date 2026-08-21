@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "testing-protocol" },
     { "path": "control-plane" },
     { "path": "worker" }
   ]

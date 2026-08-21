@@ -1,3 +1,5 @@
+import type { BrowserAction } from '@talos/testing-protocol';
+
 export type TaskKind = 'browse' | 'computer_use';
 export type TaskMode = 'read_only' | 'act';
 export type TaskInteraction = 'autonomous' | 'interactive';
@@ -98,16 +100,7 @@ export interface PublicTask {
   handoff?: { url: string; expiresAt: string };
 }
 
-export type SessionAction =
-  | { type: 'screenshot'; format: 'jpeg' | 'png'; quality?: number }
-  | { type: 'click'; x: number; y: number; button: 'left' | 'middle' | 'right' }
-  | { type: 'type'; text: string }
-  | { type: 'key'; key: string }
-  | { type: 'scroll'; deltaX: number; deltaY: number }
-  | { type: 'wait'; milliseconds: number }
-  | { type: 'act-on-a11y-node'; nodeId: string; action: 'click' | 'type'; text?: string }
-  | { type: 'extract-structured-dom'; selector: string }
-  | { type: 'navigate'; url: string };
+export type SessionAction = BrowserAction;
 
 export interface PendingSessionAction {
   id: string;
