@@ -15,6 +15,9 @@ const talosReferenceSchema = z.string().min(1).max(2048)
   .regex(/^talos:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
 const authorizationReferenceSchema = z.string().min(1).max(2048)
   .regex(/^authorization:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
+const localQaReferenceSchema = z.string().min(1).max(2048)
+  .regex(/^local-qa:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
+const requestNonceSchema = z.string().min(16).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export const testingControlStatusSchema = z.enum([
   'submitted',
@@ -280,6 +283,7 @@ export const testingRunEventTypeSchema = z.enum([
   'run.submitted',
   'run.reserved',
   'attempt.claimed',
+  'attempt.released',
   'attempt.local_accepted',
   'run.started',
   'run.cancel_requested',
@@ -311,6 +315,20 @@ const attemptClaimedEventCoreSchema = testingRunEventBaseSchema.extend({
     attempt_id: identifierSchema,
     generation: z.number().int().positive(),
     machine_id: identifierSchema
+  }).strict()
+}).strict();
+const attemptReleasedEventCoreSchema = testingRunEventBaseSchema.extend({
+  type: z.literal('attempt.released'),
+  data: z.object({
+    attempt_id: identifierSchema,
+    generation: z.number().int().positive(),
+    reason_code: z.enum([
+      'lease_expired',
+      'authorization_unavailable',
+      'claim_conflict',
+      'cancelled_before_acceptance',
+      'deadline_exceeded'
+    ])
   }).strict()
 }).strict();
 const attemptLocalAcceptedEventCoreSchema = testingRunEventBaseSchema.extend({
@@ -354,6 +372,7 @@ export const testingRunEventCoreSchema = z.discriminatedUnion('type', [
   runSubmittedEventCoreSchema,
   runReservedEventCoreSchema,
   attemptClaimedEventCoreSchema,
+  attemptReleasedEventCoreSchema,
   attemptLocalAcceptedEventCoreSchema,
   runStartedEventCoreSchema,
   runCancelRequestedEventCoreSchema,
@@ -373,6 +392,7 @@ export const testingRunEventSchema = z.discriminatedUnion('type', [
   runSubmittedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   runReservedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   attemptClaimedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
+  attemptReleasedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   attemptLocalAcceptedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   runStartedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   runCancelRequestedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
@@ -431,6 +451,187 @@ export const testingCancelAckSchema = z.object({
   canonical_request_digest: sha256DigestSchema
 }).strict();
 
+export const testingLeaseClaimReferenceSchema = z.object({
+  schema: z.literal('talos.testing-lease-claim/v1'),
+  ref: talosReferenceSchema,
+  digest: sha256DigestSchema,
+  expires_at: timestampSchema
+}).strict();
+
+export const testingCurrentClaimIdentitySchema = z.object({
+  schema_version: z.literal('talos.testing-claim-identity/v1'),
+  operation: z.enum(['start', 'reconcile']),
+  claim_id: identifierSchema,
+  run_id: testingRunIdSchema,
+  task_id: identifierSchema,
+  attempt_id: identifierSchema,
+  machine_id: identifierSchema,
+  worker_id: identifierSchema,
+  generation: z.number().int().positive(),
+  lease_id: identifierSchema,
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  admission_nonce: requestNonceSchema,
+  issued_at: timestampSchema,
+  expires_at: timestampSchema
+}).strict();
+
+export const computeTestingCurrentClaimDigest = (
+  input: z.input<typeof testingCurrentClaimIdentitySchema>
+): string => digestJson(testingCurrentClaimIdentitySchema.parse(input));
+
+export const testingCurrentClaimStatusSchema = z.enum([
+  'current',
+  'superseded',
+  'expired',
+  'cancel_requested',
+  'reconcile_required',
+  'terminal'
+]);
+
+export const testingCurrentClaimEnvelopeCoreSchema = z.object({
+  schema_version: z.literal('talos.testing-current-claim/v1'),
+  claim: testingCurrentClaimIdentitySchema,
+  claim_digest: sha256DigestSchema,
+  audience: z.enum(['talos-worker', 'local-qa-runtime']),
+  request_nonce: requestNonceSchema,
+  is_current: z.boolean(),
+  status: testingCurrentClaimStatusSchema,
+  lease_expires_at: timestampSchema,
+  observed_at: timestampSchema,
+  valid_until: timestampSchema,
+  key_id: identifierSchema
+}).strict().superRefine((value, context) => {
+  if (computeTestingCurrentClaimDigest(value.claim) !== value.claim_digest) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'claim_digest does not match claim identity',
+      path: ['claim_digest']
+    });
+  }
+  if (value.is_current !== (value.status === 'current')) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'is_current must match current claim status',
+      path: ['is_current']
+    });
+  }
+  if (Date.parse(value.valid_until) <= Date.parse(value.observed_at)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'valid_until must be later than observed_at',
+      path: ['valid_until']
+    });
+  }
+});
+
+export const testingCurrentClaimEnvelopeSchema = z.object({
+  schema_version: z.literal('talos.testing-current-claim/v1'),
+  claim: testingCurrentClaimIdentitySchema,
+  claim_digest: sha256DigestSchema,
+  audience: z.enum(['talos-worker', 'local-qa-runtime']),
+  request_nonce: requestNonceSchema,
+  is_current: z.boolean(),
+  status: testingCurrentClaimStatusSchema,
+  lease_expires_at: timestampSchema,
+  observed_at: timestampSchema,
+  valid_until: timestampSchema,
+  key_id: identifierSchema,
+  signature: z.string().regex(/^ed25519:[A-Za-z0-9_-]{86}$/)
+}).strict().superRefine((value, context) => {
+  const core: Record<string, unknown> = { ...value };
+  delete core.signature;
+  const result = testingCurrentClaimEnvelopeCoreSchema.safeParse(core);
+  if (!result.success) {
+    for (const issue of result.error.issues) context.addIssue(issue);
+  }
+});
+
+export const testingCurrentClaimResolveRequestSchema = z.object({
+  schema_version: z.literal('talos.testing-current-claim-resolve-request/v1'),
+  audience: z.literal('local-qa-runtime'),
+  request_nonce: requestNonceSchema
+}).strict();
+
+export const testingNoLocalAcceptanceFactSchema = z.object({
+  schema_version: z.literal('talos.testing-no-local-acceptance-fact/v1'),
+  run_id: testingRunIdSchema,
+  task_id: identifierSchema,
+  attempt_id: identifierSchema,
+  machine_id: identifierSchema,
+  worker_id: identifierSchema,
+  lease_id: identifierSchema,
+  generation: z.number().int().positive(),
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  admission_nonce: requestNonceSchema,
+  start_claim_digest: sha256DigestSchema,
+  reconcile_claim_id: identifierSchema,
+  reconcile_lease_id: identifierSchema,
+  reconcile_claim_digest: sha256DigestSchema,
+  journal_version: z.number().int().positive(),
+  disposition: z.literal('never_accepted'),
+  fact_ref: localQaReferenceSchema,
+  fact_digest: sha256DigestSchema,
+  observed_at: timestampSchema
+}).strict();
+
+export const testingReconcileClosureCoreSchema = z.object({
+  schema_version: z.literal('talos.testing-reconcile-closure/v1'),
+  run_id: testingRunIdSchema,
+  task_id: identifierSchema,
+  attempt_id: identifierSchema,
+  machine_id: identifierSchema,
+  generation: z.number().int().positive(),
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  reconcile_deadline: timestampSchema,
+  last_authoritative_snapshot: z.object({
+    ref: talosReferenceSchema,
+    version: z.number().int().positive(),
+    digest: sha256DigestSchema
+  }).strict(),
+  last_receipt_refs: z.array(z.object({
+    ref: z.string().min(1).max(2048),
+    digest: sha256DigestSchema
+  }).strict()).max(3),
+  decision_nonce: requestNonceSchema,
+  decided_at: timestampSchema,
+  execution_disposition: z.literal('lost_or_inconclusive'),
+  cleanup_disposition: z.literal('residual_blocking'),
+  key_id: identifierSchema
+}).strict();
+
+export const testingReconcileClosureSchema = z.object({
+  schema_version: z.literal('talos.testing-reconcile-closure/v1'),
+  run_id: testingRunIdSchema,
+  task_id: identifierSchema,
+  attempt_id: identifierSchema,
+  machine_id: identifierSchema,
+  generation: z.number().int().positive(),
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  reconcile_deadline: timestampSchema,
+  last_authoritative_snapshot: z.object({
+    ref: talosReferenceSchema,
+    version: z.number().int().positive(),
+    digest: sha256DigestSchema
+  }).strict(),
+  last_receipt_refs: z.array(z.object({
+    ref: z.string().min(1).max(2048),
+    digest: sha256DigestSchema
+  }).strict()).max(3),
+  decision_nonce: requestNonceSchema,
+  decided_at: timestampSchema,
+  execution_disposition: z.literal('lost_or_inconclusive'),
+  cleanup_disposition: z.literal('residual_blocking'),
+  key_id: identifierSchema,
+  signature: z.string().regex(/^ed25519:[A-Za-z0-9_-]{86}$/)
+}).strict().superRefine((value, context) => {
+  const core: Record<string, unknown> = { ...value };
+  delete core.signature;
+  const result = testingReconcileClosureCoreSchema.safeParse(core);
+  if (!result.success) {
+    for (const issue of result.error.issues) context.addIssue(issue);
+  }
+});
+
 export const testingTaskSchema = z.object({
   schema_version: z.literal('talos.testing-task/v1'),
   id: identifierSchema,
@@ -440,6 +641,11 @@ export const testingTaskSchema = z.object({
   dispatch_attempt_id: identifierSchema,
   generation: z.number().int().positive(),
   machine_id: identifierSchema,
+  worker_id: identifierSchema,
+  lease_id: identifierSchema,
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  admission_nonce: requestNonceSchema,
+  lease_claim: testingLeaseClaimReferenceSchema,
   inputs: testingInputReferencesSchema,
   runner: testingPackageReferenceSchema,
   policy_ref: z.object({
@@ -465,6 +671,27 @@ export const testingTaskSchema = z.object({
   }
 });
 
+export const testingReconcileTaskSchema = z.object({
+  schema_version: z.literal('talos.testing-reconcile-task/v1'),
+  operation: z.literal('reconcile'),
+  qa_run_id: testingRunIdSchema,
+  task_id: identifierSchema,
+  dispatch_attempt_id: identifierSchema,
+  generation: z.number().int().positive(),
+  machine_id: identifierSchema,
+  worker_id: identifierSchema,
+  lease_id: identifierSchema,
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  admission_nonce: requestNonceSchema,
+  lease_claim: testingLeaseClaimReferenceSchema,
+  local_request_authorization: z.object({
+    ref: authorizationReferenceSchema,
+    digest: sha256DigestSchema,
+    expires_at: timestampSchema
+  }).strict(),
+  deadline: timestampSchema
+}).strict();
+
 export type TestingToolRequest = z.infer<typeof testingToolRequestSchema>;
 export type TestingCapabilities = z.infer<typeof testingCapabilitiesSchema>;
 export type TestingRunAcceptance = z.infer<typeof testingRunAcceptanceSchema>;
@@ -484,4 +711,13 @@ export type TestingRunEvent = z.infer<typeof testingRunEventSchema>;
 export type TestingEventPage = z.infer<typeof testingEventPageSchema>;
 export type TestingCancelRequest = z.infer<typeof testingCancelRequestSchema>;
 export type TestingCancelAck = z.infer<typeof testingCancelAckSchema>;
+export type TestingLeaseClaimReference = z.infer<typeof testingLeaseClaimReferenceSchema>;
+export type TestingCurrentClaimIdentity = z.infer<typeof testingCurrentClaimIdentitySchema>;
+export type TestingCurrentClaimStatus = z.infer<typeof testingCurrentClaimStatusSchema>;
+export type TestingCurrentClaimEnvelopeCore = z.infer<typeof testingCurrentClaimEnvelopeCoreSchema>;
+export type TestingCurrentClaimEnvelope = z.infer<typeof testingCurrentClaimEnvelopeSchema>;
+export type TestingCurrentClaimResolveRequest = z.infer<typeof testingCurrentClaimResolveRequestSchema>;
+export type TestingNoLocalAcceptanceFact = z.infer<typeof testingNoLocalAcceptanceFactSchema>;
+export type TestingReconcileClosure = z.infer<typeof testingReconcileClosureSchema>;
 export type TestingTask = z.infer<typeof testingTaskSchema>;
+export type TestingReconcileTask = z.infer<typeof testingReconcileTaskSchema>;

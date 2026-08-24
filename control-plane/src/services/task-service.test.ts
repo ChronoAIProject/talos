@@ -153,6 +153,11 @@ describe('task service', () => {
       dispatch_attempt_id: 'attempt-1',
       generation: 1,
       machine_id: 'machine',
+      worker_id: 'worker-testing',
+      lease_id: 'lease-testing',
+      fence_token: 'fence-token-testing-1',
+      admission_nonce: 'admission-nonce-testing-1',
+      lease_claim: { schema: 'talos.testing-lease-claim/v1', ref: 'talos://testing/claims/run-1/claim-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
       inputs: {
         schema_version: 'talos.testing-input-references/v1',
         project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1', ref: 'artifact://pql/project-pack-snapshot/snapshot-1', digest },
@@ -205,6 +210,11 @@ describe('task service', () => {
       dispatch_attempt_id: 'attempt-guarded',
       generation: 1,
       machine_id: 'machine-guarded',
+      worker_id: 'worker-testing',
+      lease_id: 'lease-testing',
+      fence_token: 'fence-token-testing-2',
+      admission_nonce: 'admission-nonce-testing-2',
+      lease_claim: { schema: 'talos.testing-lease-claim/v1', ref: 'talos://testing/claims/run-guarded/claim-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
       inputs: {
         schema_version: 'talos.testing-input-references/v1',
         project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1', ref: 'artifact://pql/project-pack-snapshot/snapshot-1', digest },

@@ -10,10 +10,16 @@ import { MongoRepository } from './storage/mongo-repository.js';
 import type { Repository } from './storage/repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
+import type { KeyObject } from 'node:crypto';
 import { createLogger } from './util/logger.js';
 import { DevIdentityResolver, JwtIdentityResolver, type IdentityResolver } from './identity.js';
 import { loadOpenApiDocument } from './openapi.js';
 import { TestingRunService } from './services/testing-run-service.js';
+import {
+  TestingAttemptService,
+  type TestingAuthorizationProvider,
+  type TestingRuntimeFactVerifier
+} from './services/testing-attempt-service.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -32,6 +38,10 @@ export const createControlPlane = (
     sweepIntervalMs?: number;
     webhook?: Omit<WebhookDispatcherOptions, 'clock'>;
     openApiPath?: string;
+    testingAuthorizationProvider?: TestingAuthorizationProvider;
+    testingRuntimeFactVerifier?: TestingRuntimeFactVerifier;
+    testingClaimSigningKey?: KeyObject | string;
+    testingClaimKeyId?: string;
   } = {}
 ): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
@@ -47,18 +57,47 @@ export const createControlPlane = (
     logger
   });
   const testingRuns = new TestingRunService(repository, { cursorSecret: webhookSecret, clock: Date.now });
+  const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
+  if (testingClaimSigningKey === undefined) {
+    logger.warn('testing claim signing key is not configured; using a development-only ephemeral Ed25519 key');
+  }
+  const testingAttempts = new TestingAttemptService(repository, {
+    claimSigningKey: testingClaimSigningKey,
+    claimKeyId: options.testingClaimKeyId ?? process.env.TALOS_TESTING_CLAIM_KEY_ID,
+    authorizationProvider: options.testingAuthorizationProvider,
+    runtimeFactVerifier: options.testingRuntimeFactVerifier,
+    clock: Date.now
+  });
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
     identityResolver: options.identityResolver,
     openApiDocument,
     testingRunService: testingRuns,
+    testingAttemptService: testingAttempts,
     clock: Date.now
   }) as ControlPlaneServer;
   server.repository = repository;
   server.on('close', () => { void repository.close(); });
-  const interval = setInterval(() => {
-    void service.expireLeases();
-  }, options.sweepIntervalMs ?? 10000);
+  let sweepInFlight = false;
+  const sweep = async (): Promise<void> => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    try {
+      try {
+        await service.expireLeases();
+      } catch (error) {
+        logger.error('task lease sweep failed', { error: errorMessage(error) });
+      }
+      try {
+        await testingAttempts.sweep();
+      } catch (error) {
+        logger.error('testing attempt sweep failed', { error: errorMessage(error) });
+      }
+    } finally {
+      sweepInFlight = false;
+    }
+  };
+  const interval = setInterval(() => { void sweep(); }, options.sweepIntervalMs ?? 10000);
   interval.unref();
   server.stopSweep = (): void => clearInterval(interval);
   return server;
@@ -80,7 +119,13 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
         createLogger().warn('NyxID JWT verification is not configured; using the development-only identity stub');
         return new DevIdentityResolver();
       })();
-  const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs, identityResolver });
+  const server = createControlPlane(repository, config.webhookSecret, {
+    adminToken: config.adminToken,
+    sweepIntervalMs: config.sweepIntervalMs,
+    identityResolver,
+    testingClaimSigningKey: config.testingClaimPrivateKey,
+    testingClaimKeyId: config.testingClaimKeyId
+  });
   const shutdown = (): void => {
     server.stopSweep();
     server.close();
@@ -96,6 +141,7 @@ export * from './domain/schemas.js';
 export * from './domain/errors.js';
 export * from './services/task-service.js';
 export * from './services/testing-run-service.js';
+export * from './services/testing-attempt-service.js';
 export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';
@@ -108,3 +154,5 @@ export * from './http/server.js';
 export * from './http/testing-run-routes.js';
 export * from './identity.js';
 export * from './openapi.js';
+
+const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);

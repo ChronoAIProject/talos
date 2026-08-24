@@ -11,7 +11,9 @@ const configSchema = z.object({
   TALOS_NYXID_JWT_PUBLIC_KEY: z.string().min(1).optional(),
   TALOS_NYXID_JWKS_URL: z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'TALOS_NYXID_JWKS_URL must use http or https').optional(),
   TALOS_NYXID_ISSUER: z.string().min(1).optional(),
-  TALOS_NYXID_AUDIENCE: z.string().min(1).optional()
+  TALOS_NYXID_AUDIENCE: z.string().min(1).optional(),
+  TALOS_TESTING_CLAIM_PRIVATE_KEY: z.string().min(1).optional(),
+  TALOS_TESTING_CLAIM_KEY_ID: z.string().trim().min(1).max(255).optional()
 }).superRefine((value, context) => {
   const sourceConfigured = value.TALOS_NYXID_JWT_PUBLIC_KEY !== undefined || value.TALOS_NYXID_JWKS_URL !== undefined;
   if (sourceConfigured && value.TALOS_NYXID_ISSUER === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_ISSUER'], message: 'required when NyxID JWT verification is configured' });
@@ -31,6 +33,8 @@ export interface TalosConfig {
   nyxidJwksUrl?: string;
   nyxidIssuer?: string;
   nyxidAudience?: string;
+  testingClaimPrivateKey?: string;
+  testingClaimKeyId?: string;
 }
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): TalosConfig => {
@@ -46,7 +50,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): TalosConfig =>
     ...(parsed.data.TALOS_NYXID_JWT_PUBLIC_KEY === undefined ? {} : { nyxidJwtPublicKey: parsed.data.TALOS_NYXID_JWT_PUBLIC_KEY }),
     ...(parsed.data.TALOS_NYXID_JWKS_URL === undefined ? {} : { nyxidJwksUrl: parsed.data.TALOS_NYXID_JWKS_URL }),
     ...(parsed.data.TALOS_NYXID_ISSUER === undefined ? {} : { nyxidIssuer: parsed.data.TALOS_NYXID_ISSUER }),
-    ...(parsed.data.TALOS_NYXID_AUDIENCE === undefined ? {} : { nyxidAudience: parsed.data.TALOS_NYXID_AUDIENCE })
+    ...(parsed.data.TALOS_NYXID_AUDIENCE === undefined ? {} : { nyxidAudience: parsed.data.TALOS_NYXID_AUDIENCE }),
+    ...(parsed.data.TALOS_TESTING_CLAIM_PRIVATE_KEY === undefined ? {} : { testingClaimPrivateKey: parsed.data.TALOS_TESTING_CLAIM_PRIVATE_KEY }),
+    ...(parsed.data.TALOS_TESTING_CLAIM_KEY_ID === undefined ? {} : { testingClaimKeyId: parsed.data.TALOS_TESTING_CLAIM_KEY_ID })
   };
 };
 

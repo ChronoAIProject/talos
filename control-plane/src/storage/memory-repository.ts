@@ -1,5 +1,5 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
-import type { TestingRunRecord } from '../domain/testing-types.js';
+import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from './repository.js';
 
 export class MemoryRepository implements Repository {
@@ -14,6 +14,7 @@ export class MemoryRepository implements Repository {
   private readonly actionResults = new Map<string, SessionActionResult>();
   private readonly testingRuns = new Map<string, TestingRunRecord>();
   private readonly testingRunIdempotency = new Map<string, string>();
+  private readonly testingMachineReservations = new Map<string, TestingMachineReservationRecord>();
 
   public async ping(): Promise<void> {}
 
@@ -167,10 +168,60 @@ export class MemoryRepository implements Repository {
     return id === undefined ? undefined : this.testingRuns.get(id);
   }
 
+  public async listTestingRuns(): Promise<readonly TestingRunRecord[]> {
+    return [...this.testingRuns.values()];
+  }
+
   public async replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean> {
     const current = this.testingRuns.get(run.id);
     if (current?.recordVersion !== expectedRecordVersion) return false;
     this.testingRuns.set(run.id, run);
+    return true;
+  }
+
+  public async replaceTestingRunWithinDeadline(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    observedNow: number
+  ): Promise<boolean> {
+    const current = this.testingRuns.get(run.id);
+    const deadlineAt = deadline === 'run' ? current?.deadlineAt : current?.reconcileDeadlineAt;
+    if (current?.recordVersion !== expectedRecordVersion || deadlineAt === undefined || Date.parse(deadlineAt) <= observedNow) {
+      return false;
+    }
+    this.testingRuns.set(run.id, run);
+    return true;
+  }
+
+  public async createTestingMachineReservation(reservation: TestingMachineReservationRecord): Promise<boolean> {
+    if (this.testingMachineReservations.has(reservation.machineId)) return false;
+    this.testingMachineReservations.set(reservation.machineId, reservation);
+    return true;
+  }
+
+  public async getTestingMachineReservation(machineId: string): Promise<TestingMachineReservationRecord | undefined> {
+    return this.testingMachineReservations.get(machineId);
+  }
+
+  public async listTestingMachineReservations(): Promise<readonly TestingMachineReservationRecord[]> {
+    return [...this.testingMachineReservations.values()];
+  }
+
+  public async replaceTestingMachineReservation(
+    reservation: TestingMachineReservationRecord,
+    expectedRecordVersion: number
+  ): Promise<boolean> {
+    const current = this.testingMachineReservations.get(reservation.machineId);
+    if (current?.recordVersion !== expectedRecordVersion || current.attemptId !== reservation.attemptId) return false;
+    this.testingMachineReservations.set(reservation.machineId, reservation);
+    return true;
+  }
+
+  public async releaseTestingMachineReservation(machineId: string, attemptId: string): Promise<boolean> {
+    const current = this.testingMachineReservations.get(machineId);
+    if (current?.attemptId !== attemptId) return false;
+    this.testingMachineReservations.delete(machineId);
     return true;
   }
 }

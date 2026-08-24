@@ -312,6 +312,131 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '501': { $ref: '#/components/responses/NotImplemented' }
+  /v1/worker/testing/claim:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: claimTestingRun
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerClaim' } } } }
+      responses:
+        '200': { description: Exact attempt-bound TestingTask and private lease token., content: { application/json: { schema: { $ref: '#/components/schemas/TestingClaimResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Testing authorization provider unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /v1/worker/testing/runs/{run_id}/reconcile-claim:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: claimTestingReconcile
+      description: Issues fresh reconcile-only credentials for the same machine and attempt; these credentials cannot start or retry a Case.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerClaim' } } } }
+      responses:
+        '200': { description: Same-attempt reconcile task and private fresh lease token., content: { application/json: { schema: { $ref: '#/components/schemas/TestingReconcileClaimResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Testing reconcile authorization provider unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /v1/worker/testing/runs/{run_id}/heartbeat:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: heartbeatTestingAttempt
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingHeartbeatRequest' } } } }
+      responses:
+        '200': { description: Extended lease and signed current-claim observation., content: { application/json: { schema: { $ref: '#/components/schemas/TestingHeartbeatResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/testing/runs/{run_id}/local-accept:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: acceptTestingAttemptLocally
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingAttemptBindingRequest' } } } }
+      responses:
+        '200': { description: Signed current-claim observation after durable local acceptance., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/testing/runs/{run_id}/running:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: startTestingAttempt
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingAttemptBindingRequest' } } } }
+      responses:
+        '200': { description: Signed current-claim observation after execution begins., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/testing/runs/{run_id}/result:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: commitTestingAttemptResult
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitRequest' } } } }
+      responses:
+        '200': { description: Terminal projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitAck' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/testing/runs/{run_id}/reconcile:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: reconcileTestingAttempt
+      description: Same-machine terminal reconciliation for a durably accepted attempt; never starts or retries cases.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitRequest' } } } }
+      responses:
+        '200': { description: Terminal projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitAck' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/worker/testing/runs/{run_id}/not-accepted:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      security: [{ workerToken: [] }]
+      operationId: confirmTestingNotLocallyAccepted
+      description: Records an exact Runtime-verified no-local-acceptance fact before releasing or requeueing the attempt.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingNoLocalAcceptanceRequest' } } } }
+      responses:
+        '200': { description: Updated run projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunMutationAck' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Runtime fact verifier unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /v1/worker/testing/claims/{run_id}/{claim_id}:
+    parameters:
+      - { $ref: '#/components/parameters/TestingRunId' }
+      - { name: claim_id, in: path, required: true, schema: { $ref: '#/components/schemas/Identifier' } }
+    get:
+      security: [{ workerToken: [] }]
+      operationId: resolveTestingCurrentClaim
+      responses:
+        '200': { description: Signed currentness statement with no raw lease token., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/testing/claims/{run_id}/{claim_id}/resolve:
+    parameters:
+      - { $ref: '#/components/parameters/TestingRunId' }
+      - { name: claim_id, in: path, required: true, schema: { $ref: '#/components/schemas/Identifier' } }
+    post:
+      security: []
+      operationId: resolveTestingCurrentClaimForRuntime
+      description: Runtime-facing nonce-bound currentness observation independent of worker token rotation.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimResolveRequest' } } } }
+      responses:
+        '200': { description: Short-lived Ed25519-signed currentness statement with the caller nonce and no raw lease token., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/worker/claim:
     post:
       security: [{ workerToken: [] }]
@@ -528,6 +653,8 @@ components:
     IdempotencyKey: { type: string, minLength: 1, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
     TalosReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^talos://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
     AuthorizationReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^authorization://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
+    LocalQaReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^local-qa://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
+    RequestNonce: { type: string, minLength: 16, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
     ArtifactReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^artifact://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
     TestingCancelReason:
       type: string
@@ -804,7 +931,7 @@ components:
       required: [sequence, type, time, data, event_digest]
       properties:
         sequence: { type: integer, minimum: 1 }
-        type: { type: string, enum: [run.submitted, run.reserved, attempt.claimed, attempt.local_accepted, run.started, run.cancel_requested, run.closing, run.reconcile_required, run.completed, run.failed, run.cancelled, run.abandoned] }
+        type: { type: string, enum: [run.submitted, run.reserved, attempt.claimed, attempt.released, attempt.local_accepted, run.started, run.cancel_requested, run.closing, run.reconcile_required, run.completed, run.failed, run.cancelled, run.abandoned] }
         time: { type: string, format: date-time }
         data: { type: object }
         event_digest: { $ref: '#/components/schemas/Sha256Digest' }
@@ -813,6 +940,7 @@ components:
         - { properties: { type: { const: run.submitted }, data: { $ref: '#/components/schemas/TestingRunSubmittedData' } } }
         - { properties: { type: { const: run.reserved }, data: { $ref: '#/components/schemas/TestingRunReservedData' } } }
         - { properties: { type: { const: attempt.claimed }, data: { $ref: '#/components/schemas/TestingAttemptClaimedData' } } }
+        - { properties: { type: { const: attempt.released }, data: { $ref: '#/components/schemas/TestingAttemptReleasedData' } } }
         - { properties: { type: { const: attempt.local_accepted }, data: { $ref: '#/components/schemas/TestingAttemptAcceptedData' } } }
         - { properties: { type: { const: run.started }, data: { $ref: '#/components/schemas/TestingAttemptAcceptedData' } } }
         - { properties: { type: { const: run.cancel_requested }, data: { $ref: '#/components/schemas/TestingRunCancelRequestedData' } } }
@@ -841,6 +969,14 @@ components:
         attempt_id: { $ref: '#/components/schemas/Identifier' }
         generation: { type: integer, minimum: 1 }
         machine_id: { $ref: '#/components/schemas/Identifier' }
+    TestingAttemptReleasedData:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation, reason_code]
+      properties:
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        reason_code: { type: string, enum: [lease_expired, authorization_unavailable, claim_conflict, cancelled_before_acceptance, deadline_exceeded] }
     TestingAttemptAcceptedData:
       type: object
       additionalProperties: false
@@ -928,10 +1064,63 @@ components:
         ref: { $ref: '#/components/schemas/AuthorizationReference' }
         digest: { $ref: '#/components/schemas/Sha256Digest' }
         expires_at: { type: string, format: date-time }
+    TestingLeaseClaimReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest, expires_at]
+      properties:
+        schema: { const: talos.testing-lease-claim/v1 }
+        ref: { $ref: '#/components/schemas/TalosReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        expires_at: { type: string, format: date-time }
+    TestingCurrentClaimIdentity:
+      type: object
+      additionalProperties: false
+      required: [schema_version, operation, claim_id, run_id, task_id, attempt_id, machine_id, worker_id, generation, lease_id, fence_token, admission_nonce, issued_at, expires_at]
+      properties:
+        schema_version: { const: talos.testing-claim-identity/v1 }
+        operation: { type: string, enum: [start, reconcile] }
+        claim_id: { $ref: '#/components/schemas/Identifier' }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+        worker_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        lease_id: { $ref: '#/components/schemas/Identifier' }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    TestingCurrentClaimEnvelope:
+      type: object
+      additionalProperties: false
+      required: [schema_version, claim, claim_digest, audience, request_nonce, is_current, status, lease_expires_at, observed_at, valid_until, key_id, signature]
+      properties:
+        schema_version: { const: talos.testing-current-claim/v1 }
+        claim: { $ref: '#/components/schemas/TestingCurrentClaimIdentity' }
+        claim_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        audience: { type: string, enum: [talos-worker, local-qa-runtime] }
+        request_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        is_current: { type: boolean }
+        status: { type: string, enum: [current, superseded, expired, cancel_requested, reconcile_required, terminal] }
+        lease_expires_at: { type: string, format: date-time }
+        observed_at: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        key_id: { $ref: '#/components/schemas/Identifier' }
+        signature: { type: string, pattern: '^ed25519:[A-Za-z0-9_-]{86}$' }
+    TestingCurrentClaimResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, audience, request_nonce]
+      properties:
+        schema_version: { const: talos.testing-current-claim-resolve-request/v1 }
+        audience: { const: local-qa-runtime }
+        request_nonce: { $ref: '#/components/schemas/RequestNonce' }
     TestingTask:
       type: object
       additionalProperties: false
-      required: [schema_version, id, kind, interaction, qa_run_id, dispatch_attempt_id, generation, machine_id, inputs, runner, policy_ref, budgets_ref, local_request_authorization, expected_runtime_capability, deadline]
+      required: [schema_version, id, kind, interaction, qa_run_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, inputs, runner, policy_ref, budgets_ref, local_request_authorization, expected_runtime_capability, deadline]
       properties:
         schema_version: { const: talos.testing-task/v1 }
         id: { $ref: '#/components/schemas/Identifier' }
@@ -941,6 +1130,11 @@ components:
         dispatch_attempt_id: { $ref: '#/components/schemas/Identifier' }
         generation: { type: integer, minimum: 1 }
         machine_id: { $ref: '#/components/schemas/Identifier' }
+        worker_id: { $ref: '#/components/schemas/Identifier' }
+        lease_id: { $ref: '#/components/schemas/Identifier' }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        lease_claim: { $ref: '#/components/schemas/TestingLeaseClaimReference' }
         inputs: { $ref: '#/components/schemas/TestingInputs' }
         runner: { $ref: '#/components/schemas/TestingPackageReference' }
         policy_ref: { $ref: '#/components/schemas/TestingPolicyReference' }
@@ -948,6 +1142,191 @@ components:
         local_request_authorization: { $ref: '#/components/schemas/LocalRequestAuthorizationReference' }
         expected_runtime_capability: { const: local-qa-mvp/v1 }
         deadline: { type: string, format: date-time }
+    TestingReconcileTask:
+      type: object
+      additionalProperties: false
+      required: [schema_version, operation, qa_run_id, task_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, local_request_authorization, deadline]
+      properties:
+        schema_version: { const: talos.testing-reconcile-task/v1 }
+        operation: { const: reconcile }
+        qa_run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        dispatch_attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+        worker_id: { $ref: '#/components/schemas/Identifier' }
+        lease_id: { $ref: '#/components/schemas/Identifier' }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        lease_claim: { $ref: '#/components/schemas/TestingLeaseClaimReference' }
+        local_request_authorization: { $ref: '#/components/schemas/LocalRequestAuthorizationReference' }
+        deadline: { type: string, format: date-time }
+    TestingNoLocalAcceptanceFact:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, task_id, attempt_id, machine_id, worker_id, lease_id, generation, fence_token, admission_nonce, start_claim_digest, reconcile_claim_id, reconcile_lease_id, reconcile_claim_digest, journal_version, disposition, fact_ref, fact_digest, observed_at]
+      properties:
+        schema_version: { const: talos.testing-no-local-acceptance-fact/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+        worker_id: { $ref: '#/components/schemas/Identifier' }
+        lease_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        start_claim_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        reconcile_claim_id: { $ref: '#/components/schemas/Identifier' }
+        reconcile_lease_id: { $ref: '#/components/schemas/Identifier' }
+        reconcile_claim_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        journal_version: { type: integer, minimum: 1 }
+        disposition: { const: never_accepted }
+        fact_ref: { $ref: '#/components/schemas/LocalQaReference' }
+        fact_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        observed_at: { type: string, format: date-time }
+    TestingNoLocalAcceptanceRequest:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation, fence_token, lease_token, fact]
+      properties:
+        worker_token: { type: string, minLength: 1 }
+        worker_id: { type: string, minLength: 1, maxLength: 255 }
+        machine_id: { type: string, minLength: 1, maxLength: 255 }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+        fact: { $ref: '#/components/schemas/TestingNoLocalAcceptanceFact' }
+    TestingReconcileClosure:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, task_id, attempt_id, machine_id, generation, fence_token, reconcile_deadline, last_authoritative_snapshot, last_receipt_refs, decision_nonce, decided_at, execution_disposition, cleanup_disposition, key_id, signature]
+      properties:
+        schema_version: { const: talos.testing-reconcile-closure/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        reconcile_deadline: { type: string, format: date-time }
+        last_authoritative_snapshot:
+          type: object
+          additionalProperties: false
+          required: [ref, version, digest]
+          properties:
+            ref: { $ref: '#/components/schemas/TalosReference' }
+            version: { type: integer, minimum: 1 }
+            digest: { $ref: '#/components/schemas/Sha256Digest' }
+        last_receipt_refs:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [ref, digest]
+            properties:
+              ref: { type: string, minLength: 1, maxLength: 2048 }
+              digest: { $ref: '#/components/schemas/Sha256Digest' }
+        decision_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        decided_at: { type: string, format: date-time }
+        execution_disposition: { const: lost_or_inconclusive }
+        cleanup_disposition: { const: residual_blocking }
+        key_id: { $ref: '#/components/schemas/Identifier' }
+        signature: { type: string, pattern: '^ed25519:[A-Za-z0-9_-]{86}$' }
+    TestingAttemptBindingRequest:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation, fence_token, lease_token]
+      properties:
+        worker_token: { type: string, minLength: 1 }
+        worker_id: { type: string, minLength: 1, maxLength: 255 }
+        machine_id: { type: string, minLength: 1, maxLength: 255 }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+    TestingHeartbeatRequest:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation, fence_token, lease_token]
+      properties:
+        worker_token: { type: string, minLength: 1 }
+        worker_id: { type: string, minLength: 1, maxLength: 255 }
+        machine_id: { type: string, minLength: 1, maxLength: 255 }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+        extend_seconds: { type: integer, minimum: 1, maximum: 300, default: 60 }
+    TestingHeartbeatResponse:
+      type: object
+      additionalProperties: false
+      required: [lease_expires_at, cancel_requested, current_claim]
+      properties:
+        lease_expires_at: { type: string, format: date-time }
+        cancel_requested: { type: boolean }
+        current_claim: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' }
+    TestingClaimResponse:
+      type: object
+      additionalProperties: false
+      required: [task, lease, lease_token, current_claim]
+      properties:
+        task: { $ref: '#/components/schemas/TestingTask' }
+        lease:
+          type: object
+          additionalProperties: false
+          required: [lease_id, lease_expires_at]
+          properties:
+            lease_id: { $ref: '#/components/schemas/Identifier' }
+            lease_expires_at: { type: string, format: date-time }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+        current_claim: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' }
+    TestingReconcileClaimResponse:
+      type: object
+      additionalProperties: false
+      required: [task, lease_token, current_claim]
+      properties:
+        task: { $ref: '#/components/schemas/TestingReconcileTask' }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+        current_claim: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' }
+    TestingTerminalCommitRequest:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation, fence_token, lease_token, control_status, execution_outcome, evidence_outcome, upload_outcome, cleanup_outcome]
+      properties:
+        worker_token: { type: string, minLength: 1 }
+        worker_id: { type: string, minLength: 1, maxLength: 255 }
+        machine_id: { type: string, minLength: 1, maxLength: 255 }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        lease_token: { type: string, minLength: 1, maxLength: 512 }
+        control_status: { type: string, enum: [completed, failed, cancelled] }
+        execution_outcome: { $ref: '#/components/schemas/TestingExecutionOutcome' }
+        evidence_outcome: { $ref: '#/components/schemas/TestingEvidenceOutcome' }
+        upload_outcome: { $ref: '#/components/schemas/TestingUploadOutcome' }
+        cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' }
+        summary: { $ref: '#/components/schemas/TestingRunSummary' }
+        results: { $ref: '#/components/schemas/TestingTerminalRefs' }
+        safe_error: { $ref: '#/components/schemas/TestingSafeError' }
+    TestingTerminalCommitAck:
+      type: object
+      additionalProperties: false
+      required: [run_id, control_status, snapshot_version]
+      properties:
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        control_status: { type: string, enum: [completed, failed, cancelled] }
+        snapshot_version: { type: integer, minimum: 1 }
+    TestingRunMutationAck:
+      type: object
+      additionalProperties: false
+      required: [run_id, control_status, snapshot_version]
+      properties:
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        control_status: { $ref: '#/components/schemas/TestingControlStatus' }
+        snapshot_version: { type: integer, minimum: 1 }
     TaskCreate:
       type: object
       required: [kind, goal]
@@ -1073,6 +1452,14 @@ components:
         - { $ref: '#/components/schemas/WorkerCredentials' }
         - type: object
           required: [worker_id, machine_id]
+    TestingWorkerClaim:
+      type: object
+      additionalProperties: false
+      required: [worker_id, machine_id]
+      properties:
+        worker_token: { type: string, minLength: 1, writeOnly: true }
+        worker_id: { type: string, minLength: 1, maxLength: 255 }
+        machine_id: { type: string, minLength: 1, maxLength: 255 }
     Heartbeat:
       allOf:
         - { $ref: '#/components/schemas/WorkerCredentials' }

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeTestingCurrentClaimDigest,
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
   computeTestingToolRequestDigest,
   testingCancelRequestSchema,
+  testingCurrentClaimEnvelopeSchema,
   testingRunEventSchema,
   testingRunSnapshotSchema,
   testingTaskSchema,
@@ -73,6 +75,47 @@ const request = testingToolRequestSchema.parse({
 });
 
 describe('Testing Tool contracts', () => {
+  it('strictly binds signed current-claim envelopes without carrying raw lease tokens', () => {
+    const claim = {
+      schema_version: 'talos.testing-claim-identity/v1' as const,
+      operation: 'start' as const,
+      claim_id: 'claim-1',
+      run_id: 'run-1',
+      task_id: 'task-1',
+      attempt_id: 'attempt-1',
+      machine_id: 'machine-1',
+      worker_id: 'worker-1',
+      generation: 1,
+      lease_id: 'lease-1',
+      fence_token: 'fence-token-123456',
+      admission_nonce: 'admission-nonce-123456',
+      issued_at: timestamp,
+      expires_at: '2026-08-22T00:10:00.000Z'
+    };
+    const envelope = {
+      schema_version: 'talos.testing-current-claim/v1' as const,
+      claim,
+      claim_digest: computeTestingCurrentClaimDigest(claim),
+      audience: 'local-qa-runtime' as const,
+      request_nonce: 'runtime-request-nonce-123456',
+      is_current: true,
+      status: 'current' as const,
+      lease_expires_at: '2026-08-22T00:01:00.000Z',
+      observed_at: timestamp,
+      valid_until: '2026-08-22T00:00:05.000Z',
+      key_id: 'testing-claim-key-1',
+      signature: `ed25519:${'b'.repeat(86)}`
+    };
+    expect(testingCurrentClaimEnvelopeSchema.parse(envelope)).toEqual(envelope);
+    expect(() => testingCurrentClaimEnvelopeSchema.parse({ ...envelope, claim_digest: digest })).toThrow(
+      'claim_digest does not match claim identity'
+    );
+    expect(() => testingCurrentClaimEnvelopeSchema.parse({ ...envelope, is_current: false })).toThrow(
+      'is_current must match current claim status'
+    );
+    expect(() => testingCurrentClaimEnvelopeSchema.parse({ ...envelope, lease_token: 'forbidden' })).toThrow();
+  });
+
   it('strictly accepts pointer-only requests and binds the digest to path run identity', () => {
     expect(testingToolRequestSchema.parse(request)).toEqual(request);
     expect(computeTestingToolRequestDigest('run-1', request)).not.toBe(
@@ -208,6 +251,16 @@ describe('Testing Tool contracts', () => {
       dispatch_attempt_id: 'attempt-1',
       generation: 1,
       machine_id: 'machine-1',
+      worker_id: 'worker-1',
+      lease_id: 'lease-1',
+      fence_token: 'fence-token-123456',
+      admission_nonce: 'admission-nonce-123456',
+      lease_claim: {
+        schema: 'talos.testing-lease-claim/v1' as const,
+        ref: 'talos://testing/claims/run-1/claim-1',
+        digest,
+        expires_at: timestamp
+      },
       inputs: request.inputs,
       runner: request.inputs.testing_package,
       policy_ref: request.policy_binding.policy,

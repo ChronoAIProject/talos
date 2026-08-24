@@ -26,6 +26,7 @@ import {
 import { TalosError, forbidden, notFound } from '../domain/errors.js';
 import type { TestingCursorPageRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from '../storage/repository.js';
+import { newId } from '../util/id.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
 export const TESTING_CURSOR_PAGE_RETENTION = 128;
@@ -98,7 +99,8 @@ export class TestingRunService {
   public async submit(
     runIdInput: string,
     userId: string,
-    input: unknown
+    input: unknown,
+    requesterGroups: readonly string[] = []
   ): Promise<{ acceptance: TestingRunAcceptance; created: boolean }> {
     const runId = testingRunIdSchema.parse(runIdInput);
     const request = testingToolRequestSchema.parse(input);
@@ -114,13 +116,16 @@ export class TestingRunService {
       request_digest: requestDigest,
       created_at: now
     });
+    const taskId = newId('testing-task');
     const run: TestingRunRecord = {
       id: runId,
       userId,
       idempotencyKey: request.idempotency_key,
       requestDigest,
       request,
+      requesterGroups: [...requesterGroups],
       acceptance,
+      deadlineAt: new Date(Date.parse(now) + request.policy.budgets.wall_time_ms).toISOString(),
       recordVersion: 1,
       snapshotVersion: 1,
       cursorEpoch: 1,
@@ -138,6 +143,14 @@ export class TestingRunService {
       events: [event],
       cursorPages: {},
       cancelRecords: {},
+      task: {
+        id: taskId,
+        status: 'submitted',
+        nextGeneration: 1,
+        createdAt: now,
+        updatedAt: now
+      },
+      attempts: [],
       createdAt: now,
       updatedAt: now
     };
@@ -271,6 +284,9 @@ export class TestingRunService {
         recordVersion: run.recordVersion + 1,
         snapshotVersion: stateChanged ? run.snapshotVersion + 1 : run.snapshotVersion,
         controlStatus: status,
+        task: stateChanged
+          ? { ...run.task, status: 'cancel_requested', updatedAt: now }
+          : run.task,
         progress: nextEvent === undefined
           ? run.progress
           : { ...run.progress, phase: 'cancel_requested', last_event_sequence: nextEvent.sequence },

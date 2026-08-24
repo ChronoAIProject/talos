@@ -1,5 +1,5 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
-import type { TestingRunRecord } from '../domain/testing-types.js';
+import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface Repository {
   ping(): Promise<void>;
@@ -35,5 +35,20 @@ export interface Repository {
   createTestingRun(run: TestingRunRecord): Promise<boolean>;
   getTestingRun(id: string): Promise<TestingRunRecord | undefined>;
   getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined>;
+  listTestingRuns(): Promise<readonly TestingRunRecord[]>;
   replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean>;
+  replaceTestingRunWithinDeadline(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    observedNow: number
+  ): Promise<boolean>;
+  createTestingMachineReservation(reservation: TestingMachineReservationRecord): Promise<boolean>;
+  getTestingMachineReservation(machineId: string): Promise<TestingMachineReservationRecord | undefined>;
+  listTestingMachineReservations(): Promise<readonly TestingMachineReservationRecord[]>;
+  replaceTestingMachineReservation(
+    reservation: TestingMachineReservationRecord,
+    expectedRecordVersion: number
+  ): Promise<boolean>;
+  releaseTestingMachineReservation(machineId: string, attemptId: string): Promise<boolean>;
 }

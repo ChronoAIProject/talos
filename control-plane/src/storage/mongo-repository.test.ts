@@ -21,16 +21,38 @@ class FakeCollection {
   }
 
   public async insertOne(document: FakeDocument): Promise<{ acknowledged: true; insertedId: string }> {
-    const duplicateIdentity = [...this.documents.values()].some((candidate) =>
-      candidate.userId === document.userId && candidate.idempotencyKey === document.idempotencyKey);
-    if (this.documents.has(document._id) || duplicateIdentity) throw { code: 11000 };
+    const duplicateUniqueIndex = this.indexes
+      .filter((index) => index.options?.unique === true)
+      .some((index) => [...this.documents.values()].some((candidate) =>
+        Object.keys(index.keys).every((key) => candidate[key] === document[key])));
+    if (this.documents.has(document._id) || duplicateUniqueIndex) throw { code: 11000 };
     this.documents.set(document._id, structuredClone(document));
     return { acknowledged: true, insertedId: document._id };
   }
 
+  public find(filter: Readonly<Record<string, unknown>>): {
+    sort: () => { toArray: () => Promise<FakeDocument[]> };
+    toArray: () => Promise<FakeDocument[]>;
+  } {
+    const toArray = async (): Promise<FakeDocument[]> => [...this.documents.values()]
+      .filter((candidate) => Object.entries(filter).every(([key, value]) => candidate[key] === value))
+      .map((document) => structuredClone(document));
+    return { sort: () => ({ toArray }), toArray };
+  }
+
   public async findOne(filter: Readonly<Record<string, unknown>>): Promise<FakeDocument | null> {
     const document = [...this.documents.values()].find((candidate) =>
-      Object.entries(filter).every(([key, value]) => candidate[key] === value));
+      Object.entries(filter).every(([key, value]) => {
+        if (key !== '$expr') return candidate[key] === value;
+        const expression = value as {
+          $gt?: readonly [{ $dateFromString?: { dateString?: string } }, string];
+        };
+        const dateField = expression.$gt?.[0].$dateFromString?.dateString;
+        if (dateField?.startsWith('$') !== true || expression.$gt?.[1] !== '$$NOW') return false;
+        const dateValue = candidate[dateField.slice(1)];
+        return typeof dateValue === 'string' &&
+          Date.parse(dateValue) > Date.parse('2026-08-22T00:00:00.000Z');
+      }));
     return document === undefined ? null : structuredClone(document);
   }
 
@@ -42,6 +64,13 @@ class FakeCollection {
     if (current === null) return { matchedCount: 0, modifiedCount: 0 };
     this.documents.set(replacement._id, structuredClone(replacement));
     return { matchedCount: 1, modifiedCount: 1 };
+  }
+
+  public async deleteOne(filter: Readonly<Record<string, unknown>>): Promise<{ deletedCount: number }> {
+    const current = await this.findOne(filter);
+    if (current === null) return { deletedCount: 0 };
+    this.documents.delete(current._id);
+    return { deletedCount: 1 };
   }
 }
 
@@ -144,6 +173,10 @@ describe('MongoRepository testing run persistence', () => {
       keys: { userId: 1, idempotencyKey: 1 },
       options: { unique: true }
     });
+    expect(client.database.collection('testing_machine_reservations').indexes).toContainEqual({
+      keys: { runId: 1, attemptId: 1 },
+      options: { unique: true }
+    });
 
     const run = await makeTestingRun();
     expect(await repository.createTestingRun(run)).toBe(true);
@@ -160,5 +193,38 @@ describe('MongoRepository testing run persistence', () => {
     expect(await repository.replaceTestingRun(updated, 1)).toBe(true);
     expect(await repository.replaceTestingRun({ ...updated, recordVersion: 3 }, 1)).toBe(false);
     expect(await repository.getTestingRun(run.id)).toMatchObject({ recordVersion: 2, snapshotVersion: 2 });
+    const withinDeadline = { ...updated, recordVersion: 3, snapshotVersion: 3 };
+    expect(await repository.replaceTestingRunWithinDeadline(withinDeadline, 2, 'run', 0)).toBe(true);
+    const expired = {
+      ...withinDeadline,
+      recordVersion: 4,
+      deadlineAt: '2026-08-21T23:59:59.000Z'
+    };
+    expect(await repository.replaceTestingRun(expired, 3)).toBe(true);
+    expect(await repository.replaceTestingRunWithinDeadline({ ...expired, recordVersion: 5 }, 4, 'run', 0))
+      .toBe(false);
+
+    const reservation = {
+      machineId: 'machine-1',
+      runId: run.id,
+      taskId: run.task.id,
+      attemptId: 'attempt-1',
+      generation: 1,
+      fenceToken: 'fence-token-123456',
+      status: 'reserved' as const,
+      expiresAt: '2026-08-22T00:01:00.000Z',
+      recordVersion: 1
+    };
+    expect(await repository.createTestingMachineReservation(reservation)).toBe(true);
+    expect(await repository.createTestingMachineReservation({ ...reservation, attemptId: 'attempt-2' })).toBe(false);
+    expect(await repository.createTestingMachineReservation({ ...reservation, machineId: 'machine-2' })).toBe(false);
+    expect(await repository.getTestingMachineReservation('machine-1')).toEqual(reservation);
+    expect(await repository.listTestingMachineReservations()).toEqual([reservation]);
+    const claimedReservation = { ...reservation, status: 'claimed' as const, recordVersion: 2 };
+    expect(await repository.replaceTestingMachineReservation(claimedReservation, 1)).toBe(true);
+    expect(await repository.replaceTestingMachineReservation({ ...claimedReservation, recordVersion: 3 }, 1)).toBe(false);
+    expect(await repository.releaseTestingMachineReservation('machine-1', 'stale-attempt')).toBe(false);
+    expect(await repository.releaseTestingMachineReservation('machine-1', 'attempt-1')).toBe(true);
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
   });
 });

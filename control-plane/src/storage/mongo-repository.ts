@@ -1,6 +1,6 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
-import type { TestingRunRecord } from '../domain/testing-types.js';
+import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
@@ -23,6 +23,7 @@ export class MongoRepository implements Repository {
   private readonly pendingActions: Collection<Document>;
   private readonly actionResults: Collection<Document>;
   private readonly testingRuns: Collection<Document>;
+  private readonly testingMachineReservations: Collection<Document>;
 
   public constructor(url: string, databaseName = 'talos', options: MongoRepositoryOptions = {}) {
     this.client = options.client ?? new MongoClient(url, { ...options.clientOptions, ignoreUndefined: true });
@@ -37,6 +38,7 @@ export class MongoRepository implements Repository {
     this.pendingActions = this.database.collection('pending_actions');
     this.actionResults = this.database.collection('action_results');
     this.testingRuns = this.database.collection('testing_runs');
+    this.testingMachineReservations = this.database.collection('testing_machine_reservations');
   }
 
   public async initialize(): Promise<void> {
@@ -47,7 +49,9 @@ export class MongoRepository implements Repository {
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
       this.actionResults.createIndex({ taskId: 1 }),
-      this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true })
+      this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true }),
+      this.testingMachineReservations.createIndex({ runId: 1, attemptId: 1 }, { unique: true }),
+      this.testingMachineReservations.createIndex({ expiresAt: 1 })
     ]);
   }
 
@@ -220,12 +224,74 @@ export class MongoRepository implements Repository {
     return document === null ? undefined : testingRunFromDocument(document);
   }
 
+  public async listTestingRuns(): Promise<readonly TestingRunRecord[]> {
+    return (await this.testingRuns.find({}).toArray()).map(testingRunFromDocument);
+  }
+
   public async replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean> {
     const result = await this.testingRuns.replaceOne(
       { _id: run.id, recordVersion: expectedRecordVersion },
       { ...run, _id: run.id }
     );
     return result.modifiedCount === 1;
+  }
+
+  public async replaceTestingRunWithinDeadline(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    _observedNow: number
+  ): Promise<boolean> {
+    const field = deadline === 'run' ? 'deadlineAt' : 'reconcileDeadlineAt';
+    const result = await this.testingRuns.replaceOne(
+      {
+        _id: run.id,
+        recordVersion: expectedRecordVersion,
+        $expr: {
+          $gt: [
+            { $dateFromString: { dateString: `$${field}` } },
+            '$$NOW'
+          ]
+        }
+      },
+      { ...run, _id: run.id }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async createTestingMachineReservation(reservation: TestingMachineReservationRecord): Promise<boolean> {
+    try {
+      await this.testingMachineReservations.insertOne({ ...reservation, _id: reservation.machineId });
+      return true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  public async getTestingMachineReservation(machineId: string): Promise<TestingMachineReservationRecord | undefined> {
+    const document = await this.testingMachineReservations.findOne({ _id: machineId });
+    return document === null ? undefined : testingMachineReservationFromDocument(document);
+  }
+
+  public async listTestingMachineReservations(): Promise<readonly TestingMachineReservationRecord[]> {
+    return (await this.testingMachineReservations.find({}).toArray()).map(testingMachineReservationFromDocument);
+  }
+
+  public async replaceTestingMachineReservation(
+    reservation: TestingMachineReservationRecord,
+    expectedRecordVersion: number
+  ): Promise<boolean> {
+    const result = await this.testingMachineReservations.replaceOne(
+      { _id: reservation.machineId, attemptId: reservation.attemptId, recordVersion: expectedRecordVersion },
+      { ...reservation, _id: reservation.machineId }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async releaseTestingMachineReservation(machineId: string, attemptId: string): Promise<boolean> {
+    const result = await this.testingMachineReservations.deleteOne({ _id: machineId, attemptId });
+    return result.deletedCount === 1;
   }
 }
 
@@ -245,6 +311,8 @@ const webhookFromDocument = (document: Document): WebhookEvent => withoutId(docu
 const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
 const testingRunFromDocument = (document: Document): TestingRunRecord => withoutId(document) as unknown as TestingRunRecord;
+const testingMachineReservationFromDocument = (document: Document): TestingMachineReservationRecord =>
+  withoutId(document) as unknown as TestingMachineReservationRecord;
 
 const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;

@@ -1,5 +1,15 @@
 import { z } from 'zod';
-import { browserActionSchema } from '@talos/testing-protocol';
+import {
+  browserActionSchema,
+  testingCleanupOutcomeSchema,
+  testingEvidenceOutcomeSchema,
+  testingExecutionOutcomeSchema,
+  testingRunSummarySchema,
+  testingSafeErrorSchema,
+  testingNoLocalAcceptanceFactSchema,
+  testingTerminalRefsSchema,
+  testingUploadOutcomeSchema
+} from '@talos/testing-protocol';
 
 export const capabilityTagSchema = z.enum([
   'os',
@@ -69,10 +79,49 @@ export const workerClaimSchema = workerBodyCredentialsSchema.extend({
   machine_id: z.string().trim().min(1).max(255)
 });
 
+export const testingWorkerClaimSchema = z.object({
+  worker_token: z.string().min(1).optional(),
+  worker_id: z.string().trim().min(1).max(255),
+  machine_id: z.string().trim().min(1).max(255)
+}).strict();
+
 export const heartbeatSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
   extend_seconds: z.number().int().positive().max(300).default(60)
 });
+
+const testingWorkerCredentialsShape = {
+  worker_token: z.string().min(1).optional(),
+  worker_id: z.string().trim().min(1).max(255).optional(),
+  machine_id: z.string().trim().min(1).max(255).optional()
+};
+
+export const testingAttemptBindingBodySchema = z.object({
+  ...testingWorkerCredentialsShape,
+  attempt_id: z.string().trim().min(1).max(255),
+  generation: z.number().int().positive(),
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  lease_token: z.string().min(1).max(512)
+}).strict();
+
+export const testingHeartbeatBodySchema = testingAttemptBindingBodySchema.extend({
+  extend_seconds: z.number().int().positive().max(300).default(60)
+}).strict();
+
+export const testingTerminalCommitBodySchema = testingAttemptBindingBodySchema.extend({
+  control_status: z.enum(['completed', 'failed', 'cancelled']),
+  execution_outcome: testingExecutionOutcomeSchema,
+  evidence_outcome: testingEvidenceOutcomeSchema,
+  upload_outcome: testingUploadOutcomeSchema,
+  cleanup_outcome: testingCleanupOutcomeSchema,
+  summary: testingRunSummarySchema.optional(),
+  results: testingTerminalRefsSchema.optional(),
+  safe_error: testingSafeErrorSchema.optional()
+}).strict();
+
+export const testingNoLocalAcceptanceBodySchema = testingAttemptBindingBodySchema.extend({
+  fact: testingNoLocalAcceptanceFactSchema
+}).strict();
 
 export const workerNeedsInputSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1)

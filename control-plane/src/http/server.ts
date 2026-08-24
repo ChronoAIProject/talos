@@ -17,6 +17,11 @@ import {
   heartbeatSchema,
   resultSchema,
   taskInputSchema,
+  testingAttemptBindingBodySchema,
+  testingHeartbeatBodySchema,
+  testingNoLocalAcceptanceBodySchema,
+  testingTerminalCommitBodySchema,
+  testingWorkerClaimSchema,
   workerBodyCredentialsSchema,
   workerClaimSchema,
   workerActionPollSchema,
@@ -35,6 +40,10 @@ import { SessionService, type SessionServiceOptions } from '../services/session-
 import { routeSessionRequest } from './session-routes.js';
 import { TestingRunService } from '../services/testing-run-service.js';
 import { routeTestingRunRequest } from './testing-run-routes.js';
+import {
+  TestingAttemptService,
+  type TestingAttemptBindingInput
+} from '../services/testing-attempt-service.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -45,6 +54,7 @@ export interface ServerOptions {
   sessionService?: SessionService;
   session?: SessionServiceOptions;
   testingRunService?: TestingRunService;
+  testingAttemptService?: TestingAttemptService;
   testingCursorSecret?: string;
 }
 
@@ -59,6 +69,9 @@ export const createApiServer = (
   const sessions = options.sessionService ?? new SessionService(service, repository, options.session);
   const testingRuns = options.testingRunService ?? new TestingRunService(repository, {
     cursorSecret: options.testingCursorSecret ?? 'development-testing-cursor-secret',
+    clock: options.clock
+  });
+  const testingAttempts = options.testingAttemptService ?? new TestingAttemptService(repository, {
     clock: options.clock
   });
   return createServer(async (request, response) => {
@@ -78,7 +91,7 @@ export const createApiServer = (
           return send(response, 503, { status: 'degraded' });
         }
       }
-      await route(request, response, service, sessions, testingRuns, repository, identities, options);
+      await route(request, response, service, sessions, testingRuns, testingAttempts, repository, identities, options);
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;
       const validation = error instanceof z.ZodError
@@ -109,6 +122,7 @@ const route = async (
   service: TaskService,
   sessions: SessionService,
   testingRuns: TestingRunService,
+  testingAttempts: TestingAttemptService,
   repository: Repository,
   identities: IdentityResolver,
   options: ServerOptions
@@ -118,6 +132,18 @@ const route = async (
   const parts = url.pathname.split('/').filter(Boolean);
 
   if (parts[0] !== 'v1') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (
+    method === 'POST' &&
+    parts[1] === 'testing' &&
+    parts[2] === 'claims' &&
+    parts[3] !== undefined &&
+    parts[4] !== undefined &&
+    parts[5] === 'resolve' &&
+    parts.length === 6
+  ) {
+    const body = await readBody(request, options.maxBodyBytes);
+    return send(response, 200, await testingAttempts.resolveRuntimeCurrentClaim(parts[3], parts[4], body));
+  }
   if (parts[1] === 'handoffs' && parts[2] !== undefined && method === 'GET') {
     const identity = await requireIdentity(request, identities);
     const link = await repository.getHandoff(parts[2]);
@@ -130,7 +156,9 @@ const route = async (
     throw notImplemented('hosted handoff views are planned for Phase 3');
   }
   if (parts[1] === 'admin') return adminRoute(request, response, repository, parts, options);
-  if (parts[1] === 'worker') return workerRoute(request, response, service, sessions, repository, parts, options);
+  if (parts[1] === 'worker') {
+    return workerRoute(request, response, service, sessions, testingAttempts, repository, parts, options);
+  }
 
   const identity = await requireIdentity(request, identities);
   const userId = identity.userId;
@@ -351,6 +379,7 @@ const workerRoute = async (
   response: ServerResponse,
   service: TaskService,
   sessions: SessionService,
+  testingAttempts: TestingAttemptService,
   repository: Repository,
   parts: readonly string[],
   options: ServerOptions
@@ -360,6 +389,9 @@ const workerRoute = async (
   const maxBodyBytes = isActionResult ? 8 * 1024 * 1024 : options.maxBodyBytes;
   const body = method === 'POST' ? await readBody(request, maxBodyBytes) : undefined;
   const workerIdentity = await requireWorker(request, repository, body);
+  if (parts[2] === 'testing') {
+    return testingWorkerRoute(response, testingAttempts, parts, method, body, workerIdentity);
+  }
   if (method === 'POST' && parts[2] === 'claim') {
     const input = workerClaimSchema.parse(body);
     if (input.machine_id !== workerIdentity.machineId) throw unauthorized('authenticated machine does not match claim machine');
@@ -409,6 +441,97 @@ const workerRoute = async (
   }
   return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
 };
+
+const testingWorkerRoute = async (
+  response: ServerResponse,
+  service: TestingAttemptService,
+  parts: readonly string[],
+  method: string,
+  body: unknown,
+  worker: WorkerIdentity
+): Promise<void> => {
+  if (method === 'POST' && parts[3] === 'claim' && parts.length === 4) {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match testing claim machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match testing claim worker');
+    return send(response, 200, await service.claim(worker.workerId, worker.machineId));
+  }
+  if (method === 'GET' && parts[3] === 'claims' && parts[4] !== undefined && parts[5] !== undefined && parts.length === 6) {
+    const claim = await service.resolveCurrentClaim(parts[4], parts[5]);
+    if (claim.claim.machine_id !== worker.machineId) throw unauthorized('testing claim belongs to another machine');
+    return send(response, 200, claim);
+  }
+  if (method !== 'POST' || parts[3] !== 'runs' || parts[4] === undefined || parts[5] === undefined || parts.length !== 6) {
+    return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  }
+  const runId = parts[4];
+  const action = parts[5];
+  if (action === 'reconcile-claim') {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match reconcile machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match reconcile worker');
+    return send(response, 200, await service.claimReconcile(worker.workerId, worker.machineId, runId));
+  }
+  if (action === 'heartbeat') {
+    const input = testingHeartbeatBodySchema.parse(body);
+    const attempt = testingBinding(runId, input, worker);
+    return send(response, 200, await service.heartbeat(attempt, input.extend_seconds));
+  }
+  if (action === 'local-accept' || action === 'running') {
+    const input = testingAttemptBindingBodySchema.parse(body);
+    const attempt = testingBinding(runId, input, worker);
+    const claim = action === 'local-accept'
+      ? await service.acceptLocal(attempt)
+      : await service.markRunning(attempt);
+    return send(response, 200, claim);
+  }
+  if (action === 'not-accepted') {
+    const input = testingNoLocalAcceptanceBodySchema.parse(body);
+    const run = await service.confirmNotLocallyAccepted(testingBinding(runId, input, worker), input.fact);
+    return send(response, 200, {
+      run_id: run.id,
+      control_status: run.controlStatus,
+      snapshot_version: run.snapshotVersion
+    });
+  }
+  if (action === 'result' || action === 'reconcile') {
+    const input = testingTerminalCommitBodySchema.parse(body);
+    const terminal = {
+      ...testingBinding(runId, input, worker),
+      controlStatus: input.control_status,
+      executionOutcome: input.execution_outcome,
+      evidenceOutcome: input.evidence_outcome,
+      uploadOutcome: input.upload_outcome,
+      cleanupOutcome: input.cleanup_outcome,
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      ...(input.results === undefined ? {} : { results: input.results }),
+      ...(input.safe_error === undefined ? {} : { safeError: input.safe_error })
+    };
+    const run = action === 'reconcile'
+      ? await service.commitReconcileTerminal(terminal)
+      : await service.commitTerminal(terminal);
+    return send(response, 200, {
+      run_id: run.id,
+      control_status: run.controlStatus,
+      snapshot_version: run.snapshotVersion
+    });
+  }
+  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+};
+
+const testingBinding = (
+  runId: string,
+  input: { attempt_id: string; generation: number; fence_token: string; lease_token: string },
+  worker: WorkerIdentity
+): TestingAttemptBindingInput => ({
+  runId,
+  attemptId: input.attempt_id,
+  machineId: worker.machineId,
+  workerId: worker.workerId,
+  generation: input.generation,
+  fenceToken: input.fence_token,
+  leaseToken: input.lease_token
+});
 
 const requireIdentity = async (request: IncomingMessage, resolver: IdentityResolver): Promise<ResolvedIdentity> => {
   const header = request.headers['x-nyxid-identity-token'];

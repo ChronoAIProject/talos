@@ -32,7 +32,7 @@ export const routeTestingRunRequest = async (
   }
   const runId = parts[4];
   if (method === 'PUT' && parts.length === 5) {
-    const result = await service.submit(runId, identity.userId, body);
+    const result = await service.submit(runId, identity.userId, body, identity.groups);
     return { status: result.created ? 201 : 200, body: result.acceptance };
   }
   if (method === 'GET' && parts.length === 5) {

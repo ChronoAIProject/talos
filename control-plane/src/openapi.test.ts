@@ -34,6 +34,29 @@ describe('OpenAPI loader', () => {
       'listTestingRunEvents',
       'cancelTestingRun'
     ]);
+    expect([
+      operationId('/v1/worker/testing/claim', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/heartbeat', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/local-accept', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/running', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/result', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/reconcile-claim', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/reconcile', 'post'),
+      operationId('/v1/worker/testing/runs/{run_id}/not-accepted', 'post'),
+      operationId('/v1/worker/testing/claims/{run_id}/{claim_id}', 'get'),
+      operationId('/v1/testing/claims/{run_id}/{claim_id}/resolve', 'post')
+    ]).toEqual([
+      'claimTestingRun',
+      'heartbeatTestingAttempt',
+      'acceptTestingAttemptLocally',
+      'startTestingAttempt',
+      'commitTestingAttemptResult',
+      'claimTestingReconcile',
+      'reconcileTestingAttempt',
+      'confirmTestingNotLocallyAccepted',
+      'resolveTestingCurrentClaim',
+      'resolveTestingCurrentClaimForRuntime'
+    ]);
     for (const schema of ['TestingCapabilities', 'TestingToolRequest', 'TestingRunAcceptance', 'TestingRunSnapshot', 'TestingEventPage', 'TestingCancelRequest', 'TestingCancelAck', 'TestingTask']) {
       expect(parsed.components.schemas).toHaveProperty(schema);
     }
@@ -52,7 +75,23 @@ describe('OpenAPI loader', () => {
       'TestingSafeError',
       'TestingRunEvent',
       'TestingTask',
-      'LocalRequestAuthorizationReference'
+      'LocalRequestAuthorizationReference',
+      'TestingLeaseClaimReference',
+      'TestingCurrentClaimIdentity',
+      'TestingCurrentClaimEnvelope',
+      'TestingCurrentClaimResolveRequest',
+      'TestingWorkerClaim',
+      'TestingReconcileTask',
+      'TestingReconcileClaimResponse',
+      'TestingNoLocalAcceptanceFact',
+      'TestingNoLocalAcceptanceRequest',
+      'TestingReconcileClosure',
+      'TestingAttemptBindingRequest',
+      'TestingHeartbeatRequest',
+      'TestingHeartbeatResponse',
+      'TestingClaimResponse',
+      'TestingTerminalCommitRequest',
+      'TestingTerminalCommitAck'
     ]) {
       expect(schema(strictSchema).additionalProperties, strictSchema).toBe(false);
     }
@@ -68,6 +107,27 @@ describe('OpenAPI loader', () => {
     ]);
     expect(schema('TestingToolRequest').required).toContain('policy_binding');
     expect(schema('TestingTask').required).toContain('budgets_ref');
+    expect(schema('TestingTask').required).toEqual(expect.arrayContaining([
+      'worker_id', 'lease_id', 'fence_token', 'admission_nonce', 'lease_claim'
+    ]));
+    expect(schema('TestingCurrentClaimIdentity').required).toEqual(expect.arrayContaining([
+      'operation', 'admission_nonce'
+    ]));
+    expect(schema('TestingCurrentClaimEnvelope').required).toEqual(expect.arrayContaining([
+      'audience', 'request_nonce', 'lease_expires_at', 'valid_until', 'key_id'
+    ]));
+    expect(schema('TestingNoLocalAcceptanceFact').required).toEqual(expect.arrayContaining([
+      'start_claim_digest',
+      'reconcile_claim_id',
+      'reconcile_lease_id',
+      'reconcile_claim_digest',
+      'journal_version',
+      'disposition'
+    ]));
+    expect(asObject(properties('TestingCurrentClaimEnvelope').signature).pattern)
+      .toBe('^ed25519:[A-Za-z0-9_-]{86}$');
+    const runtimeResolver = asObject(parsed.paths['/v1/testing/claims/{run_id}/{claim_id}/resolve']);
+    expect(asObject(runtimeResolver.post).security).toEqual([]);
     expect(asObject(properties('TestingRunSnapshot').results).oneOf).toEqual([
       { type: 'null' },
       { $ref: '#/components/schemas/TestingTerminalRefs' }
@@ -75,11 +135,12 @@ describe('OpenAPI loader', () => {
     expect(asObject(properties('TestingEventPage').events).items).toEqual({
       $ref: '#/components/schemas/TestingRunEvent'
     });
-    expect(schema('TestingRunEvent').oneOf).toHaveLength(12);
+    expect(schema('TestingRunEvent').oneOf).toHaveLength(13);
     for (const eventData of [
       'TestingRunSubmittedData',
       'TestingRunReservedData',
       'TestingAttemptClaimedData',
+      'TestingAttemptReleasedData',
       'TestingAttemptAcceptedData',
       'TestingRunCancelRequestedData',
       'TestingRunReasonData',
