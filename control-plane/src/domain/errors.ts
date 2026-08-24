@@ -1,12 +1,14 @@
 export class TalosError extends Error {
   public readonly code: string;
   public readonly status: number;
+  public readonly details?: Readonly<Record<string, unknown>>;
 
-  public constructor(code: string, message: string, status = 400) {
+  public constructor(code: string, message: string, status = 400, details?: Readonly<Record<string, unknown>>) {
     super(message);
     this.name = 'TalosError';
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 

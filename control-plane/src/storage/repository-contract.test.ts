@@ -4,14 +4,16 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
-import type { Task, WebhookEvent } from '../domain/types.js';
+import type { BrowserTask, WebhookEvent } from '../domain/types.js';
+import { TestingRunService } from '../services/testing-run-service.js';
+import { digestJson } from '@talos/testing-protocol';
 
 interface Harness {
   repository: Repository;
   close: () => Promise<void>;
 }
 
-const baseTask = (overrides: Partial<Task> = {}): Task => ({
+const baseTask = (overrides: Partial<BrowserTask> = {}): BrowserTask => ({
   id: 'task-1', userId: 'user-1', kind: 'browse', goal: 'check status', constraints: {}, mode: 'read_only',
   interaction: 'autonomous', status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
 });
@@ -160,13 +162,73 @@ const undefinedLeaseTest = (makeHarness: () => Promise<Harness>, allowUnavailabl
   });
 };
 
+const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
+  it('atomically creates and compare-and-sets a testing run aggregate', async () => {
+    if (allowUnavailable && mongoUrl === undefined) {
+      expect(mongoUnavailable).toBeTypeOf('string');
+      return;
+    }
+    const { repository, close } = await makeHarness();
+    try {
+      const digest = `sha256:${'a'.repeat(64)}`;
+      const reference = (schema: string, ref: string) => ({ schema, ref, digest });
+      const service = new TestingRunService(repository, {
+        cursorSecret: 'repository-contract-secret-1234',
+        clock: () => Date.parse('2026-08-22T00:00:00.000Z')
+      });
+      const policy = {
+        network_scope: 'environment_owned_loopback_exact_origins' as const,
+        environment_port_handle_policy: { source: 'current_run_owned_handles' as const, allow_unowned_loopback: false as const },
+        allowed_actions: ['navigate' as const],
+        allowed_evidence_media: ['image/png' as const],
+        secret_refs: [],
+        budgets: { wall_time_ms: 600_000, max_cases: 20, max_actions: 200, max_events: 2_000, max_screenshots: 20, max_screenshot_bytes: 5_242_880, max_json_evidence_bytes: 1_048_576, max_total_artifact_bytes: 52_428_800 }
+      };
+      const request = {
+        schema_version: 'talos.testing-tool-request/v1' as const,
+        idempotency_key: 'testing-submit-1',
+        display_goal: 'Repository contract',
+        inputs: {
+          schema_version: 'talos.testing-input-references/v1' as const,
+          project_pack_snapshot: reference('pql.project-pack-snapshot/v1', 'artifact://pql/project-pack-snapshot/snapshot-1'),
+          test_selection: reference('pql.test-selection/v1', 'artifact://pql/test-selection/selection-1'),
+          testing_design_input_set: reference('pql.testing-design-input-set.v1', 'artifact://pql/testing-design-input-set/input-1'),
+          source_revision: { repository_id: 'repo-1', exact_revision: '0123456789abcdef0123456789abcdef01234567', ref: 'artifact://source/revision-1', digest },
+          structured_plan: reference('testing-structured-plan.v2', 'artifact://plans/plan-1'),
+          environment_profile: { ref: 'artifact://environments/environment-1', digest },
+          testing_package: { package_id: 'testing-browser-runner', version: '1.0', digest }
+        },
+        execution_profile: 'local_qa_agent_mvp' as const,
+        placement_requirements: { testing_runtime: 'local-qa-mvp/v1' as const },
+        policy_binding: {
+          policy: { schema: 'talos.testing-execution-policy/v1' as const, ref: 'talos://policies/testing/policy-1', digest: digestJson(policy) },
+          budgets: { schema: 'talos.testing-budgets/v1' as const, ref: 'talos://policies/testing/budgets-1', digest: digestJson(policy.budgets) }
+        },
+        policy
+      };
+      expect((await service.submit('run-contract', 'user-1', request)).created).toBe(true);
+      expect((await service.submit('run-contract', 'user-1', request)).created).toBe(false);
+      const run = await repository.getTestingRun('run-contract');
+      expect(run).toMatchObject({ recordVersion: 1, snapshotVersion: 1, controlStatus: 'submitted' });
+      expect(await repository.getTestingRunByIdempotencyKey('user-1', 'testing-submit-1')).toMatchObject({ id: 'run-contract' });
+      if (run === undefined) throw new Error('testing run missing');
+      expect(await repository.replaceTestingRun({ ...run, recordVersion: 2 }, 1)).toBe(true);
+      expect(await repository.replaceTestingRun({ ...run, recordVersion: 3 }, 1)).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+};
+
 describe('Repository contract: memory', () => {
   contractTests(memoryHarness);
   undefinedLeaseTest(memoryHarness);
+  testingRunContractTest(memoryHarness);
 });
 describe('Repository contract: mongo', () => {
   contractTests(mongoHarness, true);
   undefinedLeaseTest(mongoHarness, true);
+  testingRunContractTest(mongoHarness, true);
 });
 
 it('reports when Mongo contract execution is unavailable', () => {

@@ -1,4 +1,5 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { TestingRunRecord } from '../domain/testing-types.js';
 
 export interface Repository {
   ping(): Promise<void>;
@@ -31,4 +32,8 @@ export interface Repository {
   completeSessionAction(taskId: string, actionId: string): Promise<void>;
   saveSessionActionResult(result: SessionActionResult): Promise<void>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
+  createTestingRun(run: TestingRunRecord): Promise<boolean>;
+  getTestingRun(id: string): Promise<TestingRunRecord | undefined>;
+  getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined>;
+  replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean>;
 }

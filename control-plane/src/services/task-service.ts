@@ -1,7 +1,7 @@
 import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, PublicTask, Task, TaskFinding, TaskInteraction, WebhookEvent } from '../domain/types.js';
+import type { Lease, PublicTask, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -42,7 +42,7 @@ export class TaskService {
     userId: string,
     input: unknown,
     requesterGroups: readonly string[] = [],
-    interaction: TaskInteraction = 'autonomous'
+    interaction: 'autonomous' | 'interactive' = 'autonomous'
   ): Promise<Task> {
     const data = taskCreateSchema.parse(input);
     if (data.callback !== undefined) this.validateCallback?.(data.callback);
@@ -89,6 +89,7 @@ export class TaskService {
   public async claim(workerId: string, machineId: string, now = this.clock()): Promise<{ task: Task; lease: Lease; leaseToken: string }> {
     const queued = await this.repository.listQueuedTasks();
     for (const candidate of queued) {
+      if (candidate.kind === 'testing') continue;
       try {
         const eligible = await this.scheduler.isEligible(candidate, machineId, candidate.userId, candidate.requesterGroups ?? []);
         if (eligible === undefined) continue;
@@ -259,6 +260,7 @@ export class TaskService {
     const expired: Task[] = [];
     for (const candidate of active) {
       const current = await this.repository.getTask(candidate.id);
+      if (current?.kind === 'testing') continue;
       if (current?.status === 'submitted' && current.constraints.deadline !== undefined && Date.parse(current.constraints.deadline) <= now) {
         const failed: Task = {
           ...current,
@@ -317,12 +319,14 @@ export class TaskService {
     const task = await this.repository.getTask(id);
     if (task === undefined) throw notFound('task not found');
     if (task.userId !== userId) throw forbidden('task belongs to another user');
+    if (task.kind === 'testing') throw conflict('testing tasks require the Testing Tool API');
     return task;
   }
 
   public async getWorkerTask(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
     const task = await this.repository.getTask(taskId);
     if (task === undefined) throw notFound('task not found');
+    if (task.kind === 'testing') throw conflict('testing tasks require the Testing Executor API');
     if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff', 'closing', 'cancelled'].includes(task.status)) throw unauthorized('worker does not own active lease');
     const expected = Buffer.from(task.leaseToken);
     const actual = Buffer.from(leaseToken);
@@ -371,7 +375,8 @@ export class TaskService {
       'machineId',
       'leaseExpiresAt',
       'input',
-      'requesterGroups'
+      'requesterGroups',
+      'testing'
     ]);
     return {
       interaction: task.interaction ?? 'autonomous',

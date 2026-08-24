@@ -29,6 +29,7 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
 ]));
 
 export const identifierSchema = z.string().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+export const testingRunIdSchema = z.string().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 export const sha256DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export const artifactReferenceValueSchema = z.string().min(1).max(2048)
   .regex(/^artifact:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/)
@@ -115,7 +116,7 @@ export const testingInputReferencesSchema = z.object({
 }).strict();
 
 export const testingAttemptBindingSchema = z.object({
-  run_id: identifierSchema,
+  run_id: testingRunIdSchema,
   task_id: identifierSchema,
   attempt_id: identifierSchema,
   generation: z.number().int().positive(),

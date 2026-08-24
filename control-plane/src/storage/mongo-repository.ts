@@ -1,5 +1,6 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
@@ -21,6 +22,7 @@ export class MongoRepository implements Repository {
   private readonly pendingInputs: Collection<Document>;
   private readonly pendingActions: Collection<Document>;
   private readonly actionResults: Collection<Document>;
+  private readonly testingRuns: Collection<Document>;
 
   public constructor(url: string, databaseName = 'talos', options: MongoRepositoryOptions = {}) {
     this.client = options.client ?? new MongoClient(url, { ...options.clientOptions, ignoreUndefined: true });
@@ -34,6 +36,7 @@ export class MongoRepository implements Repository {
     this.pendingInputs = this.database.collection('pending_inputs');
     this.pendingActions = this.database.collection('pending_actions');
     this.actionResults = this.database.collection('action_results');
+    this.testingRuns = this.database.collection('testing_runs');
   }
 
   public async initialize(): Promise<void> {
@@ -43,7 +46,8 @@ export class MongoRepository implements Repository {
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
-      this.actionResults.createIndex({ taskId: 1 })
+      this.actionResults.createIndex({ taskId: 1 }),
+      this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true })
     ]);
   }
 
@@ -195,6 +199,34 @@ export class MongoRepository implements Repository {
     const document = await this.actionResults.findOne({ _id: actionId });
     return document === null ? undefined : sessionActionResultFromDocument(document);
   }
+
+  public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
+    try {
+      await this.testingRuns.insertOne({ ...run, _id: run.id });
+      return true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  public async getTestingRun(id: string): Promise<TestingRunRecord | undefined> {
+    const document = await this.testingRuns.findOne({ _id: id });
+    return document === null ? undefined : testingRunFromDocument(document);
+  }
+
+  public async getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined> {
+    const document = await this.testingRuns.findOne({ userId, idempotencyKey });
+    return document === null ? undefined : testingRunFromDocument(document);
+  }
+
+  public async replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean> {
+    const result = await this.testingRuns.replaceOne(
+      { _id: run.id, recordVersion: expectedRecordVersion },
+      { ...run, _id: run.id }
+    );
+    return result.modifiedCount === 1;
+  }
 }
 
 const withoutId = (document: Document): Record<string, unknown> => {
@@ -212,3 +244,7 @@ const handoffFromDocument = (document: Document): HandoffLink => withoutId(docum
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
 const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
+const testingRunFromDocument = (document: Document): TestingRunRecord => withoutId(document) as unknown as TestingRunRecord;
+
+const isDuplicateKeyError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;

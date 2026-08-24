@@ -33,6 +33,8 @@ import { DevIdentityResolver, type IdentityResolver, type ResolvedIdentity } fro
 import type { OpenApiDocument } from '../openapi.js';
 import { SessionService, type SessionServiceOptions } from '../services/session-service.js';
 import { routeSessionRequest } from './session-routes.js';
+import { TestingRunService } from '../services/testing-run-service.js';
+import { routeTestingRunRequest } from './testing-run-routes.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -42,6 +44,8 @@ export interface ServerOptions {
   openApiDocument?: OpenApiDocument;
   sessionService?: SessionService;
   session?: SessionServiceOptions;
+  testingRunService?: TestingRunService;
+  testingCursorSecret?: string;
 }
 
 export const defaultIdentityResolver: IdentityResolver = new DevIdentityResolver();
@@ -53,6 +57,10 @@ export const createApiServer = (
 ): Server => {
   const identities = options.identityResolver ?? defaultIdentityResolver;
   const sessions = options.sessionService ?? new SessionService(service, repository, options.session);
+  const testingRuns = options.testingRunService ?? new TestingRunService(repository, {
+    cursorSecret: options.testingCursorSecret ?? 'development-testing-cursor-secret',
+    clock: options.clock
+  });
   return createServer(async (request, response) => {
     try {
       const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
@@ -70,7 +78,7 @@ export const createApiServer = (
           return send(response, 503, { status: 'degraded' });
         }
       }
-      await route(request, response, service, sessions, repository, identities, options);
+      await route(request, response, service, sessions, testingRuns, repository, identities, options);
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;
       const validation = error instanceof z.ZodError
@@ -87,7 +95,8 @@ export const createApiServer = (
       send(response, mapped?.status ?? 500, {
         error: {
           code: mapped?.code ?? 'internal_error',
-          message: mapped?.message ?? 'internal server error'
+          message: mapped?.message ?? 'internal server error',
+          ...(talos?.details ?? {})
         }
       });
     }
@@ -99,6 +108,7 @@ const route = async (
   response: ServerResponse,
   service: TaskService,
   sessions: SessionService,
+  testingRuns: TestingRunService,
   repository: Repository,
   identities: IdentityResolver,
   options: ServerOptions
@@ -124,6 +134,18 @@ const route = async (
 
   const identity = await requireIdentity(request, identities);
   const userId = identity.userId;
+  if (parts[1] === 'tools' && parts[2] === 'testing') {
+    const body = ['POST', 'PUT'].includes(method) ? await readBody(request, options.maxBodyBytes) : {};
+    const routed = await routeTestingRunRequest({
+      method,
+      parts,
+      searchParams: url.searchParams,
+      body,
+      identity,
+      service: testingRuns
+    });
+    if (routed !== undefined) return send(response, routed.status, routed.body);
+  }
   if (parts[1] === 'sessions') {
     const body = method === 'POST' ? await readBody(request, options.maxBodyBytes) : {};
     const routed = await routeSessionRequest({ method, parts, searchParams: url.searchParams, body, identity, sessions });

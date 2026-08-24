@@ -14,6 +14,65 @@ servers:
 security:
   - nyxIdentity: []
 paths:
+  /v1/tools/testing/capabilities:
+    get:
+      operationId: getTestingCapabilities
+      responses:
+        '200': { description: Bounded Testing Tool capabilities, content: { application/json: { schema: { $ref: '#/components/schemas/TestingCapabilities' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/tools/testing/runs/{run_id}:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    put:
+      operationId: submitTestingRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TestingToolRequest' }
+      responses:
+        '200': { description: Idempotent replay, content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunAcceptance' } } } }
+        '201': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunAcceptance' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    get:
+      operationId: getTestingRun
+      responses:
+        '200': { description: Bounded immutable run snapshot, content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunSnapshot' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/tools/testing/runs/{run_id}/events:
+    parameters:
+      - { $ref: '#/components/parameters/TestingRunId' }
+      - { name: cursor, in: query, required: false, schema: { type: string, minLength: 32, maxLength: 4096 }, description: Opaque exclusive cursor. }
+      - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+    get:
+      operationId: listTestingRunEvents
+      responses:
+        '200': { description: Stable bounded event page, content: { application/json: { schema: { $ref: '#/components/schemas/TestingEventPage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { description: Cursor expired; resync from the replacement snapshot and cursor., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCursorExpiredError' } } } }
+  /v1/tools/testing/runs/{run_id}:cancel:
+    parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
+    post:
+      operationId: cancelTestingRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TestingCancelRequest' }
+      responses:
+        '200': { description: Cancel intent acknowledgement, content: { application/json: { schema: { $ref: '#/components/schemas/TestingCancelAck' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/tasks:
     post:
       operationId: submitTask
@@ -443,6 +502,7 @@ components:
     SessionId: { name: id, in: path, required: true, schema: { type: string } }
     ActionId: { name: actionId, in: path, required: true, schema: { type: string } }
     WaitSeconds: { name: wait_seconds, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 25, default: 25 }, description: Bounded long-poll duration, capped below upstream proxy timeouts. }
+    TestingRunId: { name: run_id, in: path, required: true, schema: { $ref: '#/components/schemas/TestingRunIdValue' } }
   securitySchemes:
     nyxIdentity: { type: apiKey, in: header, name: X-NyxID-Identity-Token, description: Propagated NyxID identity token; maps the task to a user. }
     workerToken:
@@ -462,6 +522,432 @@ components:
       description: Phase 2/3 machinery is not implemented in Phase 1.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
+    Sha256Digest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+    Identifier: { type: string, minLength: 1, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+    TestingRunIdValue: { type: string, minLength: 1, maxLength: 255, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$' }
+    IdempotencyKey: { type: string, minLength: 1, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+    TalosReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^talos://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
+    AuthorizationReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^authorization://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
+    ArtifactReference: { type: string, minLength: 1, maxLength: 2048, pattern: '^artifact://[A-Za-z0-9][A-Za-z0-9.-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)+$' }
+    TestingCancelReason:
+      type: string
+      enum: [user_requested, deadline_exceeded, authorization_revoked, policy_revoked, system_shutdown]
+    TestingControlStatus:
+      type: string
+      enum: [submitted, reserved, claimed, local_accepted, running, cancel_requested, closing, reconcile_required, completed, failed, cancelled, abandoned]
+    TestingExecutionOutcome:
+      type: string
+      enum: [not_started, executing, passed, failed, blocked, error, cancelled, lost_or_inconclusive, unobserved]
+    TestingEvidenceOutcome:
+      type: string
+      enum: [not_required, staging, complete, partial, unavailable, policy_blocked]
+    TestingUploadOutcome:
+      type: string
+      enum: [not_required, pending, uploaded, upload_expired]
+    TestingCleanupOutcome:
+      type: string
+      enum: [not_required, pending, complete, residual_retryable, residual_blocking, unobserved]
+    ArtifactPointer:
+      type: object
+      additionalProperties: false
+      required: [ref, digest]
+      properties:
+        ref: { $ref: '#/components/schemas/ArtifactReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    VersionedArtifactPointer:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest]
+      properties:
+        schema: { $ref: '#/components/schemas/Identifier' }
+        ref: { $ref: '#/components/schemas/ArtifactReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    TestingInputs:
+      type: object
+      additionalProperties: false
+      required: [schema_version, project_pack_snapshot, test_selection, testing_design_input_set, source_revision, structured_plan, environment_profile, testing_package]
+      properties:
+        schema_version: { const: talos.testing-input-references/v1 }
+        project_pack_snapshot:
+          allOf:
+            - { $ref: '#/components/schemas/VersionedArtifactPointer' }
+            - { properties: { schema: { const: pql.project-pack-snapshot/v1 } } }
+        test_selection:
+          allOf:
+            - { $ref: '#/components/schemas/VersionedArtifactPointer' }
+            - { properties: { schema: { const: pql.test-selection/v1 } } }
+        testing_design_input_set:
+          allOf:
+            - { $ref: '#/components/schemas/VersionedArtifactPointer' }
+            - { properties: { schema: { const: pql.testing-design-input-set.v1 } } }
+        structured_plan:
+          allOf:
+            - { $ref: '#/components/schemas/VersionedArtifactPointer' }
+            - { properties: { schema: { const: testing-structured-plan.v2 } } }
+        environment_profile: { $ref: '#/components/schemas/ArtifactPointer' }
+        source_revision:
+          type: object
+          additionalProperties: false
+          required: [repository_id, exact_revision, ref, digest]
+          properties:
+            repository_id: { $ref: '#/components/schemas/Identifier' }
+            exact_revision: { type: string, pattern: '^(?:[a-f0-9]{40}|[a-f0-9]{64})$' }
+            ref: { $ref: '#/components/schemas/ArtifactReference' }
+            digest: { $ref: '#/components/schemas/Sha256Digest' }
+        testing_package: { $ref: '#/components/schemas/TestingPackageReference' }
+    TestingBudgets:
+      type: object
+      additionalProperties: false
+      required: [wall_time_ms, max_cases, max_actions, max_events, max_screenshots, max_screenshot_bytes, max_json_evidence_bytes, max_total_artifact_bytes]
+      properties:
+        wall_time_ms: { type: integer, minimum: 1, maximum: 600000 }
+        max_cases: { type: integer, minimum: 1, maximum: 20 }
+        max_actions: { type: integer, minimum: 1, maximum: 200 }
+        max_events: { type: integer, minimum: 1, maximum: 2000 }
+        max_screenshots: { type: integer, minimum: 0, maximum: 20 }
+        max_screenshot_bytes: { type: integer, minimum: 1, maximum: 5242880 }
+        max_json_evidence_bytes: { type: integer, minimum: 1, maximum: 1048576 }
+        max_total_artifact_bytes: { type: integer, minimum: 1, maximum: 52428800 }
+    TestingPolicy:
+      type: object
+      additionalProperties: false
+      required: [network_scope, environment_port_handle_policy, allowed_actions, allowed_evidence_media, secret_refs, budgets]
+      properties:
+        network_scope: { const: environment_owned_loopback_exact_origins }
+        environment_port_handle_policy:
+          type: object
+          additionalProperties: false
+          required: [source, allow_unowned_loopback]
+          properties: { source: { const: current_run_owned_handles }, allow_unowned_loopback: { const: false } }
+        allowed_actions: { type: array, minItems: 1, maxItems: 11, items: { type: string, enum: [navigate, click, type, key, wait, screenshot, extract-structured-dom, assert-visible, assert-text, assert-url] } }
+        allowed_evidence_media: { type: array, minItems: 1, maxItems: 2, items: { type: string, enum: [image/png, application/vnd.fkst.testing.sanitized+json] } }
+        secret_refs: { type: array, maxItems: 0 }
+        budgets: { $ref: '#/components/schemas/TestingBudgets' }
+    TestingPolicyReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest]
+      properties:
+        schema: { const: talos.testing-execution-policy/v1 }
+        ref: { $ref: '#/components/schemas/TalosReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    TestingBudgetsReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest]
+      properties:
+        schema: { const: talos.testing-budgets/v1 }
+        ref: { $ref: '#/components/schemas/TalosReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    TestingPolicyBinding:
+      type: object
+      additionalProperties: false
+      required: [policy, budgets]
+      properties:
+        policy: { $ref: '#/components/schemas/TestingPolicyReference' }
+        budgets: { $ref: '#/components/schemas/TestingBudgetsReference' }
+    TestingToolRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, idempotency_key, display_goal, inputs, execution_profile, placement_requirements, policy_binding, policy]
+      properties:
+        schema_version: { const: talos.testing-tool-request/v1 }
+        idempotency_key: { $ref: '#/components/schemas/IdempotencyKey' }
+        display_goal: { type: string, minLength: 1, maxLength: 1000 }
+        inputs: { $ref: '#/components/schemas/TestingInputs' }
+        execution_profile: { const: local_qa_agent_mvp }
+        placement_requirements:
+          type: object
+          additionalProperties: false
+          required: [testing_runtime]
+          properties: { testing_runtime: { const: local-qa-mvp/v1 } }
+        policy_binding: { $ref: '#/components/schemas/TestingPolicyBinding' }
+        policy: { $ref: '#/components/schemas/TestingPolicy' }
+    TestingCapabilities:
+      type: object
+      additionalProperties: false
+      required: [schema_version, planning_contracts, tool_contracts, task_contracts, execution_profiles, runtime_capabilities, result_contracts, backends, browsers, secret_refs_supported, max_concurrency_per_machine, limits]
+      properties:
+        schema_version: { const: talos.testing-capabilities/v1 }
+        planning_contracts: { type: array, minItems: 3, maxItems: 3, prefixItems: [{ const: pql.project-pack-snapshot/v1 }, { const: pql.test-selection/v1 }, { const: pql.testing-design-input-set.v1 }] }
+        tool_contracts: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: talos.testing-tool-request/v1 }] }
+        task_contracts: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: talos.testing-task/v1 }] }
+        execution_profiles: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: local_qa_agent_mvp }] }
+        runtime_capabilities: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: local-qa-mvp/v1 }] }
+        result_contracts: { type: array, minItems: 3, maxItems: 3, prefixItems: [{ const: testing-case-result-set.v2 }, { const: testing-evidence-manifest.v1 }, { const: qa.local-cleanup-receipt/v2 }] }
+        backends: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: browser }] }
+        browsers: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: chromium }] }
+        secret_refs_supported: { const: false }
+        max_concurrency_per_machine: { const: 1 }
+        limits: { $ref: '#/components/schemas/TestingBudgets' }
+    TestingRunAcceptance:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, accepted, replayed, control_status, request_digest, created_at]
+      properties:
+        schema_version: { const: talos.testing-run-acceptance/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        accepted: { const: true }
+        replayed: { type: boolean }
+        control_status: { $ref: '#/components/schemas/TestingControlStatus' }
+        request_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        created_at: { type: string, format: date-time }
+    TestingRunAttempt:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, task_id, generation]
+      properties:
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+    TestingRunProgress:
+      type: object
+      additionalProperties: false
+      required: [phase, completed_cases, total_cases, last_event_sequence]
+      properties:
+        phase: { $ref: '#/components/schemas/Identifier' }
+        completed_cases: { type: integer, minimum: 0 }
+        total_cases: { type: integer, minimum: 0 }
+        last_event_sequence: { type: integer, minimum: 0 }
+    TestingRunSummary:
+      type: object
+      additionalProperties: false
+      required: [total, passed, failed, blocked, error]
+      properties:
+        total: { type: integer, minimum: 0 }
+        passed: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        blocked: { type: integer, minimum: 0 }
+        error: { type: integer, minimum: 0 }
+    TestingAttemptBinding:
+      type: object
+      additionalProperties: false
+      required: [run_id, task_id, attempt_id, generation, fence_token]
+      properties:
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+    TestingCaseResultSetReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest, binding]
+      properties:
+        schema: { const: testing-case-result-set.v2 }
+        ref: { $ref: '#/components/schemas/ArtifactReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
+    TestingEvidenceManifestReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest, binding]
+      properties:
+        schema: { const: testing-evidence-manifest.v1 }
+        ref: { $ref: '#/components/schemas/ArtifactReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
+    TestingCleanupReceiptReference:
+      type: object
+      additionalProperties: false
+      required: [schema, ref, digest, binding]
+      properties:
+        schema: { const: qa.local-cleanup-receipt/v2 }
+        ref: { $ref: '#/components/schemas/ArtifactReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
+    TestingTerminalRefs:
+      type: object
+      additionalProperties: false
+      required: [schema_version, binding]
+      properties:
+        schema_version: { const: talos.testing-terminal-refs/v1 }
+        binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
+        case_result_set: { $ref: '#/components/schemas/TestingCaseResultSetReference' }
+        evidence_manifest: { $ref: '#/components/schemas/TestingEvidenceManifestReference' }
+        cleanup_receipt: { $ref: '#/components/schemas/TestingCleanupReceiptReference' }
+    TestingSafeError:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable]
+      properties:
+        code: { $ref: '#/components/schemas/Identifier' }
+        message: { type: string, minLength: 1, maxLength: 4096 }
+        retryable: { type: boolean }
+    TestingRunSnapshot:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, snapshot_version, snapshot_ref, snapshot_digest, resume_cursor, control_status, execution_outcome, evidence_outcome, upload_outcome, cleanup_outcome, attempt, progress, summary, results, safe_error, created_at, updated_at]
+      properties:
+        schema_version: { const: talos.testing-run-snapshot/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        snapshot_version: { type: integer, minimum: 1 }
+        snapshot_ref: { $ref: '#/components/schemas/TalosReference' }
+        snapshot_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        resume_cursor: { type: string, minLength: 32, maxLength: 4096 }
+        control_status: { $ref: '#/components/schemas/TestingControlStatus' }
+        execution_outcome: { $ref: '#/components/schemas/TestingExecutionOutcome' }
+        evidence_outcome: { $ref: '#/components/schemas/TestingEvidenceOutcome' }
+        upload_outcome: { $ref: '#/components/schemas/TestingUploadOutcome' }
+        cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' }
+        attempt: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingRunAttempt' }] }
+        progress: { $ref: '#/components/schemas/TestingRunProgress' }
+        summary: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingRunSummary' }] }
+        results: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingTerminalRefs' }] }
+        safe_error: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingSafeError' }] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TestingRunEvent:
+      type: object
+      additionalProperties: false
+      required: [sequence, type, time, data, event_digest]
+      properties:
+        sequence: { type: integer, minimum: 1 }
+        type: { type: string, enum: [run.submitted, run.reserved, attempt.claimed, attempt.local_accepted, run.started, run.cancel_requested, run.closing, run.reconcile_required, run.completed, run.failed, run.cancelled, run.abandoned] }
+        time: { type: string, format: date-time }
+        data: { type: object }
+        event_digest: { $ref: '#/components/schemas/Sha256Digest' }
+      discriminator: { propertyName: type }
+      oneOf:
+        - { properties: { type: { const: run.submitted }, data: { $ref: '#/components/schemas/TestingRunSubmittedData' } } }
+        - { properties: { type: { const: run.reserved }, data: { $ref: '#/components/schemas/TestingRunReservedData' } } }
+        - { properties: { type: { const: attempt.claimed }, data: { $ref: '#/components/schemas/TestingAttemptClaimedData' } } }
+        - { properties: { type: { const: attempt.local_accepted }, data: { $ref: '#/components/schemas/TestingAttemptAcceptedData' } } }
+        - { properties: { type: { const: run.started }, data: { $ref: '#/components/schemas/TestingAttemptAcceptedData' } } }
+        - { properties: { type: { const: run.cancel_requested }, data: { $ref: '#/components/schemas/TestingRunCancelRequestedData' } } }
+        - { properties: { type: { const: run.closing }, data: { $ref: '#/components/schemas/TestingRunReasonData' } } }
+        - { properties: { type: { const: run.reconcile_required }, data: { $ref: '#/components/schemas/TestingRunReconcileData' } } }
+        - { properties: { type: { const: run.completed }, data: { $ref: '#/components/schemas/TestingRunCompletedData' } } }
+        - { properties: { type: { const: run.failed }, data: { $ref: '#/components/schemas/TestingRunFailedData' } } }
+        - { properties: { type: { const: run.cancelled }, data: { $ref: '#/components/schemas/TestingRunCancelledData' } } }
+        - { properties: { type: { const: run.abandoned }, data: { $ref: '#/components/schemas/TestingRunReasonData' } } }
+    TestingRunSubmittedData:
+      type: object
+      additionalProperties: false
+      required: [request_digest]
+      properties: { request_digest: { $ref: '#/components/schemas/Sha256Digest' } }
+    TestingRunReservedData:
+      type: object
+      additionalProperties: false
+      required: [task_id]
+      properties: { task_id: { $ref: '#/components/schemas/Identifier' } }
+    TestingAttemptClaimedData:
+      type: object
+      additionalProperties: false
+      required: [task_id, attempt_id, generation, machine_id]
+      properties:
+        task_id: { $ref: '#/components/schemas/Identifier' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+    TestingAttemptAcceptedData:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, generation]
+      properties:
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+    TestingRunCancelRequestedData:
+      type: object
+      additionalProperties: false
+      required: [reason_code]
+      properties: { reason_code: { $ref: '#/components/schemas/TestingCancelReason' } }
+    TestingRunReasonData:
+      type: object
+      additionalProperties: false
+      required: [reason_code]
+      properties: { reason_code: { $ref: '#/components/schemas/Identifier' } }
+    TestingRunReconcileData:
+      type: object
+      additionalProperties: false
+      required: [attempt_id, reason_code]
+      properties:
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        reason_code: { $ref: '#/components/schemas/Identifier' }
+    TestingRunCompletedData:
+      type: object
+      additionalProperties: false
+      required: [execution_outcome]
+      properties: { execution_outcome: { $ref: '#/components/schemas/TestingExecutionOutcome' } }
+    TestingRunFailedData:
+      type: object
+      additionalProperties: false
+      required: [error_code]
+      properties: { error_code: { $ref: '#/components/schemas/Identifier' } }
+    TestingRunCancelledData:
+      type: object
+      additionalProperties: false
+      required: [cleanup_outcome]
+      properties: { cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' } }
+    TestingEventPage:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, events, next_cursor, has_more]
+      properties:
+        schema_version: { const: talos.testing-event-page/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        events: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/TestingRunEvent' } }
+        next_cursor: { type: string, minLength: 32, maxLength: 4096 }
+        has_more: { type: boolean }
+    TestingCancelRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, idempotency_scope, idempotency_key, canonical_request_digest, reason]
+      properties:
+        schema_version: { const: talos.testing-cancel-request/v1 }
+        idempotency_scope: { type: string, minLength: 1, maxLength: 768 }
+        idempotency_key: { $ref: '#/components/schemas/IdempotencyKey' }
+        canonical_request_digest: { $ref: '#/components/schemas/Sha256Digest' }
+        reason: { $ref: '#/components/schemas/TestingCancelReason' }
+    TestingCancelAck:
+      type: object
+      additionalProperties: false
+      required: [schema_version, run_id, accepted, replayed, already_terminal, control_status, canonical_request_digest]
+      properties:
+        schema_version: { const: talos.testing-cancel-ack/v1 }
+        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        accepted: { const: true }
+        replayed: { type: boolean }
+        already_terminal: { type: boolean }
+        control_status: { $ref: '#/components/schemas/TestingControlStatus' }
+        canonical_request_digest: { $ref: '#/components/schemas/Sha256Digest' }
+    TestingPackageReference:
+      type: object
+      additionalProperties: false
+      required: [package_id, version, digest]
+      properties:
+        package_id: { $ref: '#/components/schemas/Identifier' }
+        version: { type: string, minLength: 1, maxLength: 128, pattern: '^\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    LocalRequestAuthorizationReference:
+      type: object
+      additionalProperties: false
+      required: [ref, digest, expires_at]
+      properties:
+        ref: { $ref: '#/components/schemas/AuthorizationReference' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        expires_at: { type: string, format: date-time }
+    TestingTask:
+      type: object
+      additionalProperties: false
+      required: [schema_version, id, kind, interaction, qa_run_id, dispatch_attempt_id, generation, machine_id, inputs, runner, policy_ref, budgets_ref, local_request_authorization, expected_runtime_capability, deadline]
+      properties:
+        schema_version: { const: talos.testing-task/v1 }
+        id: { $ref: '#/components/schemas/Identifier' }
+        kind: { const: testing }
+        interaction: { const: managed }
+        qa_run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        dispatch_attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        machine_id: { $ref: '#/components/schemas/Identifier' }
+        inputs: { $ref: '#/components/schemas/TestingInputs' }
+        runner: { $ref: '#/components/schemas/TestingPackageReference' }
+        policy_ref: { $ref: '#/components/schemas/TestingPolicyReference' }
+        budgets_ref: { $ref: '#/components/schemas/TestingBudgetsReference' }
+        local_request_authorization: { $ref: '#/components/schemas/LocalRequestAuthorizationReference' }
+        expected_runtime_capability: { const: local-qa-mvp/v1 }
+        deadline: { type: string, format: date-time }
     TaskCreate:
       type: object
       required: [kind, goal]
@@ -711,6 +1197,23 @@ components:
       type: object
       required: [error]
       properties: { error: { $ref: '#/components/schemas/TaskError' } }
+    TestingCursorExpiredError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, retryable, replacement_cursor, snapshot_ref, snapshot_version, snapshot_digest]
+          properties:
+            code: { const: cursor_expired }
+            message: { type: string, minLength: 1 }
+            retryable: { const: true }
+            replacement_cursor: { type: string, minLength: 32, maxLength: 4096 }
+            snapshot_ref: { $ref: '#/components/schemas/TalosReference' }
+            snapshot_version: { type: integer, minimum: 1 }
+            snapshot_digest: { $ref: '#/components/schemas/Sha256Digest' }
     WebhookEvent:
       type: object
       required: [id, type, taskId, userId, timestamp, payload]

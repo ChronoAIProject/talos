@@ -13,6 +13,7 @@ import type { Server } from 'node:http';
 import { createLogger } from './util/logger.js';
 import { DevIdentityResolver, JwtIdentityResolver, type IdentityResolver } from './identity.js';
 import { loadOpenApiDocument } from './openapi.js';
+import { TestingRunService } from './services/testing-run-service.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -45,10 +46,12 @@ export const createControlPlane = (
     onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
     logger
   });
+  const testingRuns = new TestingRunService(repository, { cursorSecret: webhookSecret, clock: Date.now });
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
     identityResolver: options.identityResolver,
     openApiDocument,
+    testingRunService: testingRuns,
     clock: Date.now
   }) as ControlPlaneServer;
   server.repository = repository;
@@ -88,9 +91,11 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
 }
 
 export * from './domain/types.js';
+export * from './domain/testing-types.js';
 export * from './domain/schemas.js';
 export * from './domain/errors.js';
 export * from './services/task-service.js';
+export * from './services/testing-run-service.js';
 export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';
@@ -100,5 +105,6 @@ export * from './storage/memory-repository.js';
 export * from './storage/mongo-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';
+export * from './http/testing-run-routes.js';
 export * from './identity.js';
 export * from './openapi.js';

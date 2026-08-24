@@ -1,8 +1,8 @@
-import type { BrowserAction } from '@talos/testing-protocol';
+import type { BrowserAction, TestingTask as TestingTaskPayload } from '@talos/testing-protocol';
 
-export type TaskKind = 'browse' | 'computer_use';
+export type TaskKind = 'browse' | 'computer_use' | 'testing';
 export type TaskMode = 'read_only' | 'act';
-export type TaskInteraction = 'autonomous' | 'interactive';
+export type TaskInteraction = 'autonomous' | 'interactive' | 'managed';
 export type TaskStatus =
   | 'submitted'
   | 'claimed'
@@ -47,10 +47,9 @@ export interface TaskFinding {
   value: string | number | boolean | null | string[];
 }
 
-export interface Task {
+interface TaskBase {
   id: string;
   userId: string;
-  kind: TaskKind;
   goal: string;
   siteHint?: string;
   profileId?: string;
@@ -58,7 +57,6 @@ export interface Task {
   requesterGroups?: readonly string[];
   constraints: TaskConstraints;
   mode: TaskMode;
-  interaction: TaskInteraction;
   callback?: string;
   status: TaskStatus;
   queuePriority?: number;
@@ -77,6 +75,19 @@ export interface Task {
   pendingActionId?: string;
   lastActionId?: string;
 }
+
+export interface BrowserTask extends TaskBase {
+  kind: 'browse' | 'computer_use';
+  interaction: 'autonomous' | 'interactive';
+}
+
+export interface TestingQueueTask extends TaskBase {
+  kind: 'testing';
+  interaction: 'managed';
+  testing: TestingTaskPayload;
+}
+
+export type Task = BrowserTask | TestingQueueTask;
 
 export interface PublicTask {
   id: string;

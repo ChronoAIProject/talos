@@ -1,4 +1,5 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from './repository.js';
 
 export class MemoryRepository implements Repository {
@@ -11,6 +12,8 @@ export class MemoryRepository implements Repository {
   private readonly pendingInputs = new Map<string, TaskInput>();
   private readonly pendingActions = new Map<string, PendingSessionAction>();
   private readonly actionResults = new Map<string, SessionActionResult>();
+  private readonly testingRuns = new Map<string, TestingRunRecord>();
+  private readonly testingRunIdempotency = new Map<string, string>();
 
   public async ping(): Promise<void> {}
 
@@ -145,5 +148,29 @@ export class MemoryRepository implements Repository {
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
     return this.actionResults.get(actionId);
+  }
+
+  public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
+    const idempotencyIndex = `${run.userId}\u0000${run.idempotencyKey}`;
+    if (this.testingRuns.has(run.id) || this.testingRunIdempotency.has(idempotencyIndex)) return false;
+    this.testingRuns.set(run.id, run);
+    this.testingRunIdempotency.set(idempotencyIndex, run.id);
+    return true;
+  }
+
+  public async getTestingRun(id: string): Promise<TestingRunRecord | undefined> {
+    return this.testingRuns.get(id);
+  }
+
+  public async getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined> {
+    const id = this.testingRunIdempotency.get(`${userId}\u0000${idempotencyKey}`);
+    return id === undefined ? undefined : this.testingRuns.get(id);
+  }
+
+  public async replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean> {
+    const current = this.testingRuns.get(run.id);
+    if (current?.recordVersion !== expectedRecordVersion) return false;
+    this.testingRuns.set(run.id, run);
+    return true;
   }
 }

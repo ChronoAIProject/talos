@@ -1,0 +1,242 @@
+import { describe, expect, it } from 'vitest';
+import {
+  computeTestingCancelRequestDigest,
+  digestJson,
+  type TestingCancelRequest
+} from '@talos/testing-protocol';
+import { MemoryRepository } from '../storage/memory-repository.js';
+import {
+  TESTING_CANCEL_RECORD_RETENTION,
+  TESTING_CURSOR_PAGE_RETENTION,
+  TestingRunService
+} from './testing-run-service.js';
+
+const digest = `sha256:${'a'.repeat(64)}`;
+const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
+
+const request = (key = 'submit-key') => {
+  const policy = {
+    network_scope: 'environment_owned_loopback_exact_origins' as const,
+    environment_port_handle_policy: {
+      source: 'current_run_owned_handles' as const,
+      allow_unowned_loopback: false as const
+    },
+    allowed_actions: ['navigate' as const],
+    allowed_evidence_media: ['image/png' as const],
+    secret_refs: [],
+    budgets: {
+      wall_time_ms: 600_000,
+      max_cases: 20,
+      max_actions: 200,
+      max_events: 2_000,
+      max_screenshots: 20,
+      max_screenshot_bytes: 5_242_880,
+      max_json_evidence_bytes: 1_048_576,
+      max_total_artifact_bytes: 52_428_800
+    }
+  };
+  return {
+    schema_version: 'talos.testing-tool-request/v1' as const,
+    idempotency_key: key,
+    display_goal: 'Verify login redirect',
+    inputs: {
+      schema_version: 'talos.testing-input-references/v1' as const,
+      project_pack_snapshot: pointer('pql.project-pack-snapshot/v1', 'artifact://pql/project-pack-snapshot/snapshot-1'),
+      test_selection: pointer('pql.test-selection/v1', 'artifact://pql/test-selection/selection-1'),
+      testing_design_input_set: pointer('pql.testing-design-input-set.v1', 'artifact://pql/testing-design-input-set/input-1'),
+      source_revision: {
+        repository_id: 'repo-example',
+        exact_revision: '0123456789abcdef0123456789abcdef01234567',
+        ref: 'artifact://source/revision-1',
+        digest
+      },
+      structured_plan: pointer('testing-structured-plan.v2', 'artifact://plans/plan-1'),
+      environment_profile: { ref: 'artifact://environments/environment-1', digest },
+      testing_package: { package_id: 'testing-browser-runner', version: '1.0', digest }
+    },
+    execution_profile: 'local_qa_agent_mvp' as const,
+    placement_requirements: { testing_runtime: 'local-qa-mvp/v1' as const },
+    policy_binding: {
+      policy: {
+        schema: 'talos.testing-execution-policy/v1' as const,
+        ref: 'talos://policies/testing/policy-1',
+        digest: digestJson(policy)
+      },
+      budgets: {
+        schema: 'talos.testing-budgets/v1' as const,
+        ref: 'talos://policies/testing/budgets-1',
+        digest: digestJson(policy.budgets)
+      }
+    },
+    policy
+  };
+};
+
+const cancelRequest = (
+  runId: string,
+  key: string,
+  reason: TestingCancelRequest['reason'] = 'user_requested'
+) => {
+  const unsigned = {
+    schema_version: 'talos.testing-cancel-request/v1' as const,
+    idempotency_scope: `talos.testing.cancel:${runId}`,
+    idempotency_key: key,
+    reason
+  };
+  return {
+    ...unsigned,
+    canonical_request_digest: computeTestingCancelRequestDigest(runId, unsigned)
+  };
+};
+
+describe('TestingRunService', () => {
+  it('atomically replays concurrent submit and rejects run/key identity conflicts before side effects', async () => {
+    const repository = new MemoryRepository();
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      clock: () => Date.parse('2026-08-22T00:00:00.000Z')
+    });
+
+    const submissions = await Promise.all(Array.from({ length: 20 }, () => service.submit('run-1', 'user-1', request())));
+    expect(submissions.filter((item) => item.created)).toHaveLength(1);
+    expect(new Set(submissions.map((item) => item.acceptance.request_digest))).toHaveLength(1);
+    expect(submissions.filter((item) => item.acceptance.replayed)).toHaveLength(19);
+    expect(await repository.listQueuedTasks()).toEqual([]);
+
+    await expect(service.submit('run-1', 'user-1', { ...request(), display_goal: 'Changed' }))
+      .rejects.toMatchObject({ code: 'run_identity_conflict' });
+    await expect(service.submit('run-2', 'user-1', request()))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' });
+    await expect(service.submit('run:unsafe', 'user-1', request('unsafe-key'))).rejects.toBeDefined();
+    expect(await repository.getTestingRun('run-2')).toBeUndefined();
+    expect(await repository.getTestingRun('run:unsafe')).toBeUndefined();
+  });
+
+  it('returns stable snapshots and replay-stable opaque event pages across later state changes', async () => {
+    const repository = new MemoryRepository();
+    let now = Date.parse('2026-08-22T00:00:00.000Z');
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      clock: () => now
+    });
+    await service.submit('run-1', 'user-1', request());
+
+    const snapshot = await service.get('run-1', 'user-1');
+    expect(await service.get('run-1', 'user-1')).toEqual(snapshot);
+    expect(snapshot).toMatchObject({
+      control_status: 'submitted',
+      execution_outcome: 'not_started',
+      evidence_outcome: 'not_required',
+      cleanup_outcome: 'not_required'
+    });
+    const firstPage = await service.events('run-1', 'user-1', undefined, 1);
+    expect(firstPage.events.map((event) => event.type)).toEqual(['run.submitted']);
+
+    now += 1_000;
+    const cancel = cancelRequest('run-1', 'cancel-1');
+    expect(await service.cancel('run-1', 'user-1', cancel)).toMatchObject({
+      accepted: true,
+      replayed: false,
+      control_status: 'cancel_requested',
+      already_terminal: false
+    });
+    expect((await service.submit('run-1', 'user-1', request())).acceptance).toMatchObject({
+      replayed: true,
+      control_status: 'submitted'
+    });
+    const secondPage = await service.events('run-1', 'user-1', firstPage.next_cursor, 100);
+    expect(secondPage.events.map((event) => event.type)).toEqual(['run.cancel_requested']);
+    expect(await service.events('run-1', 'user-1', firstPage.next_cursor, 100)).toEqual(secondPage);
+    expect((await service.get('run-1', 'user-1')).snapshot_version).toBe(2);
+    await expect(service.events('run-1', 'user-1', `${firstPage.next_cursor}x`, 100))
+      .rejects.toMatchObject({ code: 'invalid_cursor' });
+  });
+
+  it('binds cached event pages to limit and rotates a bounded cursor epoch with resync metadata', async () => {
+    const repository = new MemoryRepository();
+    let now = Date.parse('2026-08-22T00:00:00.000Z');
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      clock: () => now
+    });
+    await service.submit('run-limit', 'user-1', request('limit-key'));
+    now += 1_000;
+    await service.cancel('run-limit', 'user-1', cancelRequest('run-limit', 'cancel-limit'));
+
+    expect((await service.events('run-limit', 'user-1', undefined, 100)).events).toHaveLength(2);
+    expect((await service.events('run-limit', 'user-1', undefined, 1)).events).toHaveLength(1);
+
+    await service.submit('run-pages', 'user-1', request('pages-key'));
+    let cursor = (await service.get('run-pages', 'user-1')).resume_cursor;
+    for (let index = Object.keys((await repository.getTestingRun('run-pages'))?.cursorPages ?? {}).length;
+      index < TESTING_CURSOR_PAGE_RETENTION;
+      index += 1) {
+      cursor = (await service.events('run-pages', 'user-1', cursor, 100)).next_cursor;
+    }
+
+    let replacementCursor: string | undefined;
+    await expect(service.events('run-pages', 'user-1', cursor, 100)).rejects.toSatisfy((error: unknown) => {
+      const candidate = error as { code?: string; status?: number; details?: Record<string, unknown> };
+      replacementCursor = candidate.details?.replacement_cursor as string | undefined;
+      return candidate.code === 'cursor_expired' && candidate.status === 410 &&
+        candidate.details?.retryable === true && typeof replacementCursor === 'string';
+    });
+    const rotated = await repository.getTestingRun('run-pages');
+    expect(rotated?.cursorEpoch).toBe(2);
+    expect(Object.keys(rotated?.cursorPages ?? {})).toHaveLength(0);
+
+    now += 1_000;
+    await service.cancel('run-pages', 'user-1', cancelRequest('run-pages', 'cancel-after-resync'));
+    if (replacementCursor === undefined) throw new Error('replacement cursor missing');
+    const resynced = await service.events('run-pages', 'user-1', replacementCursor, 100);
+    expect(resynced.events.map((event) => event.type)).toEqual(['run.cancel_requested']);
+  });
+
+  it('bounds the embedded cancel idempotency ledger', async () => {
+    const repository = new MemoryRepository();
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456'
+    });
+    await service.submit('run-cancel-ledger', 'user-1', request('cancel-ledger-key'));
+    for (let index = 0; index < TESTING_CANCEL_RECORD_RETENTION; index += 1) {
+      await service.cancel('run-cancel-ledger', 'user-1', cancelRequest('run-cancel-ledger', `cancel-${index}`));
+    }
+    await expect(service.cancel(
+      'run-cancel-ledger',
+      'user-1',
+      cancelRequest('run-cancel-ledger', 'cancel-overflow')
+    )).rejects.toMatchObject({ code: 'idempotency_ledger_full', status: 409 });
+    expect(Object.keys((await repository.getTestingRun('run-cancel-ledger'))?.cancelRecords ?? {}))
+      .toHaveLength(TESTING_CANCEL_RECORD_RETENTION);
+  });
+
+  it('binds cancel idempotency to operation, run, key, and canonical digest', async () => {
+    const service = new TestingRunService(new MemoryRepository(), {
+      cursorSecret: 'testing-cursor-secret-123456'
+    });
+    await service.submit('run-1', 'user-1', request());
+    const cancel = cancelRequest('run-1', 'cancel-1');
+    await service.cancel('run-1', 'user-1', cancel);
+    expect(await service.cancel('run-1', 'user-1', cancel)).toMatchObject({ replayed: true });
+
+    await expect(service.cancel('run-1', 'user-1', {
+      ...cancelRequest('run-1', 'cancel-1', 'deadline_exceeded')
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' });
+    await expect(service.cancel('run-1', 'user-1', {
+      ...cancel,
+      idempotency_scope: 'talos.testing.cancel:other-run'
+    })).rejects.toMatchObject({ code: 'invalid_idempotency_scope' });
+    await expect(service.cancel('run-1', 'user-1', {
+      ...cancel,
+      canonical_request_digest: digest
+    })).rejects.toMatchObject({ code: 'request_digest_mismatch' });
+    await expect(service.get('run-1', 'user-2')).rejects.toMatchObject({ code: 'forbidden' });
+
+    for (const key of ['constructor', 'toString']) {
+      const requestWithPrototypeKey = cancelRequest('run-1', key);
+      expect(await service.cancel('run-1', 'user-1', requestWithPrototypeKey)).toMatchObject({ replayed: false });
+      expect(await service.cancel('run-1', 'user-1', requestWithPrototypeKey)).toMatchObject({ replayed: true });
+    }
+    await expect(service.cancel('run-1', 'user-1', cancelRequest('run-1', '__proto__'))).rejects.toBeDefined();
+  });
+});
