@@ -249,16 +249,31 @@ describe('Testing worker HTTP routes', () => {
       const heartbeat = await fetch(`${base}/v1/worker/testing/runs/run-http/heartbeat`, {
         method: 'POST',
         headers: workerHeaders,
-        body: JSON.stringify({ ...binding, extend_seconds: 10 })
+        body: JSON.stringify({
+          ...binding,
+          extend_seconds: 10,
+          progress: { phase: 'preparing', completed_cases: 0, total_cases: 1, runtime_event_sequence: 2 }
+        })
       });
       expect(heartbeat.status).toBe(200);
       expect(await heartbeat.json()).toMatchObject({ cancel_requested: false });
-      expect((await fetch(`${base}/v1/worker/testing/runs/run-http/local-accept`, {
+      const localAccept = await fetch(`${base}/v1/worker/testing/runs/run-http/local-accept`, {
         method: 'POST', headers: workerHeaders, body: JSON.stringify(binding)
-      })).status).toBe(200);
-      expect((await fetch(`${base}/v1/worker/testing/runs/run-http/running`, {
+      });
+      expect(localAccept.status).toBe(200);
+      expect(await localAccept.json()).toMatchObject({
+        schema_version: 'talos.testing-worker-mutation-ack/v1',
+        operation: 'local_accept',
+        run_id: 'run-http',
+        attempt_id: binding.attempt_id,
+        mutation_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        current_claim: { is_current: true }
+      });
+      const runningAck = await fetch(`${base}/v1/worker/testing/runs/run-http/running`, {
         method: 'POST', headers: workerHeaders, body: JSON.stringify(binding)
-      })).status).toBe(200);
+      });
+      expect(runningAck.status).toBe(200);
+      expect(await runningAck.json()).toMatchObject({ operation: 'running', control_status: 'running' });
 
       const terminalBinding = {
         run_id: 'run-http',
@@ -290,7 +305,11 @@ describe('Testing worker HTTP routes', () => {
         })
       });
       expect(result.status).toBe(200);
-      expect(await result.json()).toMatchObject({ run_id: 'run-http', control_status: 'completed' });
+      expect(await result.json()).toMatchObject({
+        operation: 'terminal', run_id: 'run-http', control_status: 'completed',
+        attempt_id: binding.attempt_id,
+        mutation_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
+      });
       expect(await (await fetch(`${base}/v1/tools/testing/runs/run-http`, { headers: userHeaders })).json())
         .toMatchObject({ control_status: 'completed', execution_outcome: 'passed' });
 
@@ -312,7 +331,7 @@ describe('Testing worker HTTP routes', () => {
       now += 1_001;
       await attempts.sweep();
       const reconcileClaimResponse = await fetch(
-        `${base}/v1/worker/testing/runs/run-reconcile/reconcile-claim`,
+        `${base}/v1/worker/testing/reconcile-claim`,
         {
           method: 'POST',
           headers: restartedWorkerHeaders,
@@ -424,7 +443,10 @@ describe('Testing worker HTTP routes', () => {
         })
       });
       expect(notAccepted.status).toBe(200);
-      expect(await notAccepted.json()).toMatchObject({ run_id: 'run-not-accepted', control_status: 'submitted' });
+      expect(await notAccepted.json()).toMatchObject({
+        operation: 'not_accepted', run_id: 'run-not-accepted', control_status: 'submitted',
+        mutation_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
+      });
       expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
 
       const currentMachine = await repository.getMachine('machine-1');

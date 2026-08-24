@@ -632,6 +632,12 @@ export const testingReconcileClosureSchema = z.object({
   }
 });
 
+export const testingLocalRequestAuthorizationReferenceSchema = z.object({
+  ref: authorizationReferenceSchema,
+  digest: sha256DigestSchema,
+  expires_at: timestampSchema
+}).strict();
+
 export const testingTaskSchema = z.object({
   schema_version: z.literal('talos.testing-task/v1'),
   id: identifierSchema,
@@ -658,11 +664,7 @@ export const testingTaskSchema = z.object({
     ref: talosReferenceSchema,
     digest: sha256DigestSchema
   }).strict(),
-  local_request_authorization: z.object({
-    ref: authorizationReferenceSchema,
-    digest: sha256DigestSchema,
-    expires_at: timestampSchema
-  }).strict(),
+  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema,
   expected_runtime_capability: z.literal('local-qa-mvp/v1'),
   deadline: timestampSchema
 }).strict().superRefine((value, context) => {
@@ -684,11 +686,7 @@ export const testingReconcileTaskSchema = z.object({
   fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   admission_nonce: requestNonceSchema,
   lease_claim: testingLeaseClaimReferenceSchema,
-  local_request_authorization: z.object({
-    ref: authorizationReferenceSchema,
-    digest: sha256DigestSchema,
-    expires_at: timestampSchema
-  }).strict(),
+  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema,
   deadline: timestampSchema
 }).strict();
 

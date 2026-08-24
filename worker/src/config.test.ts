@@ -6,6 +6,7 @@ import {
   defaultProfilePath,
   loadWorkerConfig,
   readWorkerConfigFile,
+  workerConfigToEnv,
   writeWorkerConfigFile
 } from './config.js';
 
@@ -60,6 +61,21 @@ describe('worker file configuration', () => {
 
   it('defaults interactive action polling to two seconds', () => {
     expect(loadWorkerConfig({}, stored).actionPollMs).toBe(2000);
+  });
+
+  it('requires the complete Runtime and authorization consumer configuration together', () => {
+    expect(() => loadWorkerConfig({ TALOS_TESTING_RUNTIME_URL: 'http://127.0.0.1:4317' }, stored))
+      .toThrow('testing Runtime and authorization resolver configuration must be provided together');
+    const config = loadWorkerConfig({
+      TALOS_TESTING_RUNTIME_URL: 'http://127.0.0.1:4317',
+      TALOS_TESTING_RUNTIME_CREDENTIAL: 'runtime-credential-1234',
+      TALOS_TESTING_AUTHORIZATION_RESOLVER_URL: 'https://authorization.example/resolve',
+      TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN: 'resolver-token-123456'
+    }, stored);
+    expect(workerConfigToEnv(config)).toMatchObject({
+      TALOS_TESTING_RUNTIME_URL: 'http://127.0.0.1:4317',
+      TALOS_TESTING_AUTHORIZATION_RESOLVER_URL: 'https://authorization.example/resolve'
+    });
   });
 
   it('defaults the profile root beneath the worker home directory', () => {

@@ -324,6 +324,19 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { description: Testing authorization provider unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /v1/worker/testing/reconcile-claim:
+    post:
+      security: [{ workerToken: [] }]
+      operationId: claimNextTestingReconcile
+      description: Discovers and issues fresh reconcile-only credentials for the next same-machine uncertain attempt.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerClaim' } } } }
+      responses:
+        '200': { description: Same-attempt reconcile task and private fresh lease token., content: { application/json: { schema: { $ref: '#/components/schemas/TestingReconcileClaimResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { description: Testing reconcile authorization provider unavailable., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /v1/worker/testing/runs/{run_id}/reconcile-claim:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:
@@ -357,7 +370,7 @@ paths:
       operationId: acceptTestingAttemptLocally
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingAttemptBindingRequest' } } } }
       responses:
-        '200': { description: Signed current-claim observation after durable local acceptance., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '200': { description: Exact mutation acknowledgement with signed current-claim observation., content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerMutationAck' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -369,7 +382,7 @@ paths:
       operationId: startTestingAttempt
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingAttemptBindingRequest' } } } }
       responses:
-        '200': { description: Signed current-claim observation after execution begins., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' } } } }
+        '200': { description: Exact mutation acknowledgement with signed current-claim observation., content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerMutationAck' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -381,7 +394,7 @@ paths:
       operationId: commitTestingAttemptResult
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitRequest' } } } }
       responses:
-        '200': { description: Terminal projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitAck' } } } }
+        '200': { description: Exact terminal mutation acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerMutationAck' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -394,7 +407,7 @@ paths:
       description: Same-machine terminal reconciliation for a durably accepted attempt; never starts or retries cases.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitRequest' } } } }
       responses:
-        '200': { description: Terminal projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingTerminalCommitAck' } } } }
+        '200': { description: Exact reconcile mutation acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerMutationAck' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -407,7 +420,7 @@ paths:
       description: Records an exact Runtime-verified no-local-acceptance fact before releasing or requeueing the attempt.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TestingNoLocalAcceptanceRequest' } } } }
       responses:
-        '200': { description: Updated run projection acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunMutationAck' } } } }
+        '200': { description: Exact no-local-acceptance mutation acknowledgement., content: { application/json: { schema: { $ref: '#/components/schemas/TestingWorkerMutationAck' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1260,6 +1273,15 @@ components:
         fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
         lease_token: { type: string, minLength: 1, maxLength: 512 }
         extend_seconds: { type: integer, minimum: 1, maximum: 300, default: 60 }
+        progress:
+          type: object
+          additionalProperties: false
+          required: [phase, completed_cases, total_cases, runtime_event_sequence]
+          properties:
+            phase: { $ref: '#/components/schemas/Identifier' }
+            completed_cases: { type: integer, minimum: 0 }
+            total_cases: { type: integer, minimum: 0 }
+            runtime_event_sequence: { type: integer, minimum: 0 }
     TestingHeartbeatResponse:
       type: object
       additionalProperties: false
@@ -1311,22 +1333,21 @@ components:
         summary: { $ref: '#/components/schemas/TestingRunSummary' }
         results: { $ref: '#/components/schemas/TestingTerminalRefs' }
         safe_error: { $ref: '#/components/schemas/TestingSafeError' }
-    TestingTerminalCommitAck:
+    TestingWorkerMutationAck:
       type: object
       additionalProperties: false
-      required: [run_id, control_status, snapshot_version]
+      required: [schema_version, operation, run_id, attempt_id, generation, fence_token, mutation_digest, control_status]
       properties:
+        schema_version: { const: talos.testing-worker-mutation-ack/v1 }
+        operation: { type: string, enum: [local_accept, running, terminal, reconcile_terminal, not_accepted] }
         run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
-        control_status: { type: string, enum: [completed, failed, cancelled] }
-        snapshot_version: { type: integer, minimum: 1 }
-    TestingRunMutationAck:
-      type: object
-      additionalProperties: false
-      required: [run_id, control_status, snapshot_version]
-      properties:
-        run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
+        attempt_id: { $ref: '#/components/schemas/Identifier' }
+        generation: { type: integer, minimum: 1 }
+        fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
+        mutation_digest: { $ref: '#/components/schemas/Sha256Digest' }
         control_status: { $ref: '#/components/schemas/TestingControlStatus' }
         snapshot_version: { type: integer, minimum: 1 }
+        current_claim: { $ref: '#/components/schemas/TestingCurrentClaimEnvelope' }
     TaskCreate:
       type: object
       required: [kind, goal]

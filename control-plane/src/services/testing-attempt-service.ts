@@ -30,6 +30,7 @@ import {
   type TestingExecutionOutcome,
   type TestingRunEvent,
   type TestingRunSummary,
+  type TestingRunProgress,
   type TestingSafeError,
   type TestingTask,
   type TestingReconcileClosure,
@@ -157,6 +158,10 @@ export interface TestingHeartbeatResult {
   readonly current_claim: TestingCurrentClaimEnvelope;
 }
 
+export interface TestingHeartbeatProgress extends Omit<TestingRunProgress, 'last_event_sequence'> {
+  readonly runtime_event_sequence: number;
+}
+
 export interface TestingTerminalCommit extends TestingAttemptBindingInput {
   readonly controlStatus: 'completed' | 'failed' | 'cancelled';
   readonly executionOutcome: TestingExecutionOutcome;
@@ -227,7 +232,8 @@ export class TestingAttemptService {
 
   public async heartbeat(
     input: TestingAttemptBindingInput,
-    extendSeconds: number
+    extendSeconds: number,
+    progress?: TestingHeartbeatProgress
   ): Promise<TestingHeartbeatResult> {
     if (!Number.isInteger(extendSeconds) || extendSeconds < 1 || extendSeconds > 300) {
       throw new TalosError('invalid_lease_extension', 'testing lease extension must be between 1 and 300 seconds', 400);
@@ -235,15 +241,30 @@ export class TestingAttemptService {
     for (let retries = 0; retries < 20; retries += 1) {
       const run = await this.requireRun(input.runId);
       const attempt = this.assertCurrentAttempt(run, input, 'heartbeat');
+      this.assertHeartbeatProgress(run, attempt, progress);
       const now = this.clock();
       const operationDeadline = this.operationDeadline(run, attempt);
       const expiresAt = new Date(Math.min(
         now + extendSeconds * 1_000,
         operationDeadline
       )).toISOString();
-      const updatedAttempt = { ...attempt, leaseExpiresAt: expiresAt, updatedAt: new Date(now).toISOString() };
+      const updatedAttempt = {
+        ...attempt,
+        leaseExpiresAt: expiresAt,
+        ...(progress === undefined ? {} : { runtimeEventSequence: progress.runtime_event_sequence }),
+        updatedAt: new Date(now).toISOString()
+      };
       const updated = this.withAttempt(run, updatedAttempt, {
         recordVersion: run.recordVersion + 1,
+        ...(progress === undefined ? {} : {
+          snapshotVersion: run.snapshotVersion + 1,
+          progress: {
+            phase: progress.phase,
+            completed_cases: progress.completed_cases,
+            total_cases: progress.total_cases,
+            last_event_sequence: run.progress.last_event_sequence
+          }
+        }),
         updatedAt: updatedAttempt.updatedAt
       });
       if (!await this.repository.replaceTestingRunWithinDeadline(
@@ -260,6 +281,31 @@ export class TestingAttemptService {
       };
     }
     throw new TalosError('concurrent_update', 'testing run changed too frequently', 409);
+  }
+
+  public async claimNextReconcile(workerId: string, machineId: string): Promise<TestingReconcileClaimResult> {
+    const candidates = (await this.repository.listTestingRuns())
+      .filter((run) => {
+        const attempt = this.currentAttempt(run);
+        return attempt?.machineId === machineId &&
+          ['acceptance_unknown', 'reconcile_required'].includes(attempt.status) &&
+          ['cancel_requested', 'reconcile_required'].includes(run.controlStatus);
+      })
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    for (const run of candidates) {
+      try {
+        return await this.claimReconcile(workerId, machineId, run.id);
+      } catch (error) {
+        if (error instanceof TalosError && [
+          'testing_reconcile_unavailable',
+          'testing_reconcile_deadline_exceeded',
+          'testing_reconcile_claim_limit',
+          'claim_superseded'
+        ].includes(error.code)) continue;
+        throw error;
+      }
+    }
+    throw notFound('no testing run requires same-machine reconcile');
   }
 
   public async claimReconcile(
@@ -1011,6 +1057,21 @@ export class TestingAttemptService {
     const actual = Buffer.from(hashSecret(input.leaseToken), 'hex');
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw new TalosError('invalid_testing_lease', 'testing lease token is invalid', 401);
+    }
+  }
+
+  private assertHeartbeatProgress(
+    run: TestingRunRecord,
+    attempt: TestingAttemptRecord,
+    progress: TestingHeartbeatProgress | undefined
+  ): void {
+    if (progress === undefined) return;
+    if (
+      progress.runtime_event_sequence < (attempt.runtimeEventSequence ?? 0) ||
+      progress.completed_cases < run.progress.completed_cases ||
+      progress.total_cases < run.progress.total_cases
+    ) {
+      throw new TalosError('stale_testing_progress', 'testing Runtime progress cannot move backwards', 409);
     }
   }
 

@@ -5,6 +5,10 @@ import { WorkerRuntime, type TaskEnvelope } from './runtime/client.js';
 import { ScriptedPlanner } from './runtime/planner.js';
 import { createWorkerLogger } from './runtime/logger.js';
 import { loadWorkerConfig } from './config.js';
+import { HttpTestingAuthorizationResolver } from './testing/authorization-resolver.js';
+import { HttpTestingWorkerClient, type TestingWorkerControlPlane } from './testing/control-plane-client.js';
+import { HttpLocalQARuntimeAdapter, type LocalQARuntimeAdapter } from './testing/runtime-adapter.js';
+import { TestingWorkerRuntime, type TestingAuthorizationResolver } from './testing/testing-executor.js';
 
 export { loadWorkerConfig } from './config.js';
 
@@ -19,6 +23,15 @@ export interface DaemonDependencies {
     createExecutor: (task: TaskEnvelope) => Executor | Promise<Executor>,
     config: ReturnType<typeof loadWorkerConfig>
   ) => WorkerRuntime;
+  createTestingControlPlane?: (
+    config: ReturnType<typeof loadWorkerConfig>
+  ) => TestingWorkerControlPlane;
+  createLocalQARuntimeAdapter?: (
+    config: ReturnType<typeof loadWorkerConfig>
+  ) => LocalQARuntimeAdapter;
+  createTestingAuthorizationResolver?: (
+    config: ReturnType<typeof loadWorkerConfig>
+  ) => TestingAuthorizationResolver;
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -49,15 +62,46 @@ export const runWorkerDaemon = async (
     sessionIdleMs: config.sessionIdleMs,
     logger: createWorkerLogger()
   });
+  const logger = createWorkerLogger();
+  const testingRuntime = config.testingRuntimeUrl === undefined
+    ? undefined
+    : new TestingWorkerRuntime({
+        controlPlane: dependencies.createTestingControlPlane?.(config) ?? new HttpTestingWorkerClient(config),
+        runtime: dependencies.createLocalQARuntimeAdapter?.(config) ?? new HttpLocalQARuntimeAdapter({
+          baseUrl: config.testingRuntimeUrl,
+          credential: config.testingRuntimeCredential
+        }),
+        authorizations: dependencies.createTestingAuthorizationResolver?.(config) ?? new HttpTestingAuthorizationResolver({
+          url: config.testingAuthorizationResolverUrl,
+          token: config.testingAuthorizationResolverToken
+        }),
+        heartbeatMs: config.heartbeatMs,
+        pollMs: config.pollMs,
+        logger
+      });
   let stopped = false;
   const signalStop = (): void => {
     stopped = true;
+    testingRuntime?.stop();
   };
   const loop = async (): Promise<void> => {
     let backoff = config.pollMs;
     while (!stopped) {
       try {
-        await runtime.runOnce();
+        let handledTesting = false;
+        if (testingRuntime !== undefined) {
+          try {
+            handledTesting = await testingRuntime.runOnce();
+          } catch (error) {
+            if (!stopped) {
+              logger.warn('testing outbound poll failed', {
+                error: error instanceof Error ? error.message : 'unknown error'
+              });
+            }
+          }
+        }
+        if (stopped) break;
+        if (!handledTesting) await runtime.runOnce();
         backoff = config.pollMs;
         await sleep(config.pollMs);
       } catch {
@@ -71,6 +115,7 @@ export const runWorkerDaemon = async (
   const running = loop();
   return async (): Promise<void> => {
     stopped = true;
+    testingRuntime?.stop();
     await running;
     process.off('SIGINT', signalStop);
     process.off('SIGTERM', signalStop);

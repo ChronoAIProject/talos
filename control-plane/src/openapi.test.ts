@@ -36,6 +36,7 @@ describe('OpenAPI loader', () => {
     ]);
     expect([
       operationId('/v1/worker/testing/claim', 'post'),
+      operationId('/v1/worker/testing/reconcile-claim', 'post'),
       operationId('/v1/worker/testing/runs/{run_id}/heartbeat', 'post'),
       operationId('/v1/worker/testing/runs/{run_id}/local-accept', 'post'),
       operationId('/v1/worker/testing/runs/{run_id}/running', 'post'),
@@ -47,6 +48,7 @@ describe('OpenAPI loader', () => {
       operationId('/v1/testing/claims/{run_id}/{claim_id}/resolve', 'post')
     ]).toEqual([
       'claimTestingRun',
+      'claimNextTestingReconcile',
       'heartbeatTestingAttempt',
       'acceptTestingAttemptLocally',
       'startTestingAttempt',
@@ -91,7 +93,7 @@ describe('OpenAPI loader', () => {
       'TestingHeartbeatResponse',
       'TestingClaimResponse',
       'TestingTerminalCommitRequest',
-      'TestingTerminalCommitAck'
+      'TestingWorkerMutationAck'
     ]) {
       expect(schema(strictSchema).additionalProperties, strictSchema).toBe(false);
     }

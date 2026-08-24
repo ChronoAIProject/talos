@@ -32,7 +32,7 @@ export interface WorkerClient {
 
 export type TaskHeartbeat = { status: 'submitted' | 'claimed' | 'running' | 'needs_input' | 'handoff' | 'closing' | 'completed' | 'failed' | 'cancelled' };
 
-export const workerConfigSchema = z.object({
+const workerConfigObjectSchema = z.object({
   controlPlaneUrl: z.string().url(),
   workerId: z.string().min(1),
   machineId: z.string().min(1),
@@ -43,7 +43,29 @@ export const workerConfigSchema = z.object({
   pollMs: z.coerce.number().int().positive().default(1000),
   inputPollMs: z.coerce.number().int().positive().default(1000),
   actionPollMs: z.coerce.number().int().positive().default(2000),
-  sessionIdleMs: z.coerce.number().int().positive().default(600000)
+  sessionIdleMs: z.coerce.number().int().positive().default(600000),
+  testingRuntimeUrl: z.string().url().optional(),
+  testingRuntimeCredential: z.string().min(16).max(4096).optional(),
+  testingAuthorizationResolverUrl: z.string().url().optional(),
+  testingAuthorizationResolverToken: z.string().min(16).max(4096).optional()
+}).strict();
+
+export const workerConfigFileSchema = workerConfigObjectSchema.partial();
+
+export const workerConfigSchema = workerConfigObjectSchema.superRefine((value, context) => {
+  const testingFields = [
+    value.testingRuntimeUrl,
+    value.testingRuntimeCredential,
+    value.testingAuthorizationResolverUrl,
+    value.testingAuthorizationResolverToken
+  ];
+  if (testingFields.some((field) => field !== undefined) && testingFields.some((field) => field === undefined)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'testing Runtime and authorization resolver configuration must be provided together',
+      path: ['testingRuntimeUrl']
+    });
+  }
 });
 
 export type WorkerConfig = z.infer<typeof workerConfigSchema>;

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, verify } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalJson,
   computeTestingCancelRequestDigest,
@@ -9,6 +9,7 @@ import {
   type TestingCancelRequest
 } from '@talos/testing-protocol';
 import { MemoryRepository } from '../storage/memory-repository.js';
+import { TalosError } from '../domain/errors.js';
 import type { TestingRunRecord } from '../domain/testing-types.js';
 import type { Machine } from '../domain/types.js';
 import { TestingRunService } from './testing-run-service.js';
@@ -372,6 +373,33 @@ describe('TestingAttemptService', () => {
     expect(heartbeat.current_claim.claim.expires_at).toBe(claim.task.deadline);
   });
 
+  it('projects bounded Runtime progress monotonically without replacing the Talos event cursor', async () => {
+    const { repository, runs, attempts } = await setup();
+    await runs.submit('run-progress', 'user-1', testingRequest('submit-progress'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    const before = await repository.getTestingRun('run-progress');
+    await attempts.heartbeat(binding(claim), 30, {
+      phase: 'executing',
+      completed_cases: 2,
+      total_cases: 5,
+      runtime_event_sequence: 9
+    });
+    const updated = await repository.getTestingRun('run-progress');
+    expect(updated?.progress).toEqual({
+      phase: 'executing',
+      completed_cases: 2,
+      total_cases: 5,
+      last_event_sequence: before?.progress.last_event_sequence
+    });
+    expect(updated?.attempts[0]?.runtimeEventSequence).toBe(9);
+    await expect(attempts.heartbeat(binding(claim), 30, {
+      phase: 'executing',
+      completed_cases: 1,
+      total_cases: 5,
+      runtime_event_sequence: 8
+    })).rejects.toMatchObject({ code: 'stale_testing_progress' });
+  });
+
   it('binds Runtime current-claim observations to nonce, audience, validity, and a dedicated Ed25519 key', async () => {
     const { runs, attempts } = await setup();
     await runs.submit('run-claim', 'user-1', testingRequest('submit-claim'));
@@ -519,7 +547,7 @@ describe('TestingAttemptService', () => {
 
     await expect(attempts.claimReconcile('worker-2', 'machine-2', 'run-1'))
       .rejects.toMatchObject({ code: 'testing_reconcile_unavailable' });
-    const second = await attempts.claimReconcile('worker-restarted', 'machine-1', 'run-1');
+    const second = await attempts.claimNextReconcile('worker-restarted', 'machine-1');
     expect(second.task).toMatchObject({
       operation: 'reconcile',
       dispatch_attempt_id: first.task.dispatch_attempt_id,
@@ -539,6 +567,46 @@ describe('TestingAttemptService', () => {
       .rejects.toMatchObject({ code: 'stale_testing_operation' });
     await expect(attempts.acceptLocal(binding(second)))
       .rejects.toMatchObject({ code: 'stale_testing_operation' });
+  });
+
+  it('skips an exhausted reconcile candidate instead of starving later work', async () => {
+    const { repository, runs, attempts, advance } = await setup({
+      machines: ['machine-1', 'machine-2'],
+      leaseSeconds: 1
+    });
+    await runs.submit('run-1', 'user-1', testingRequest('reconcile-limit-1'));
+    await runs.submit('run-2', 'user-1', testingRequest('reconcile-limit-2'));
+    await attempts.claim('worker-1', 'machine-1');
+    await attempts.claim('worker-2', 'machine-2');
+    advance(1_001);
+    await attempts.sweep();
+
+    const secondRun = await repository.getTestingRun('run-2');
+    expect(secondRun?.currentAttemptId).toBeDefined();
+    if (secondRun === undefined) throw new Error('missing second testing run');
+    await repository.replaceTestingRun({
+      ...secondRun,
+      recordVersion: secondRun.recordVersion + 1,
+      attempts: secondRun.attempts.map((attempt) =>
+        attempt.id === secondRun.currentAttemptId ? { ...attempt, machineId: 'machine-1' } : attempt)
+    }, secondRun.recordVersion);
+
+    const expected = { task: { qa_run_id: 'run-2' } } as TestingReconcileClaimResult;
+    const claimReconcile = vi.spyOn(attempts, 'claimReconcile').mockImplementation(
+      async (_workerId, _machineId, runId) => {
+        if (runId === 'run-1') {
+          throw new TalosError(
+            'testing_reconcile_claim_limit',
+            'testing reconcile claim limit is exhausted',
+            409
+          );
+        }
+        return expected;
+      }
+    );
+
+    await expect(attempts.claimNextReconcile('worker-restarted', 'machine-1')).resolves.toBe(expected);
+    expect(claimReconcile.mock.calls.map((call) => call[2])).toEqual(['run-1', 'run-2']);
   });
 
   it('enforces the local acceptance no-rerun boundary and allows only exact same-attempt reconcile', async () => {

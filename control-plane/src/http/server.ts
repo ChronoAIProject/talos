@@ -3,6 +3,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { URL } from 'node:url';
 import { z } from 'zod';
 import {
+  computeTestingWorkerMutationDigest,
+  testingWorkerMutationAckSchema,
+  type TestingControlStatus,
+  type TestingCurrentClaimEnvelope,
+  type TestingWorkerMutationOperation
+} from '@talos/testing-protocol';
+import {
   adminMachineSchema,
   adminPoolSchema,
   adminProfileSchema,
@@ -456,6 +463,12 @@ const testingWorkerRoute = async (
     if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match testing claim worker');
     return send(response, 200, await service.claim(worker.workerId, worker.machineId));
   }
+  if (method === 'POST' && parts[3] === 'reconcile-claim' && parts.length === 4) {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match reconcile machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match reconcile worker');
+    return send(response, 200, await service.claimNextReconcile(worker.workerId, worker.machineId));
+  }
   if (method === 'GET' && parts[3] === 'claims' && parts[4] !== undefined && parts[5] !== undefined && parts.length === 6) {
     const claim = await service.resolveCurrentClaim(parts[4], parts[5]);
     if (claim.claim.machine_id !== worker.machineId) throw unauthorized('testing claim belongs to another machine');
@@ -475,7 +488,7 @@ const testingWorkerRoute = async (
   if (action === 'heartbeat') {
     const input = testingHeartbeatBodySchema.parse(body);
     const attempt = testingBinding(runId, input, worker);
-    return send(response, 200, await service.heartbeat(attempt, input.extend_seconds));
+    return send(response, 200, await service.heartbeat(attempt, input.extend_seconds, input.progress));
   }
   if (action === 'local-accept' || action === 'running') {
     const input = testingAttemptBindingBodySchema.parse(body);
@@ -483,16 +496,28 @@ const testingWorkerRoute = async (
     const claim = action === 'local-accept'
       ? await service.acceptLocal(attempt)
       : await service.markRunning(attempt);
-    return send(response, 200, claim);
+    const operation = action === 'local-accept' ? 'local_accept' : 'running';
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      operation,
+      runId,
+      input,
+      {},
+      operation === 'local_accept' ? 'local_accepted' : 'running',
+      claim
+    ));
   }
   if (action === 'not-accepted') {
     const input = testingNoLocalAcceptanceBodySchema.parse(body);
     const run = await service.confirmNotLocallyAccepted(testingBinding(runId, input, worker), input.fact);
-    return send(response, 200, {
-      run_id: run.id,
-      control_status: run.controlStatus,
-      snapshot_version: run.snapshotVersion
-    });
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      'not_accepted',
+      runId,
+      input,
+      { fact: input.fact },
+      run.controlStatus,
+      undefined,
+      run.snapshotVersion
+    ));
   }
   if (action === 'result' || action === 'reconcile') {
     const input = testingTerminalCommitBodySchema.parse(body);
@@ -510,11 +535,15 @@ const testingWorkerRoute = async (
     const run = action === 'reconcile'
       ? await service.commitReconcileTerminal(terminal)
       : await service.commitTerminal(terminal);
-    return send(response, 200, {
-      run_id: run.id,
-      control_status: run.controlStatus,
-      snapshot_version: run.snapshotVersion
-    });
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      action === 'result' ? 'terminal' : 'reconcile_terminal',
+      runId,
+      input,
+      testingTerminalMutationPayload(input),
+      run.controlStatus,
+      undefined,
+      run.snapshotVersion
+    ));
   }
   return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
 };
@@ -531,6 +560,49 @@ const testingBinding = (
   generation: input.generation,
   fenceToken: input.fence_token,
   leaseToken: input.lease_token
+});
+
+const testingWorkerMutationAcknowledgement = (
+  operation: TestingWorkerMutationOperation,
+  runId: string,
+  input: z.infer<typeof testingAttemptBindingBodySchema>,
+  payload: Readonly<Record<string, unknown>>,
+  controlStatus: TestingControlStatus,
+  currentClaim?: TestingCurrentClaimEnvelope,
+  snapshotVersion?: number
+): ReturnType<typeof testingWorkerMutationAckSchema.parse> => testingWorkerMutationAckSchema.parse({
+  schema_version: 'talos.testing-worker-mutation-ack/v1',
+  operation,
+  run_id: runId,
+  attempt_id: input.attempt_id,
+  generation: input.generation,
+  fence_token: input.fence_token,
+  mutation_digest: computeTestingWorkerMutationDigest({
+    schema_version: 'talos.testing-worker-mutation/v1',
+    operation,
+    run_id: runId,
+    attempt_id: input.attempt_id,
+    generation: input.generation,
+    fence_token: input.fence_token,
+    lease_token: input.lease_token,
+    payload
+  }),
+  control_status: controlStatus,
+  ...(snapshotVersion === undefined ? {} : { snapshot_version: snapshotVersion }),
+  ...(currentClaim === undefined ? {} : { current_claim: currentClaim })
+});
+
+const testingTerminalMutationPayload = (
+  input: z.infer<typeof testingTerminalCommitBodySchema>
+): Readonly<Record<string, unknown>> => ({
+  control_status: input.control_status,
+  execution_outcome: input.execution_outcome,
+  evidence_outcome: input.evidence_outcome,
+  upload_outcome: input.upload_outcome,
+  cleanup_outcome: input.cleanup_outcome,
+  ...(input.summary === undefined ? {} : { summary: input.summary }),
+  ...(input.results === undefined ? {} : { results: input.results }),
+  ...(input.safe_error === undefined ? {} : { safe_error: input.safe_error })
 });
 
 const requireIdentity = async (request: IncomingMessage, resolver: IdentityResolver): Promise<ResolvedIdentity> => {

@@ -89,6 +89,7 @@ export interface TestingAttemptRecord extends TestingAttemptClaimRecord {
   readonly priorClaims: readonly TestingAttemptClaimRecord[];
   readonly deadline: string;
   readonly localAcceptedAt?: string;
+  readonly runtimeEventSequence?: number;
   readonly reconcileDeadline?: string;
   readonly noLocalAcceptanceFact?: TestingNoLocalAcceptanceFact;
   readonly reservationCancellationReceipt?: {

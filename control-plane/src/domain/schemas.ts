@@ -105,7 +105,16 @@ export const testingAttemptBindingBodySchema = z.object({
 }).strict();
 
 export const testingHeartbeatBodySchema = testingAttemptBindingBodySchema.extend({
-  extend_seconds: z.number().int().positive().max(300).default(60)
+  extend_seconds: z.number().int().positive().max(300).default(60),
+  progress: z.object({
+    phase: z.string().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+    completed_cases: z.number().int().nonnegative(),
+    total_cases: z.number().int().nonnegative(),
+    runtime_event_sequence: z.number().int().nonnegative()
+  }).strict().refine((value) => value.completed_cases <= value.total_cases, {
+    message: 'completed_cases cannot exceed total_cases',
+    path: ['completed_cases']
+  }).optional()
 }).strict();
 
 export const testingTerminalCommitBodySchema = testingAttemptBindingBodySchema.extend({

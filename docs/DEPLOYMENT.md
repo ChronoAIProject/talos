@@ -24,6 +24,8 @@ docker push registry.example/talos-worker:0.1.0
 
 The worker image is for Linux platform-pool workers and includes Playwright browsers. Private and org pool machines, especially those requiring headed display, residential IPs, or computer-use capabilities, run the daemon directly with Node on the real macOS/Windows/Linux machine rather than in Kubernetes.
 
+Testing workers use a different execution boundary. `talos-worker` contains the fixed `TestingExecutor`, but the Local QA Runtime is a separately authenticated loopback service and owns environment, Chrome, local effects, journal, and cleanup. Configure the four `TALOS_TESTING_RUNTIME_*` / `TALOS_TESTING_AUTHORIZATION_RESOLVER_*` settings documented in [WORKER.md](WORKER.md) only when both consumer services are available. Hosted authorization ownership remains decision-pending; Talos freezes and validates the consumer port but does not become the signer.
+
 End-user machines use the GitHub Release installer and `talos-worker` CLI documented in [WORKER.md](WORKER.md). They require Node.js 22+ and can connect through NyxID's public worker rendezvous or directly over a VPN/private network. The release bundle is platform-independent JavaScript; Playwright supplies the machine-specific browser runtime during installation.
 
 ## Kubernetes Apply Order
@@ -46,7 +48,7 @@ Hosted-mode NyxID refuses to fetch `openapi_spec_url` targets that resolve to pr
 
 ## Public Worker Rendezvous
 
-Workers need only outbound HTTPS access when NyxID fronts the worker surface. Create a separate catalog entry such as `talos-worker` that points to the private Talos control-plane service, with authentication `none` and `identity_propagation_mode: none`. Add anonymous endpoint rules for `POST /v1/worker/**`, `GET /v1/worker/**`, and `GET /healthz`. Users pass `https://nyxid.example.com/public/s/talos-worker` as the control-plane URL to `talos-worker init`; the worker preserves the catalog prefix on every request.
+Workers need only outbound HTTPS access when NyxID fronts the worker surface. Create a separate catalog entry such as `talos-worker` that points to the private Talos control-plane service, with authentication `none` and `identity_propagation_mode: none`. Add anonymous endpoint rules for `POST /v1/worker/**`, `GET /v1/worker/**`, `POST /v1/testing/claims/**/resolve`, and `GET /healthz`. The Runtime resolver route returns only a short-lived, nonce-bound signed currentness statement and never a raw lease token. Users pass `https://nyxid.example.com/public/s/talos-worker` as the control-plane URL to `talos-worker init`; the worker preserves the catalog prefix on every request.
 
 NyxID strips `Authorization` and all custom `X-Talos-*` headers on this public route. It preserves request bodies, so workers include `worker_token`, `worker_id`, and `machine_id` in every worker POST body. Proxy input polling uses `POST /v1/worker/tasks/{id}/input/poll` with the lease token in the body rather than a query string. Direct deployments retain Bearer and `X-Talos-*` headers for compatibility. Talos gives those direct headers precedence over body credentials, but all carriers use the same timing-safe machine-token validation and task-to-machine binding; the anonymous catalog entry never replaces Talos authentication.
 
