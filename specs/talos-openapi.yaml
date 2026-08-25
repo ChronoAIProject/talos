@@ -687,6 +687,15 @@ components:
     TestingCleanupOutcome:
       type: string
       enum: [not_required, pending, complete, residual_retryable, residual_blocking, unobserved]
+    TestingTerminalExecutionOutcome:
+      type: string
+      enum: [not_started, passed, failed, blocked, error, cancelled, lost_or_inconclusive, unobserved]
+    TestingTerminalEvidenceOutcome:
+      type: string
+      enum: [not_required, complete, partial, unavailable, policy_blocked]
+    TestingTerminalCleanupOutcome:
+      type: string
+      enum: [not_required, complete, residual_retryable, residual_blocking, unobserved]
     ArtifactPointer:
       type: object
       additionalProperties: false
@@ -944,7 +953,7 @@ components:
       required: [sequence, type, time, data, event_digest]
       properties:
         sequence: { type: integer, minimum: 1 }
-        type: { type: string, enum: [run.submitted, run.reserved, attempt.claimed, attempt.released, attempt.local_accepted, run.started, run.cancel_requested, run.closing, run.reconcile_required, run.completed, run.failed, run.cancelled, run.abandoned] }
+        type: { type: string, enum: [run.submitted, run.reserved, attempt.claimed, attempt.released, attempt.local_accepted, run.started, run.cancel_requested, run.closing, run.reconcile_required, run.completed, run.failed, run.cancelled, run.abandoned, run.terminal_projection_updated] }
         time: { type: string, format: date-time }
         data: { type: object }
         event_digest: { $ref: '#/components/schemas/Sha256Digest' }
@@ -963,6 +972,7 @@ components:
         - { properties: { type: { const: run.failed }, data: { $ref: '#/components/schemas/TestingRunFailedData' } } }
         - { properties: { type: { const: run.cancelled }, data: { $ref: '#/components/schemas/TestingRunCancelledData' } } }
         - { properties: { type: { const: run.abandoned }, data: { $ref: '#/components/schemas/TestingRunReasonData' } } }
+        - { properties: { type: { const: run.terminal_projection_updated }, data: { $ref: '#/components/schemas/TestingRunTerminalProjectionUpdatedData' } } }
     TestingRunSubmittedData:
       type: object
       additionalProperties: false
@@ -1018,7 +1028,7 @@ components:
       type: object
       additionalProperties: false
       required: [execution_outcome]
-      properties: { execution_outcome: { $ref: '#/components/schemas/TestingExecutionOutcome' } }
+      properties: { execution_outcome: { $ref: '#/components/schemas/TestingTerminalExecutionOutcome' } }
     TestingRunFailedData:
       type: object
       additionalProperties: false
@@ -1028,7 +1038,15 @@ components:
       type: object
       additionalProperties: false
       required: [cleanup_outcome]
-      properties: { cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' } }
+      properties: { cleanup_outcome: { $ref: '#/components/schemas/TestingTerminalCleanupOutcome' } }
+    TestingRunTerminalProjectionUpdatedData:
+      type: object
+      additionalProperties: false
+      required: [evidence_outcome, upload_outcome, cleanup_outcome]
+      properties:
+        evidence_outcome: { $ref: '#/components/schemas/TestingTerminalEvidenceOutcome' }
+        upload_outcome: { $ref: '#/components/schemas/TestingUploadOutcome' }
+        cleanup_outcome: { $ref: '#/components/schemas/TestingTerminalCleanupOutcome' }
     TestingEventPage:
       type: object
       additionalProperties: false

@@ -137,7 +137,15 @@ describe('OpenAPI loader', () => {
     expect(asObject(properties('TestingEventPage').events).items).toEqual({
       $ref: '#/components/schemas/TestingRunEvent'
     });
-    expect(schema('TestingRunEvent').oneOf).toHaveLength(13);
+    expect(asObject(properties('TestingRunEvent').type).enum).toContain('run.terminal_projection_updated');
+    const eventVariants = schema('TestingRunEvent').oneOf as unknown[];
+    expect(eventVariants).toHaveLength(14);
+    expect(eventVariants).toContainEqual({
+      properties: {
+        type: { const: 'run.terminal_projection_updated' },
+        data: { $ref: '#/components/schemas/TestingRunTerminalProjectionUpdatedData' }
+      }
+    });
     for (const eventData of [
       'TestingRunSubmittedData',
       'TestingRunReservedData',
@@ -149,10 +157,20 @@ describe('OpenAPI loader', () => {
       'TestingRunReconcileData',
       'TestingRunCompletedData',
       'TestingRunFailedData',
-      'TestingRunCancelledData'
+      'TestingRunCancelledData',
+      'TestingRunTerminalProjectionUpdatedData'
     ]) {
       expect(schema(eventData).additionalProperties, eventData).toBe(false);
     }
+    expect(schema('TestingTerminalExecutionOutcome').enum).not.toContain('executing');
+    expect(schema('TestingTerminalEvidenceOutcome').enum).not.toContain('staging');
+    expect(schema('TestingTerminalCleanupOutcome').enum).not.toContain('pending');
+    expect(asObject(properties('TestingRunCompletedData').execution_outcome)).toEqual({
+      $ref: '#/components/schemas/TestingTerminalExecutionOutcome'
+    });
+    expect(asObject(properties('TestingRunCancelledData').cleanup_outcome)).toEqual({
+      $ref: '#/components/schemas/TestingTerminalCleanupOutcome'
+    });
     const eventPath = asObject(parsed.paths['/v1/tools/testing/runs/{run_id}/events']);
     const eventGet = asObject(eventPath.get);
     const eventResponses = asObject(eventGet.responses);
