@@ -20,7 +20,6 @@ import {
   type TestingRuntimeAttempt
 } from '@talos/testing-protocol';
 import type { RuntimeLogger } from '../runtime/client.js';
-import { WorkerClientError } from '../runtime/errors.js';
 import type {
   TestingAttemptCredentials,
   TestingHeartbeatProgress,
@@ -28,6 +27,7 @@ import type {
   TestingWorkerControlPlane
 } from './control-plane-client.js';
 import type { LocalQARuntimeAdapter } from './runtime-adapter.js';
+import { safeTestingErrorMessage } from './safe-log-error.js';
 
 export interface TestingAuthorizationResolver {
   resolve(
@@ -188,6 +188,28 @@ export class TestingExecutor {
       await heartbeat.tick();
       heartbeat.assertReconcileAllowed(this.clock(), attempt.deadline);
       throwIfAborted(signal);
+      if (heartbeat.cancelRequested) {
+        const snapshot = await this.cancelDuringReconcile(attempt, heartbeat, signal);
+        if (snapshot.state === 'terminal') {
+          await this.options.controlPlane.commitReconcileTerminal(
+            credentials,
+            terminalProjection(snapshot),
+            signal
+          );
+          return;
+        }
+        const capabilities = await this.options.runtime.getCapabilities(signal);
+        await this.observeReconcile(
+          attempt,
+          credentials,
+          heartbeat,
+          snapshot,
+          capabilities.limits.max_events_per_page,
+          signal,
+          true
+        );
+        return;
+      }
       const capabilities = await this.options.runtime.getCapabilities(signal);
       const currentClaim = await this.resolveCurrentClaim(attempt, signal);
       const request = await this.controlRequest(
@@ -305,13 +327,26 @@ export class TestingExecutor {
     heartbeat: TestingHeartbeatMonitor,
     initialSnapshot: LocalQARuntimeSnapshot,
     eventPageLimit: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    cancelSent = false
   ): Promise<void> {
     let snapshot = initialSnapshot;
     let eventSequence = snapshot.event_sequence;
     while (this.clock() < Date.parse(attempt.deadline)) {
       await heartbeat.tick();
       heartbeat.assertReconcileAllowed(this.clock(), attempt.deadline);
+      if (heartbeat.cancelRequested && !cancelSent) {
+        snapshot = await this.cancelDuringReconcile(attempt, heartbeat, signal);
+        cancelSent = true;
+        if (snapshot.state === 'terminal') {
+          await this.options.controlPlane.commitReconcileTerminal(
+            credentials,
+            terminalProjection(snapshot),
+            signal
+          );
+          return;
+        }
+      }
       const eventPage = await this.options.runtime.listEvents(
         attempt.run_id,
         eventSequence,
@@ -337,6 +372,26 @@ export class TestingExecutor {
       'testing_reconcile_deadline_exceeded',
       'Runtime reconciliation did not settle before its deadline'
     );
+  }
+
+  private async cancelDuringReconcile(
+    attempt: TestingRuntimeAttempt,
+    heartbeat: TestingHeartbeatMonitor,
+    signal: AbortSignal
+  ): Promise<LocalQARuntimeSnapshot> {
+    const currentClaim = await this.resolveCurrentClaim(attempt, signal);
+    const request = await this.controlRequest(
+      attempt,
+      currentClaim,
+      'cancel',
+      'user_cancelled',
+      undefined,
+      signal
+    );
+    const acknowledgement = await this.options.runtime.cancelRun(request, signal);
+    assertCancelAcknowledgement(acknowledgement, attempt, request.request_digest);
+    heartbeat.setProgress(runtimeProgress(acknowledgement.snapshot));
+    return acknowledgement.snapshot;
   }
 
   private async resolveCurrentClaim(
@@ -834,8 +889,8 @@ const assertHeartbeatResponse = (
 };
 
 const safeMessage = (error: unknown): string => {
-  if (error instanceof WorkerClientError || error instanceof TestingExecutorError) return `${error.code}: ${error.message}`;
-  return error instanceof Error ? error.message : 'unknown error';
+  return safeTestingErrorMessage(error, (candidate): candidate is TestingExecutorError =>
+    candidate instanceof TestingExecutorError);
 };
 
 const throwIfAborted = (signal: AbortSignal | undefined): void => {

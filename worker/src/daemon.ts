@@ -8,6 +8,7 @@ import { loadWorkerConfig } from './config.js';
 import { HttpTestingAuthorizationResolver } from './testing/authorization-resolver.js';
 import { HttpTestingWorkerClient, type TestingWorkerControlPlane } from './testing/control-plane-client.js';
 import { HttpLocalQARuntimeAdapter, type LocalQARuntimeAdapter } from './testing/runtime-adapter.js';
+import { safeTestingErrorMessage } from './testing/safe-log-error.js';
 import { TestingWorkerRuntime, type TestingAuthorizationResolver } from './testing/testing-executor.js';
 
 export { loadWorkerConfig } from './config.js';
@@ -95,7 +96,7 @@ export const runWorkerDaemon = async (
           } catch (error) {
             if (!stopped) {
               logger.warn('testing outbound poll failed', {
-                error: error instanceof Error ? error.message : 'unknown error'
+                error: safeTestingErrorMessage(error)
               });
             }
           }

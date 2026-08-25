@@ -27,6 +27,7 @@ describe('HttpTestingAuthorizationResolver', () => {
     expect(body).not.toHaveProperty('token');
     expect(body).not.toHaveProperty('credential');
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('authorization')).toBe('Bearer resolver-token-123456');
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe('error');
     fetchMock.mockRestore();
   });
 

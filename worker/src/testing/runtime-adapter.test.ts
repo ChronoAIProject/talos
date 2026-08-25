@@ -29,6 +29,7 @@ describe('HttpLocalQARuntimeAdapter', () => {
     expect(fetchMock.mock.calls[0]?.[0].toString()).toBe('http://127.0.0.1:4317/v1/capabilities');
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get('x-local-qa-credential')).toBe('runtime-credential-1234');
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe('error');
     fetchMock.mockRestore();
   });
 

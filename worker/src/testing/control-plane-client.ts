@@ -222,6 +222,7 @@ export class HttpTestingWorkerClient implements TestingWorkerControlPlane {
     const signal = externalSignal === undefined ? timeout : AbortSignal.any([externalSignal, timeout]);
     const response = await fetch(resolveControlPlaneUrl(this.config.controlPlaneUrl, path), {
       method: 'POST',
+      redirect: 'error',
       headers: {
         ...(authenticated
           ? {

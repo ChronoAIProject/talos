@@ -104,6 +104,7 @@ describe('HttpTestingWorkerClient', () => {
       '/public/s/talos-worker/v1/worker/testing/runs/run-1/reconcile',
       '/public/s/talos-worker/v1/testing/claims/run-1/claim-1/resolve'
     ]);
+    for (const call of fetchMock.mock.calls) expect(call[1]?.redirect).toBe('error');
     const heartbeatBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body)) as Record<string, unknown>;
     expect(heartbeatBody).toMatchObject({
       worker_id: 'worker-1', machine_id: 'machine-1', lease_token: 'private-lease-token',

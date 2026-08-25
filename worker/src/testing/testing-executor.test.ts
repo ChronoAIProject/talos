@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
   computeLocalQARuntimeSnapshotDigest,
   computeTestingCurrentClaimDigest,
@@ -6,6 +7,7 @@ import {
   testingAuthorizationResolutionSchema,
   testingClaimResponseSchema,
   testingReconcileClaimResponseSchema,
+  type LocalQAControlRequest,
   type LocalQARunRequest,
   type LocalQARuntimeSnapshot,
   type TestingAuthorizationResolutionRequest,
@@ -15,7 +17,7 @@ import {
   type TestingRuntimeAttempt
 } from '@talos/testing-protocol';
 import type { TestingWorkerControlPlane } from './control-plane-client.js';
-import type { LocalQARuntimeAdapter } from './runtime-adapter.js';
+import { LocalQARuntimeAdapterError, type LocalQARuntimeAdapter } from './runtime-adapter.js';
 import {
   TestingExecutor,
   TestingWorkerRuntime,
@@ -472,6 +474,228 @@ describe('TestingExecutor', () => {
     expect(calls).not.toContain('submit');
   });
 
+  it('dispatches cancellation that arrives after pending reconciliation starts', async () => {
+    const fixture = reconcileFixture();
+    const calls: string[] = [];
+    const pending = snapshot(fixture.executionAttempt, 'cleaning_up_execution');
+    const terminal = snapshot(fixture.executionAttempt, 'terminal', 'cancelled');
+    let heartbeatCount = 0;
+    const controlPlane: TestingWorkerControlPlane = {
+      claim: async () => undefined,
+      claimReconcile: async () => undefined,
+      heartbeat: async () => {
+        heartbeatCount += 1;
+        const cancelRequested = heartbeatCount > 1;
+        return {
+          lease_expires_at: deadline,
+          cancel_requested: cancelRequested,
+          current_claim: cancelRequested
+            ? { ...fixture.claim.current_claim, is_current: false, status: 'cancel_requested' }
+            : fixture.claim.current_claim
+        };
+      },
+      acceptLocal: async () => { throw new Error('must not accept'); },
+      markRunning: async () => { throw new Error('must not run'); },
+      commitTerminal: async () => { throw new Error('must not commit start terminal'); },
+      commitReconcileTerminal: async (_credentials, projection) => { calls.push(`commit:${projection.controlStatus}`); },
+      confirmNotAccepted: async () => { throw new Error('must not report no acceptance'); },
+      resolveRuntimeCurrentClaim: async (_runId, _claimId, requestNonce) => ({
+        ...currentClaim(
+          fixture.attempt,
+          'local-qa-runtime',
+          heartbeatCount > 1 ? 'cancel_requested' : 'current'
+        ),
+        request_nonce: requestNonce
+      })
+    };
+    await new TestingExecutor({
+      controlPlane,
+      runtime: {
+        getCapabilities: async () => capabilities({ package_id: 'testing-browser-runner', version: '1.0.0', digest }),
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('terminal cancel must not poll'); },
+        listEvents: async () => { throw new Error('terminal cancel must not poll'); },
+        cancelRun: async (request) => {
+          calls.push('runtime:cancel');
+          return cancelAcknowledgement(fixture.attempt.run_id, request.request_digest, terminal, 'late');
+        },
+        reconcileTerminal: async () => {
+          calls.push('runtime:reconcile');
+          return {
+            schema_version: 'local-qa-runtime-reconcile-result/v1',
+            disposition: 'pending',
+            snapshot: pending
+          };
+        }
+      },
+      authorizations: resolver((request) => calls.push(`authorization:${request.operation}`)),
+      heartbeatMs: 60_000,
+      clock
+    }).runReconcile(fixture.claim);
+
+    expect(calls).toContain('runtime:reconcile');
+    expect(calls).toContain('authorization:cancel');
+    expect(calls).toContain('runtime:cancel');
+    expect(calls).toContain('commit:cancelled');
+  });
+
+  it('replays durable cancel intent before reconcile and observes a non-terminal acknowledgement', async () => {
+    const fixture = reconcileFixture();
+    const calls: string[] = [];
+    const pending = snapshot(fixture.executionAttempt, 'cleaning_up_execution');
+    const terminal = snapshot(fixture.executionAttempt, 'terminal', 'cancelled');
+    let heartbeatCount = 0;
+    let cancelRequest: LocalQAControlRequest | undefined;
+    const controlPlane: TestingWorkerControlPlane = {
+      claim: async () => undefined,
+      claimReconcile: async () => undefined,
+      heartbeat: async () => {
+        heartbeatCount += 1;
+        return {
+          lease_expires_at: deadline,
+          cancel_requested: true,
+          current_claim: { ...fixture.claim.current_claim, is_current: false, status: 'cancel_requested' }
+        };
+      },
+      acceptLocal: async () => { throw new Error('must not accept'); },
+      markRunning: async () => { throw new Error('must not run'); },
+      commitTerminal: async () => { throw new Error('must not commit start terminal'); },
+      commitReconcileTerminal: async (_credentials, projection) => { calls.push(`commit:${projection.controlStatus}`); },
+      confirmNotAccepted: async () => { throw new Error('must not report no acceptance'); },
+      resolveRuntimeCurrentClaim: async (_runId, _claimId, requestNonce) => ({
+        ...currentClaim(fixture.attempt, 'local-qa-runtime', 'cancel_requested'),
+        request_nonce: requestNonce
+      })
+    };
+    await new TestingExecutor({
+      controlPlane,
+      runtime: {
+        getCapabilities: async () => capabilities({ package_id: 'testing-browser-runner', version: '1.0.0', digest }),
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { calls.push('snapshot'); return terminal; },
+        listEvents: async (_runId, after) => eventPage(fixture.attempt.run_id, after, terminal.snapshot_digest),
+        cancelRun: async (request) => {
+          calls.push('runtime:cancel');
+          cancelRequest = request;
+          return {
+            schema_version: 'local-qa-runtime-cancel-ack/v1',
+            run_id: fixture.attempt.run_id,
+            request_digest: request.request_digest,
+            disposition: 'accepted',
+            cancel_intent_ref: {
+              schema: 'qa.local-cancel-intent/v1',
+              ref: 'artifact://runtime/cancel-intents/reconcile-1',
+              digest
+            },
+            snapshot: pending,
+            acknowledged_at: observedAt
+          };
+        },
+        reconcileTerminal: async () => { calls.push('runtime:reconcile'); throw new Error('must not reconcile after cancel'); }
+      },
+      authorizations: resolver((request) => calls.push(`authorization:${request.operation}`)),
+      heartbeatMs: 60_000,
+      clock
+    }).runReconcile(fixture.claim);
+
+    expect(heartbeatCount).toBeGreaterThanOrEqual(2);
+    expect(calls).toContain('authorization:cancel');
+    expect(calls).toContain('runtime:cancel');
+    expect(calls).toContain('snapshot');
+    expect(calls).toContain('commit:cancelled');
+    expect(calls).not.toContain('runtime:reconcile');
+    expect(cancelRequest?.operation).toBe('cancel');
+    expect(cancelRequest?.effect_id).toMatch(/^cancel-effect-/);
+  });
+
+  it('does not infer reconciliation success when durable cancel replay fails', async () => {
+    const fixture = reconcileFixture();
+    const calls: string[] = [];
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const controlPlane: TestingWorkerControlPlane = {
+      claim: async () => undefined,
+      claimReconcile: async () => undefined,
+      heartbeat: async () => ({
+        lease_expires_at: deadline,
+        cancel_requested: true,
+        current_claim: { ...fixture.claim.current_claim, is_current: false, status: 'cancel_requested' }
+      }),
+      acceptLocal: async () => { throw new Error('must not accept'); },
+      markRunning: async () => { throw new Error('must not run'); },
+      commitTerminal: async () => { throw new Error('must not commit'); },
+      commitReconcileTerminal: async () => { calls.push('commit'); },
+      confirmNotAccepted: async () => { calls.push('not-accepted'); },
+      resolveRuntimeCurrentClaim: async (_runId, _claimId, requestNonce) => ({
+        ...currentClaim(fixture.attempt, 'local-qa-runtime', 'cancel_requested'),
+        request_nonce: requestNonce
+      })
+    };
+    await new TestingExecutor({
+      controlPlane,
+      runtime: {
+        getCapabilities: async () => capabilities({ package_id: 'testing-browser-runner', version: '1.0.0', digest }),
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('must not observe after failed cancel'); },
+        listEvents: async () => { throw new Error('must not observe after failed cancel'); },
+        cancelRun: async () => { calls.push('runtime:cancel'); throw new Error('remote secret: token-123'); },
+        reconcileTerminal: async () => { calls.push('runtime:reconcile'); throw new Error('must not reconcile'); }
+      },
+      authorizations: resolver(),
+      heartbeatMs: 60_000,
+      clock,
+      logger
+    }).runReconcile(fixture.claim);
+
+    expect(calls).toEqual(['runtime:cancel']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'testing reconciliation did not converge',
+      expect.objectContaining({ error: 'unexpected_error' })
+    );
+  });
+
+  it('dispatches an initially durable cancel without depending on Runtime capabilities', async () => {
+    const fixture = reconcileFixture();
+    const calls: string[] = [];
+    const terminal = snapshot(fixture.executionAttempt, 'terminal', 'cancelled');
+    const controlPlane: TestingWorkerControlPlane = {
+      claim: async () => undefined,
+      claimReconcile: async () => undefined,
+      heartbeat: async () => ({
+        lease_expires_at: deadline,
+        cancel_requested: true,
+        current_claim: { ...fixture.claim.current_claim, is_current: false, status: 'cancel_requested' }
+      }),
+      acceptLocal: async () => { throw new Error('must not accept'); },
+      markRunning: async () => { throw new Error('must not run'); },
+      commitTerminal: async () => { throw new Error('must not commit'); },
+      commitReconcileTerminal: async () => { calls.push('commit'); },
+      confirmNotAccepted: async () => { throw new Error('must not report no acceptance'); },
+      resolveRuntimeCurrentClaim: async (_runId, _claimId, requestNonce) => ({
+        ...currentClaim(fixture.attempt, 'local-qa-runtime', 'cancel_requested'),
+        request_nonce: requestNonce
+      })
+    };
+    await new TestingExecutor({
+      controlPlane,
+      runtime: {
+        getCapabilities: async () => { calls.push('capabilities'); throw new Error('capabilities unavailable'); },
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('must not read'); },
+        listEvents: async () => { throw new Error('must not read'); },
+        cancelRun: async (request) => {
+          calls.push('runtime:cancel');
+          return cancelAcknowledgement(fixture.attempt.run_id, request.request_digest, terminal, 'capability-free');
+        },
+        reconcileTerminal: async () => { throw new Error('must not reconcile'); }
+      },
+      authorizations: resolver(),
+      heartbeatMs: 60_000,
+      clock
+    }).runReconcile(fixture.claim);
+
+    expect(calls).toEqual(['runtime:cancel', 'commit']);
+  });
+
   it('keeps one reconcile effect across acknowledgement loss and claim rotation', async () => {
     const first = reconcileFixture(2);
     const rotated = reconcileFixture(3);
@@ -782,6 +1006,60 @@ describe('TestingExecutor', () => {
     expect(calls).not.toContain('runtime:cancel');
     expect(calls.some((call) => call.startsWith('commit:'))).toBe(false);
   });
+
+  it('does not copy untrusted validation content into worker logs', async () => {
+    const fixture = startFixture();
+    const malicious = `resolver-token-123456 /Users/private/source ${'x'.repeat(4_096)}`;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await new TestingExecutor({
+      controlPlane: fakeControlPlane(fixture, []),
+      runtime: {
+        getCapabilities: async () => { throw z.literal('expected').parse(malicious); },
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('must not read'); },
+        listEvents: async () => { throw new Error('must not read'); },
+        cancelRun: async () => { throw new Error('must not cancel'); },
+        reconcileTerminal: async () => { throw new Error('must not reconcile'); }
+      },
+      authorizations: resolver(),
+      heartbeatMs: 60_000,
+      clock,
+      logger
+    }).runStart(fixture.claim);
+
+    const logged = JSON.stringify(logger.warn.mock.calls);
+    expect(logged).toContain('unexpected_error');
+    expect(logged).not.toContain('resolver-token-123456');
+    expect(logged).not.toContain('/Users/private/source');
+    expect(logged).not.toContain('xxxx');
+  });
+
+  it('does not copy remote error codes into worker logs', async () => {
+    const fixture = startFixture();
+    const credential = 'runtime-credential-1234';
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await new TestingExecutor({
+      controlPlane: fakeControlPlane(fixture, []),
+      runtime: {
+        getCapabilities: async () => {
+          throw new LocalQARuntimeAdapterError(credential, 'Local QA Runtime request failed (403)', 403);
+        },
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('must not read'); },
+        listEvents: async () => { throw new Error('must not read'); },
+        cancelRun: async () => { throw new Error('must not cancel'); },
+        reconcileTerminal: async () => { throw new Error('must not reconcile'); }
+      },
+      authorizations: resolver(),
+      heartbeatMs: 60_000,
+      clock,
+      logger
+    }).runStart(fixture.claim);
+
+    const logged = JSON.stringify(logger.warn.mock.calls);
+    expect(logged).toContain('local_qa_runtime_error (403)');
+    expect(logged).not.toContain(credential);
+  });
 });
 
 const startFixture = () => {
@@ -1013,6 +1291,25 @@ const eventPage = (runId: string, afterSequence = 0, snapshotDigest = digest) =>
   through_sequence: afterSequence,
   has_more: false,
   snapshot_digest: snapshotDigest
+});
+
+const cancelAcknowledgement = (
+  runId: string,
+  requestDigest: string,
+  currentSnapshot: LocalQARuntimeSnapshot,
+  id: string
+) => ({
+  schema_version: 'local-qa-runtime-cancel-ack/v1' as const,
+  run_id: runId,
+  request_digest: requestDigest,
+  disposition: 'accepted' as const,
+  cancel_intent_ref: {
+    schema: 'qa.local-cancel-intent/v1' as const,
+    ref: `artifact://runtime/cancel-intents/${id}`,
+    digest
+  },
+  snapshot: currentSnapshot,
+  acknowledged_at: observedAt
 });
 
 const authorizationEnvelope = (operation: string) => ({

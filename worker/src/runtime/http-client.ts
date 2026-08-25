@@ -122,6 +122,7 @@ export class HttpWorkerClient implements WorkerClient {
     };
     const response = await fetch(resolveControlPlaneUrl(this.config.controlPlaneUrl, path), {
       method,
+      redirect: 'error',
       headers: {
         authorization: `Bearer ${this.config.workerToken}`,
         'x-talos-worker-token': this.config.workerToken,

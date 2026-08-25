@@ -42,6 +42,7 @@ export class HttpTestingAuthorizationResolver implements TestingAuthorizationRes
     try {
       response = await fetch(this.config.url, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           authorization: `Bearer ${this.config.token}`,
           'content-type': 'application/json'

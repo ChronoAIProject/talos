@@ -156,6 +156,7 @@ export class HttpLocalQARuntimeAdapter implements LocalQARuntimeAdapter {
     try {
       response = await fetch(new URL(path, withTrailingSlash(this.config.baseUrl)), {
         method: options.method,
+        redirect: 'error',
         headers: {
           authorization: `Bearer ${this.config.credential}`,
           'x-local-qa-credential': this.config.credential,
