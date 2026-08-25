@@ -30,6 +30,23 @@ export interface TestingCancelRecord {
   readonly acknowledgement: TestingCancelAck;
 }
 
+export interface TestingCleanupVerificationRecord {
+  readonly schemaVersion: 'talos.testing-cleanup-receipt-verification/v1';
+  readonly verifierId: string;
+  readonly verificationId: string;
+  readonly receiptRef: string;
+  readonly receiptDigest: string;
+  readonly binding: {
+    readonly runId: string;
+    readonly taskId: string;
+    readonly attemptId: string;
+    readonly generation: number;
+    readonly fenceToken: string;
+  };
+  readonly disposition: 'cleanup_complete' | 'cleanup_not_required';
+  readonly verifiedAt: string;
+}
+
 export type TestingTaskRecordStatus =
   | 'submitted'
   | 'reserved'
@@ -197,6 +214,7 @@ export interface TestingRunRecord {
   readonly attempts: readonly TestingAttemptRecord[];
   readonly currentAttemptId?: string;
   readonly reconcileClosure?: TestingReconcileClosure;
+  readonly cleanupVerification?: TestingCleanupVerificationRecord;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

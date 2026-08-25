@@ -140,6 +140,17 @@ describe('Testing worker HTTP routes', () => {
           reconcileClaimDigest: fact.reconcile_claim_digest
         })
       },
+      cleanupReceiptVerifier: {
+        verifyCleanupReceipt: async (receipt, context) => ({
+          schemaVersion: 'talos.testing-cleanup-receipt-verification/v1',
+          verifierId: 'runtime-cleanup-authority',
+          verificationId: `cleanup-verification-${context.attemptId}`,
+          receiptRef: receipt.ref,
+          receiptDigest: receipt.digest,
+          disposition: context.cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required',
+          verifiedAt: new Date(now).toISOString()
+        })
+      },
       clock: () => now,
       leaseSeconds: 1
     });

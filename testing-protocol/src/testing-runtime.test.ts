@@ -9,6 +9,7 @@ import {
   localQACancelAckSchema,
   localQARuntimeCapabilitiesSchema,
   localQARuntimeEventPageSchema,
+  localQARuntimeSnapshotSchema,
   testingAuthorizationResolutionSchema,
   testingRuntimeAttemptSchema
 } from './index.js';
@@ -253,6 +254,60 @@ describe('Local QA Runtime consumer contracts', () => {
       disposition: 'already_terminal',
       snapshot,
       acknowledged_at: now
+    }).success).toBe(false);
+  });
+
+  it('rejects terminal Runtime snapshots with staging evidence or pending cleanup', () => {
+    const binding = {
+      schema_version: 'talos.testing-runtime-execution-binding/v1' as const,
+      run_id: attempt.run_id,
+      task_id: attempt.task_id,
+      attempt_id: attempt.attempt_id,
+      machine_id: attempt.machine_id,
+      generation: attempt.generation,
+      fence_token: attempt.fence_token
+    };
+    const resultBinding = {
+      run_id: attempt.run_id,
+      task_id: attempt.task_id,
+      attempt_id: attempt.attempt_id,
+      generation: attempt.generation,
+      fence_token: attempt.fence_token
+    };
+    const core = {
+      schema_version: 'local-qa-runtime-snapshot/v1' as const,
+      snapshot_ref: 'local-qa://runtime/snapshots/terminal-1',
+      snapshot_version: 1,
+      run_id: attempt.run_id,
+      attempt: binding,
+      state: 'terminal' as const,
+      event_sequence: 1,
+      progress: { phase: 'terminal', completed_cases: 1, total_cases: 1, last_event_sequence: 1 },
+      execution_outcome: 'passed' as const,
+      evidence_outcome: 'complete' as const,
+      upload_outcome: 'pending' as const,
+      cleanup_outcome: 'complete' as const,
+      results: {
+        schema_version: 'talos.testing-terminal-refs/v1' as const,
+        binding: resultBinding,
+        cleanup_receipt: {
+          schema: 'qa.local-cleanup-receipt/v2' as const,
+          ref: 'artifact://runtime/cleanup/receipt-1',
+          digest,
+          binding: resultBinding
+        }
+      },
+      updated_at: now
+    };
+    const staging = { ...core, evidence_outcome: 'staging' as const };
+    const pending = { ...core, cleanup_outcome: 'pending' as const };
+    expect(localQARuntimeSnapshotSchema.safeParse({
+      ...staging,
+      snapshot_digest: computeLocalQARuntimeSnapshotDigest(staging)
+    }).success).toBe(false);
+    expect(localQARuntimeSnapshotSchema.safeParse({
+      ...pending,
+      snapshot_digest: computeLocalQARuntimeSnapshotDigest(pending)
     }).success).toBe(false);
   });
 });

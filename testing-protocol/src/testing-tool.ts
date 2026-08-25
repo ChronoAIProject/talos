@@ -227,6 +227,17 @@ const validateSnapshotResultBinding = (
   value: z.infer<typeof testingRunSnapshotObjectSchema>,
   context: z.RefinementCtx
 ): void => {
+  if (['completed', 'failed', 'cancelled', 'abandoned'].includes(value.control_status)) {
+    if (value.execution_outcome === 'executing') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot still be executing', path: ['execution_outcome'] });
+    }
+    if (value.evidence_outcome === 'staging') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot still stage evidence', path: ['evidence_outcome'] });
+    }
+    if (value.cleanup_outcome === 'pending') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot have pending cleanup', path: ['cleanup_outcome'] });
+    }
+  }
   if (value.results === null) return;
   if (value.attempt === null) {
     context.addIssue({
@@ -269,7 +280,7 @@ export const testingRunSnapshotSchema = testingRunSnapshotObjectSchema.extend({
   const core: Record<string, unknown> = { ...value };
   delete core.snapshot_digest;
   delete core.resume_cursor;
-  if (digestJson(testingRunSnapshotObjectSchema.parse(core)) !== snapshotDigest) {
+  if (digestJson(core) !== snapshotDigest) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'snapshot_digest does not match snapshot',
@@ -292,13 +303,27 @@ export const testingRunEventTypeSchema = z.enum([
   'run.completed',
   'run.failed',
   'run.cancelled',
-  'run.abandoned'
+  'run.abandoned',
+  'run.terminal_projection_updated'
 ]);
 
 const testingRunEventBaseSchema = z.object({
   sequence: z.number().int().positive(),
   time: timestampSchema
 }).strict();
+
+const terminalExecutionOutcomeSchema = testingExecutionOutcomeSchema.refine(
+  (value) => value !== 'executing',
+  'terminal event cannot still be executing'
+);
+const terminalEvidenceOutcomeSchema = testingEvidenceOutcomeSchema.refine(
+  (value) => value !== 'staging',
+  'terminal event cannot still stage evidence'
+);
+const terminalCleanupOutcomeSchema = testingCleanupOutcomeSchema.refine(
+  (value) => value !== 'pending',
+  'terminal event cannot have pending cleanup'
+);
 
 const runSubmittedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.submitted'),
@@ -353,7 +378,7 @@ const runReconcileRequiredEventCoreSchema = testingRunEventBaseSchema.extend({
 }).strict();
 const runCompletedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.completed'),
-  data: z.object({ execution_outcome: testingExecutionOutcomeSchema }).strict()
+  data: z.object({ execution_outcome: terminalExecutionOutcomeSchema }).strict()
 }).strict();
 const runFailedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.failed'),
@@ -361,11 +386,19 @@ const runFailedEventCoreSchema = testingRunEventBaseSchema.extend({
 }).strict();
 const runCancelledEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.cancelled'),
-  data: z.object({ cleanup_outcome: testingCleanupOutcomeSchema }).strict()
+  data: z.object({ cleanup_outcome: terminalCleanupOutcomeSchema }).strict()
 }).strict();
 const runAbandonedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.abandoned'),
   data: z.object({ reason_code: identifierSchema }).strict()
+}).strict();
+const runTerminalProjectionUpdatedEventCoreSchema = testingRunEventBaseSchema.extend({
+  type: z.literal('run.terminal_projection_updated'),
+  data: z.object({
+    evidence_outcome: terminalEvidenceOutcomeSchema,
+    upload_outcome: testingUploadOutcomeSchema,
+    cleanup_outcome: terminalCleanupOutcomeSchema
+  }).strict()
 }).strict();
 
 export const testingRunEventCoreSchema = z.discriminatedUnion('type', [
@@ -381,7 +414,8 @@ export const testingRunEventCoreSchema = z.discriminatedUnion('type', [
   runCompletedEventCoreSchema,
   runFailedEventCoreSchema,
   runCancelledEventCoreSchema,
-  runAbandonedEventCoreSchema
+  runAbandonedEventCoreSchema,
+  runTerminalProjectionUpdatedEventCoreSchema
 ]);
 
 export const computeTestingRunEventDigest = (
@@ -401,10 +435,11 @@ export const testingRunEventSchema = z.discriminatedUnion('type', [
   runCompletedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   runFailedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
   runCancelledEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
-  runAbandonedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict()
+  runAbandonedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict(),
+  runTerminalProjectionUpdatedEventCoreSchema.extend({ event_digest: sha256DigestSchema }).strict()
 ]).superRefine((value, context) => {
   const { event_digest: eventDigest, ...core } = value;
-  if (computeTestingRunEventDigest(core) !== eventDigest) {
+  if (digestJson(core) !== eventDigest) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'event_digest does not match event', path: ['event_digest'] });
   }
 });

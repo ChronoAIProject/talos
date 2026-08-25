@@ -166,6 +166,12 @@ export const localQARuntimeSnapshotSchema = localQARuntimeSnapshotCoreSchema.ext
     if (value.execution_outcome === 'executing') {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot still be executing', path: ['execution_outcome'] });
     }
+    if (value.evidence_outcome === 'staging') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot still stage evidence', path: ['evidence_outcome'] });
+    }
+    if (value.cleanup_outcome === 'pending') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot have pending cleanup', path: ['cleanup_outcome'] });
+    }
     if (['complete', 'not_required'].includes(value.cleanup_outcome ?? '') && value.results?.cleanup_receipt === undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled cleanup requires an exact cleanup receipt', path: ['results', 'cleanup_receipt'] });
     }

@@ -171,6 +171,18 @@ describe('Testing Tool contracts', () => {
     expect(() => testingRunSnapshotSchema.parse({ ...snapshot, execution_outcome: 'passed' })).toThrow(
       'snapshot_digest does not match snapshot'
     );
+    for (const unsettled of [
+      { execution_outcome: 'executing' as const },
+      { evidence_outcome: 'staging' as const },
+      { cleanup_outcome: 'pending' as const }
+    ]) {
+      const invalidCore = { ...core, ...unsettled };
+      expect(testingRunSnapshotSchema.safeParse({
+        ...invalidCore,
+        snapshot_digest: digestJson(invalidCore),
+        resume_cursor: snapshot.resume_cursor
+      }).success).toBe(false);
+    }
 
     const attempt = { attempt_id: 'attempt-1', task_id: 'task-1', generation: 2, machine_id: 'machine-1' };
     const binding = {
@@ -229,6 +241,21 @@ describe('Testing Tool contracts', () => {
       ...eventCore,
       event_digest: computeTestingRunEventDigest(eventCore)
     })).toMatchObject(eventCore);
+    for (const terminalEvent of [
+      { sequence: 2, type: 'run.completed', time: timestamp, data: { execution_outcome: 'executing' } },
+      { sequence: 2, type: 'run.cancelled', time: timestamp, data: { cleanup_outcome: 'pending' } },
+      {
+        sequence: 2,
+        type: 'run.terminal_projection_updated',
+        time: timestamp,
+        data: { evidence_outcome: 'staging', upload_outcome: 'pending', cleanup_outcome: 'pending' }
+      }
+    ]) {
+      expect(testingRunEventSchema.safeParse({
+        ...terminalEvent,
+        event_digest: digestJson(terminalEvent)
+      }).success).toBe(false);
+    }
     expect(() => testingRunEventSchema.parse({
       ...eventCore,
       data: { ...eventCore.data, lease_token: 'forbidden' },

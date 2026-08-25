@@ -25,6 +25,7 @@ import {
   type TestingAttemptBindingInput,
   type TestingAuthorizationProvider,
   type TestingClaimResult,
+  type TestingCleanupReceiptVerifier,
   type TestingReconcileClaimResult,
   type TestingRuntimeFactVerifier,
   type TestingTerminalCommit
@@ -136,12 +137,25 @@ const runtimeFactVerifier: TestingRuntimeFactVerifier = {
   })
 };
 
+const cleanupReceiptVerifier: TestingCleanupReceiptVerifier = {
+  verifyCleanupReceipt: async (receipt, context) => ({
+    schemaVersion: 'talos.testing-cleanup-receipt-verification/v1',
+    verifierId: 'runtime-cleanup-authority',
+    verificationId: `cleanup-verification-${context.attemptId}`,
+    receiptRef: receipt.ref,
+    receiptDigest: receipt.digest,
+    disposition: context.cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required',
+    verifiedAt: '2026-08-22T00:00:00.000Z'
+  })
+};
+
 const setup = async (options: {
   machines?: readonly string[];
   leaseSeconds?: number;
   repository?: MemoryRepository;
   authorizationProvider?: TestingAuthorizationProvider;
   runtimeFactVerifier?: TestingRuntimeFactVerifier;
+  cleanupReceiptVerifier?: TestingCleanupReceiptVerifier | false;
   time?: { value: number };
 } = {}) => {
   const time = options.time ?? { value: Date.parse('2026-08-22T00:00:00.000Z') };
@@ -161,6 +175,9 @@ const setup = async (options: {
     claimKeyId: 'testing-claim-key-1',
     authorizationProvider: options.authorizationProvider ?? authorizationProvider,
     runtimeFactVerifier: options.runtimeFactVerifier ?? runtimeFactVerifier,
+    cleanupReceiptVerifier: options.cleanupReceiptVerifier === false
+      ? undefined
+      : options.cleanupReceiptVerifier ?? cleanupReceiptVerifier,
     clock: () => time.value,
     leaseSeconds: options.leaseSeconds ?? 10
   });
@@ -349,6 +366,40 @@ class DeadlineBarrierRepository extends MemoryRepository {
       guard,
       this.currentTime()
     );
+  }
+}
+
+class ReservationReleaseBarrierRepository extends MemoryRepository {
+  private armed = false;
+  private waiting = 0;
+  private enteredResolve: (() => void) | undefined;
+  private releaseResolve: (() => void) | undefined;
+  private entered = Promise.resolve();
+  private release = Promise.resolve();
+
+  public armReleaseBarrier(): void {
+    this.armed = true;
+    this.waiting = 0;
+    this.entered = new Promise<void>((resolve) => { this.enteredResolve = resolve; });
+    this.release = new Promise<void>((resolve) => { this.releaseResolve = resolve; });
+  }
+
+  public async waitForCompetingReleases(): Promise<void> {
+    await this.entered;
+  }
+
+  public releaseCompetingCalls(): void {
+    this.armed = false;
+    this.releaseResolve?.();
+  }
+
+  public override async releaseTestingMachineReservation(machineId: string, attemptId: string): Promise<boolean> {
+    if (this.armed) {
+      this.waiting += 1;
+      if (this.waiting === 2) this.enteredResolve?.();
+      await this.release;
+    }
+    return super.releaseTestingMachineReservation(machineId, attemptId);
   }
 }
 
@@ -750,6 +801,204 @@ describe('TestingAttemptService', () => {
       .rejects.toMatchObject({ code: 'stale_testing_operation' });
   });
 
+  it('converges concurrent exact terminal commits after one request releases the reservation', async () => {
+    const repository = new ReservationReleaseBarrierRepository();
+    const { runs, attempts } = await setup({ repository });
+    await runs.submit('run-concurrent-terminal', 'user-1', testingRequest('submit-concurrent-terminal'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    const input = terminal(claim);
+    repository.armReleaseBarrier();
+
+    const commits = Promise.all([
+      attempts.commitTerminal(input),
+      attempts.commitTerminal(input)
+    ]);
+    await repository.waitForCompetingReleases();
+    repository.releaseCompetingCalls();
+    const [first, second] = await commits;
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ controlStatus: 'completed', cleanupOutcome: 'complete' });
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
+  });
+
+  it('fails closed when cleanup authority is missing or rejects a structural receipt pointer', async () => {
+    for (const [runId, cleanupReceiptVerifier] of [
+      ['run-cleanup-no-verifier', false],
+      ['run-cleanup-rejected', { verifyCleanupReceipt: async () => undefined }]
+    ] as const) {
+      const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier });
+      await runs.submit(runId, 'user-1', testingRequest(`submit-${runId}`));
+      const claim = await attempts.claim('worker-1', 'machine-1');
+      await attempts.acceptLocal(binding(claim));
+      await expect(attempts.commitTerminal(terminal(claim))).rejects.toMatchObject({
+        code: cleanupReceiptVerifier === false ? 'cleanup_verifier_unavailable' : 'invalid_cleanup_receipt'
+      });
+      expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+      expect(await repository.getTestingRun(runId)).toMatchObject({ controlStatus: 'local_accepted' });
+    }
+  });
+
+  it('rejects unbounded cleanup verification records without persisting adapter fields', async () => {
+    const unboundedVerifier: TestingCleanupReceiptVerifier = {
+      verifyCleanupReceipt: async (receipt, context) => ({
+        schemaVersion: 'talos.testing-cleanup-receipt-verification/v1',
+        verifierId: 'runtime-cleanup-authority',
+        verificationId: `cleanup-verification-${context.attemptId}`,
+        receiptRef: receipt.ref,
+        receiptDigest: receipt.digest,
+        disposition: 'cleanup_complete',
+        verifiedAt: '2026-08-22T00:00:01.000Z',
+        providerCredential: 'must-not-persist'
+      })
+    };
+    const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier: unboundedVerifier });
+    await runs.submit('run-cleanup-unbounded', 'user-1', testingRequest('submit-cleanup-unbounded'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    await expect(attempts.commitTerminal(terminal(claim)))
+      .rejects.toMatchObject({ code: 'invalid_cleanup_receipt' });
+    const run = await repository.getTestingRun('run-cleanup-unbounded');
+    expect(run).toMatchObject({ controlStatus: 'local_accepted' });
+    expect(run?.cleanupVerification).toBeUndefined();
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+  });
+
+  it('advances terminal delivery and cleanup monotonically without reopening execution', async () => {
+    let verifications = 0;
+    const verifierWithCount: TestingCleanupReceiptVerifier = {
+      verifyCleanupReceipt: async (receipt, context) => {
+        verifications += 1;
+        return {
+          schemaVersion: 'talos.testing-cleanup-receipt-verification/v1',
+          verifierId: 'runtime-cleanup-authority',
+          verificationId: `cleanup-verification-${context.attemptId}`,
+          receiptRef: receipt.ref,
+          receiptDigest: receipt.digest,
+          disposition: 'cleanup_complete',
+          verifiedAt: '2026-08-22T00:00:01.000Z'
+        };
+      }
+    };
+    const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier: verifierWithCount });
+    await runs.submit('run-terminal-advance', 'user-1', testingRequest('submit-terminal-advance'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    const initialInput = terminal(claim, {
+      evidenceOutcome: 'partial',
+      uploadOutcome: 'pending',
+      cleanupOutcome: 'residual_blocking',
+      summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0 }
+    });
+    const initial = await attempts.commitTerminal(initialInput);
+    expect(initial).toMatchObject({
+      controlStatus: 'completed',
+      executionOutcome: 'passed',
+      evidenceOutcome: 'partial',
+      uploadOutcome: 'pending',
+      cleanupOutcome: 'residual_blocking',
+      summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0 }
+    });
+    expect(await repository.getTestingMachineReservation('machine-1')).toMatchObject({ status: 'residual_blocking' });
+    expect(verifications).toBe(0);
+
+    if (initialInput.results === undefined) throw new Error('terminal refs fixture missing');
+    const advancedResults = {
+      ...initialInput.results,
+      evidence_manifest: {
+        schema: 'testing-evidence-manifest.v1' as const,
+        ref: 'artifact://testing/evidence/manifests-1',
+        digest,
+        binding: initialInput.results.binding
+      }
+    };
+    const advancedInput = terminal(claim, {
+      evidenceOutcome: 'complete',
+      uploadOutcome: 'uploaded',
+      cleanupOutcome: 'complete',
+      results: advancedResults
+    });
+    const replaceTestingRun = repository.replaceTestingRun.bind(repository);
+    vi.spyOn(repository, 'replaceTestingRun')
+      .mockResolvedValueOnce(false)
+      .mockImplementation(replaceTestingRun);
+    const advanced = await attempts.commitTerminal(advancedInput);
+    expect(advanced).toMatchObject({
+      controlStatus: 'completed',
+      executionOutcome: 'passed',
+      evidenceOutcome: 'complete',
+      uploadOutcome: 'uploaded',
+      cleanupOutcome: 'complete',
+      cleanupVerification: {
+        schemaVersion: 'talos.testing-cleanup-receipt-verification/v1',
+        receiptDigest: digest,
+        binding: { runId: 'run-terminal-advance', attemptId: claim.task.dispatch_attempt_id }
+      },
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: 'run.terminal_projection_updated' })
+      ])
+    });
+    expect(advanced.snapshotVersion).toBe(initial.snapshotVersion + 1);
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
+    expect(verifications).toBe(2);
+    await expect(attempts.commitTerminal(advancedInput)).resolves.toEqual(advanced);
+    expect(verifications).toBe(2);
+    await expect(attempts.commitTerminal({ ...advancedInput, uploadOutcome: 'pending' }))
+      .rejects.toMatchObject({ code: 'terminal_commit_conflict' });
+    await expect(attempts.commitTerminal({
+      ...advancedInput,
+      results: initialInput.results
+    })).rejects.toMatchObject({ code: 'terminal_commit_conflict' });
+  });
+
+  it('rejects terminal commits that still execute, stage evidence, or have pending cleanup', async () => {
+    const { runs, attempts } = await setup();
+    await runs.submit('run-unsettled-terminal', 'user-1', testingRequest('submit-unsettled-terminal'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    for (const projection of [
+      { executionOutcome: 'executing' as const },
+      { evidenceOutcome: 'staging' as const },
+      { cleanupOutcome: 'pending' as const }
+    ]) {
+      await expect(attempts.commitTerminal(terminal(claim, projection)))
+        .rejects.toMatchObject({ code: 'invalid_terminal_projection' });
+    }
+  });
+
+  it('does not advance a blocking terminal projection after its machine reservation is lost', async () => {
+    const { repository, runs, attempts } = await setup();
+    await runs.submit('run-terminal-reservation-lost', 'user-1', testingRequest('submit-terminal-reservation-lost'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    const initialInput = terminal(claim, {
+      evidenceOutcome: 'partial',
+      uploadOutcome: 'pending',
+      cleanupOutcome: 'residual_blocking'
+    });
+    const initial = await attempts.commitTerminal(initialInput);
+    await repository.releaseTestingMachineReservation('machine-1', claim.task.dispatch_attempt_id);
+    if (initialInput.results === undefined) throw new Error('terminal refs fixture missing');
+    const advancedResults = {
+      ...initialInput.results,
+      evidence_manifest: {
+        schema: 'testing-evidence-manifest.v1' as const,
+        ref: 'artifact://testing/evidence/reservation-lost-manifest-1',
+        digest,
+        binding: initialInput.results.binding
+      }
+    };
+
+    await expect(attempts.commitTerminal(terminal(claim, {
+      evidenceOutcome: 'complete',
+      uploadOutcome: 'pending',
+      cleanupOutcome: 'residual_blocking',
+      results: advancedResults
+    }))).rejects.toMatchObject({ code: 'testing_reservation_lost' });
+    expect(await repository.getTestingRun('run-terminal-reservation-lost')).toEqual(initial);
+  });
+
   it('keeps machine slots blocked for residual cleanup outcomes even when a cleanup receipt exists', async () => {
     const { repository, runs, attempts } = await setup({ machines: ['machine-1', 'machine-2'] });
     for (const [index, cleanupOutcome] of ['residual_blocking', 'residual_retryable'].entries()) {
@@ -913,7 +1162,7 @@ describe('TestingAttemptService', () => {
     expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
   });
 
-  it('abandons an unconfirmed reconcile after two minutes and keeps the machine slot blocked', async () => {
+  it('keeps an abandoned reconcile blocked until late verified cleanup releases the slot', async () => {
     const { repository, runs, attempts, advance } = await setup({ leaseSeconds: 1 });
     await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
     const claim = await attempts.claim('worker-1', 'machine-1');
@@ -952,6 +1201,22 @@ describe('TestingAttemptService', () => {
     await runs.submit('run-2', 'user-1', testingRequest('submit-2'));
     await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
     expect((await repository.getTestingRun('run-2'))?.attempts).toHaveLength(0);
+
+    const repaired = await attempts.commitReconcileTerminal(terminal(reconcile, {
+      executionOutcome: 'lost_or_inconclusive',
+      evidenceOutcome: 'not_required',
+      uploadOutcome: 'not_required',
+      cleanupOutcome: 'complete'
+    }));
+    expect(repaired).toMatchObject({
+      controlStatus: 'abandoned',
+      executionOutcome: 'lost_or_inconclusive',
+      cleanupOutcome: 'complete'
+    });
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
+    await expect(attempts.claim('worker-1', 'machine-1')).resolves.toMatchObject({
+      task: { qa_run_id: 'run-2', machine_id: 'machine-1' }
+    });
   });
 
   it('releases a cancelled unknown-acceptance attempt only after an exact Runtime fact', async () => {

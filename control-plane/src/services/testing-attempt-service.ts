@@ -12,6 +12,8 @@ import {
   computeTestingCurrentClaimDigest,
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
+  identifierSchema,
+  sha256DigestSchema,
   testingCurrentClaimEnvelopeCoreSchema,
   testingCurrentClaimEnvelopeSchema,
   testingCurrentClaimResolveRequestSchema,
@@ -39,10 +41,12 @@ import {
   type TestingTerminalRefs,
   type TestingUploadOutcome
 } from '@talos/testing-protocol';
+import { z } from 'zod';
 import { TalosError, notFound } from '../domain/errors.js';
 import type {
   TestingAttemptClaimRecord,
   TestingAttemptRecord,
+  TestingCleanupVerificationRecord,
   TestingMachineReservationRecord,
   TestingRunRecord
 } from '../domain/testing-types.js';
@@ -55,6 +59,17 @@ const activeAttemptStatuses = new Set(['reserved', 'claimed', 'local_accepted', 
 export const TESTING_MAX_ATTEMPTS = 16;
 export const TESTING_MAX_RECONCILE_CLAIMS = 16;
 export const TESTING_RECONCILE_WINDOW_MS = 120_000;
+
+const testingCleanupReceiptVerificationSchema = z.object({
+  schemaVersion: z.literal('talos.testing-cleanup-receipt-verification/v1'),
+  verifierId: identifierSchema,
+  verificationId: identifierSchema,
+  receiptRef: z.string().min(1).max(2_048)
+    .regex(/^artifact:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/),
+  receiptDigest: sha256DigestSchema,
+  disposition: z.enum(['cleanup_complete', 'cleanup_not_required']),
+  verifiedAt: z.string().datetime({ offset: true })
+}).strict();
 
 export interface TestingStartAuthorizationContext {
   readonly operation: 'start';
@@ -126,6 +141,31 @@ export interface TestingNoLocalAcceptanceVerification {
   readonly reconcileClaimDigest: string;
 }
 
+export interface TestingCleanupReceiptVerification {
+  readonly schemaVersion: 'talos.testing-cleanup-receipt-verification/v1';
+  readonly verifierId: string;
+  readonly verificationId: string;
+  readonly receiptRef: string;
+  readonly receiptDigest: string;
+  readonly disposition: 'cleanup_complete' | 'cleanup_not_required';
+  readonly verifiedAt: string;
+}
+
+export interface TestingCleanupReceiptVerifier {
+  verifyCleanupReceipt(
+    receipt: NonNullable<TestingTerminalRefs['cleanup_receipt']>,
+    context: {
+      readonly runId: string;
+      readonly taskId: string;
+      readonly attemptId: string;
+      readonly machineId: string;
+      readonly generation: number;
+      readonly fenceToken: string;
+      readonly cleanupOutcome: 'complete' | 'not_required';
+    }
+  ): Promise<TestingCleanupReceiptVerification | undefined>;
+}
+
 export interface TestingAttemptBindingInput {
   readonly runId: string;
   readonly attemptId: string;
@@ -173,11 +213,18 @@ export interface TestingTerminalCommit extends TestingAttemptBindingInput {
   readonly safeError?: TestingSafeError;
 }
 
+type SettledTestingTerminalCommit = TestingTerminalCommit & {
+  readonly executionOutcome: Exclude<TestingExecutionOutcome, 'executing'>;
+  readonly evidenceOutcome: Exclude<TestingEvidenceOutcome, 'staging'>;
+  readonly cleanupOutcome: Exclude<TestingCleanupOutcome, 'pending'>;
+};
+
 export interface TestingAttemptServiceOptions {
   readonly claimSigningKey?: KeyObject | string;
   readonly claimKeyId?: string;
   readonly authorizationProvider?: TestingAuthorizationProvider;
   readonly runtimeFactVerifier?: TestingRuntimeFactVerifier;
+  readonly cleanupReceiptVerifier?: TestingCleanupReceiptVerifier;
   readonly clock?: () => number;
   readonly leaseSeconds?: number;
 }
@@ -615,8 +662,11 @@ export class TestingAttemptService {
   ): Promise<TestingRunRecord> {
     for (let retries = 0; retries < 20; retries += 1) {
       const run = await this.requireRun(input.runId);
-      const replay = await this.replayTerminal(run, input, reconcile ? 'reconcile' : 'start');
-      if (replay !== undefined) return replay;
+      if (terminalStatuses.has(run.controlStatus)) {
+        const replay = await this.replayTerminal(run, input, reconcile ? 'reconcile' : 'start');
+        if (replay !== undefined) return replay;
+        continue;
+      }
       const attempt = this.assertCurrentAttempt(run, input, reconcile ? 'reconcile' : 'terminal_commit');
       const allowedStatuses: TestingAttemptRecord['status'][] = reconcile
         ? ['reconcile_required']
@@ -627,7 +677,8 @@ export class TestingAttemptService {
       const controlStatus = run.controlStatus === 'cancel_requested' ? 'cancelled' : input.controlStatus;
       const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
       if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
-      this.assertCleanupProof(input.cleanupOutcome, results);
+      this.assertTerminalOutcomes(input);
+      const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
       const now = new Date(this.clock()).toISOString();
       const closing = makeEvent(
         run.progress.last_event_sequence + 1,
@@ -651,6 +702,7 @@ export class TestingAttemptService {
         cleanupOutcome: input.cleanupOutcome,
         summary: input.summary,
         results,
+        ...(cleanupVerification === undefined ? {} : { cleanupVerification }),
         safeError: input.safeError,
         task: { ...run.task, status: controlStatus, updatedAt: now },
         progress: { ...run.progress, phase: controlStatus, last_event_sequence: terminal.sequence },
@@ -1399,7 +1451,6 @@ export class TestingAttemptService {
     input: TestingTerminalCommit,
     expectedOperation: 'start' | 'reconcile'
   ): Promise<TestingRunRecord | undefined> {
-    if (!terminalStatuses.has(run.controlStatus)) return undefined;
     const attempt = run.attempts.find((candidate) => candidate.id === input.attemptId);
     if (attempt === undefined || run.currentAttemptId !== attempt.id) {
       throw new TalosError('stale_testing_attempt', 'testing attempt is not current', 409);
@@ -1410,8 +1461,10 @@ export class TestingAttemptService {
     }
     const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
     if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
-    this.assertCleanupProof(input.cleanupOutcome, results);
-    const controlStatus = run.controlStatus === 'cancelled' ? 'cancelled' : input.controlStatus;
+    this.assertTerminalOutcomes(input);
+    const controlStatus = run.controlStatus === 'cancelled' || run.controlStatus === 'abandoned'
+      ? run.controlStatus
+      : input.controlStatus;
     const existing = {
       control_status: run.controlStatus,
       execution_outcome: run.executionOutcome,
@@ -1428,12 +1481,59 @@ export class TestingAttemptService {
       evidence_outcome: input.evidenceOutcome,
       upload_outcome: input.uploadOutcome,
       cleanup_outcome: input.cleanupOutcome,
-      summary: input.summary ?? null,
+      summary: input.summary === undefined ? existing.summary : input.summary,
       results: results ?? null,
-      safe_error: input.safeError ?? null
+      safe_error: input.safeError === undefined ? existing.safe_error : input.safeError
     };
     if (canonicalJson(existing) !== canonicalJson(requested)) {
-      throw new TalosError('terminal_commit_conflict', 'testing run is bound to another terminal projection', 409);
+      this.assertTerminalAdvance(run, input, results, controlStatus);
+      const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
+      const now = new Date(this.clock()).toISOString();
+      const event = makeEvent(
+        run.progress.last_event_sequence + 1,
+        'run.terminal_projection_updated',
+        now,
+        {
+          evidence_outcome: input.evidenceOutcome,
+          upload_outcome: input.uploadOutcome,
+          cleanup_outcome: input.cleanupOutcome
+        }
+      );
+      const advanced = {
+        ...run,
+        recordVersion: run.recordVersion + 1,
+        snapshotVersion: run.snapshotVersion + 1,
+        evidenceOutcome: input.evidenceOutcome,
+        uploadOutcome: input.uploadOutcome,
+        cleanupOutcome: input.cleanupOutcome,
+        results,
+        ...(cleanupVerification === undefined
+          ? { cleanupVerification: run.cleanupVerification }
+          : { cleanupVerification }),
+        progress: { ...run.progress, last_event_sequence: event.sequence },
+        events: appendBoundedEvents(run, [event]),
+        updatedAt: now
+      };
+      const releasesReservation = this.hasReservationReleaseProof(advanced, attempt);
+      if (!releasesReservation) {
+        const reservation = await this.repository.getTestingMachineReservation(attempt.machineId);
+        if (reservation?.attemptId !== attempt.id) {
+          throw new TalosError('testing_reservation_lost', 'terminal testing reservation is missing', 409);
+        }
+      }
+      if (!await this.repository.replaceTestingRun(advanced, run.recordVersion)) return undefined;
+      if (releasesReservation) {
+        await this.releaseReservation(attempt.machineId, attempt.id);
+      } else {
+        const reservation = await this.repository.getTestingMachineReservation(attempt.machineId);
+        if (reservation?.attemptId !== attempt.id) {
+          throw new TalosError('testing_reservation_lost', 'terminal testing reservation is missing', 409);
+        }
+        if (reservation.status !== 'residual_blocking') {
+          await this.updateReservation(attempt, run.task.id, 'residual_blocking', reservation.expiresAt);
+        }
+      }
+      return advanced;
     }
     if (this.hasReservationReleaseProof(run, attempt)) {
       await this.releaseReservation(attempt.machineId, attempt.id);
@@ -1464,24 +1564,103 @@ export class TestingAttemptService {
     ) throw new TalosError('stale_terminal_binding', 'terminal references are bound to another attempt', 409);
   }
 
-  private assertCleanupProof(
+  private assertTerminalOutcomes(input: TestingTerminalCommit): asserts input is SettledTestingTerminalCommit {
+    if (input.executionOutcome === 'executing' || input.evidenceOutcome === 'staging' || input.cleanupOutcome === 'pending') {
+      throw new TalosError('invalid_terminal_projection', 'testing terminal outcomes are not settled', 409);
+    }
+  }
+
+  private assertTerminalAdvance(
+    run: TestingRunRecord,
+    input: TestingTerminalCommit,
+    results: TestingTerminalRefs | undefined,
+    controlStatus: TestingRunRecord['controlStatus']
+  ): void {
+    if (
+      run.controlStatus !== controlStatus || run.executionOutcome !== input.executionOutcome ||
+      (input.summary !== undefined && canonicalJson(run.summary ?? null) !== canonicalJson(input.summary)) ||
+      (input.safeError !== undefined && canonicalJson(run.safeError ?? null) !== canonicalJson(input.safeError)) ||
+      !isEvidenceAdvance(run.evidenceOutcome, input.evidenceOutcome) ||
+      !isUploadAdvance(run.uploadOutcome, input.uploadOutcome) ||
+      !isCleanupAdvance(run.cleanupOutcome, input.cleanupOutcome) ||
+      !areTerminalRefsMonotonic(run.results, results)
+    ) throw new TalosError('terminal_commit_conflict', 'testing terminal projection cannot advance monotonically', 409);
+  }
+
+  private async verifyCleanupProof(
+    run: TestingRunRecord,
+    attempt: TestingAttemptRecord,
     cleanupOutcome: TestingCleanupOutcome,
     results: TestingTerminalRefs | undefined
-  ): void {
-    if (['complete', 'not_required'].includes(cleanupOutcome) && results?.cleanup_receipt === undefined) {
+  ): Promise<TestingCleanupVerificationRecord | undefined> {
+    if (cleanupOutcome !== 'complete' && cleanupOutcome !== 'not_required') return undefined;
+    const receipt = results?.cleanup_receipt;
+    if (receipt === undefined) {
       throw new TalosError(
         'cleanup_proof_required',
         'terminal cleanup outcome requires an exact attempt-bound cleanup receipt',
         409
       );
     }
+    const existing = run.cleanupVerification;
+    if (
+      existing?.receiptRef === receipt.ref && existing.receiptDigest === receipt.digest &&
+      existing.binding.runId === run.id && existing.binding.taskId === run.task.id &&
+      existing.binding.attemptId === attempt.id && existing.binding.generation === attempt.generation &&
+      existing.binding.fenceToken === attempt.fenceToken &&
+      existing.disposition === (cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required')
+    ) return existing;
+    const verifier = this.options.cleanupReceiptVerifier;
+    if (verifier === undefined) {
+      throw new TalosError('cleanup_verifier_unavailable', 'cleanup receipt verifier is unavailable', 503);
+    }
+    let verification: TestingCleanupReceiptVerification | undefined;
+    try {
+      verification = await verifier.verifyCleanupReceipt(receipt, {
+        runId: run.id,
+        taskId: run.task.id,
+        attemptId: attempt.id,
+        machineId: attempt.machineId,
+        generation: attempt.generation,
+        fenceToken: attempt.fenceToken,
+        cleanupOutcome
+      });
+    } catch {
+      throw new TalosError('cleanup_verifier_unavailable', 'cleanup receipt verifier is unavailable', 503);
+    }
+    const parsedVerification = testingCleanupReceiptVerificationSchema.safeParse(verification);
+    const expectedDisposition = cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required';
+    if (
+      !parsedVerification.success ||
+      parsedVerification.data.receiptRef !== receipt.ref || parsedVerification.data.receiptDigest !== receipt.digest ||
+      parsedVerification.data.disposition !== expectedDisposition
+    ) throw new TalosError('invalid_cleanup_receipt', 'cleanup receipt authority verification failed', 401);
+    return {
+      ...parsedVerification.data,
+      binding: {
+        runId: run.id,
+        taskId: run.task.id,
+        attemptId: attempt.id,
+        generation: attempt.generation,
+        fenceToken: attempt.fenceToken
+      }
+    };
   }
 
   private hasReservationReleaseProof(run: TestingRunRecord, attempt: TestingAttemptRecord): boolean {
     if (!['complete', 'not_required'].includes(run.cleanupOutcome)) return false;
     if (attempt.reservationCancellationReceipt !== undefined) return true;
     const cleanupReceipt = run.results?.cleanup_receipt;
-    if (cleanupReceipt === undefined) return false;
+    const verification = run.cleanupVerification;
+    if (
+      cleanupReceipt === undefined || verification === undefined ||
+      verification.schemaVersion !== 'talos.testing-cleanup-receipt-verification/v1' ||
+      verification.receiptRef !== cleanupReceipt.ref || verification.receiptDigest !== cleanupReceipt.digest ||
+      verification.disposition !== (run.cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required') ||
+      verification.binding.runId !== run.id || verification.binding.taskId !== run.task.id ||
+      verification.binding.attemptId !== attempt.id || verification.binding.generation !== attempt.generation ||
+      verification.binding.fenceToken !== attempt.fenceToken
+    ) return false;
     try {
       this.assertTerminalBinding(run, attempt, run.results as TestingTerminalRefs);
       return true;
@@ -1723,10 +1902,49 @@ export class TestingAttemptService {
     const reservation = await this.repository.getTestingMachineReservation(machineId);
     if (reservation === undefined || reservation.attemptId !== attemptId) return;
     if (!await this.repository.releaseTestingMachineReservation(machineId, attemptId)) {
+      const current = await this.repository.getTestingMachineReservation(machineId);
+      if (current === undefined || current.attemptId !== attemptId) return;
       throw new TalosError('concurrent_update', 'testing reservation changed before release', 409);
     }
   }
 }
+
+const isEvidenceAdvance = (
+  current: TestingEvidenceOutcome,
+  requested: TestingEvidenceOutcome
+): boolean => current === requested ||
+  (current === 'partial' && requested === 'complete') ||
+  (current === 'unavailable' && ['partial', 'complete'].includes(requested));
+
+const isUploadAdvance = (
+  current: TestingUploadOutcome,
+  requested: TestingUploadOutcome
+): boolean => current === requested ||
+  (current === 'pending' && ['uploaded', 'upload_expired'].includes(requested)) ||
+  (current === 'upload_expired' && requested === 'uploaded');
+
+const isCleanupAdvance = (
+  current: TestingCleanupOutcome,
+  requested: TestingCleanupOutcome
+): boolean => current === requested ||
+  (current === 'residual_blocking' && ['residual_retryable', 'complete', 'not_required'].includes(requested)) ||
+  (current === 'residual_retryable' && ['complete', 'not_required'].includes(requested)) ||
+  (current === 'unobserved' && ['residual_blocking', 'residual_retryable', 'complete', 'not_required'].includes(requested));
+
+const areTerminalRefsMonotonic = (
+  current: TestingTerminalRefs | undefined,
+  requested: TestingTerminalRefs | undefined
+): boolean => {
+  if (current === undefined) return true;
+  if (requested === undefined || canonicalJson(current.binding) !== canonicalJson(requested.binding)) return false;
+  for (const field of ['case_result_set', 'evidence_manifest', 'cleanup_receipt'] as const) {
+    if (
+      current[field] !== undefined &&
+      (requested[field] === undefined || canonicalJson(current[field]) !== canonicalJson(requested[field]))
+    ) return false;
+  }
+  return true;
+};
 
 const hashSecret = (value: string): string => createHash('sha256').update(value).digest('hex');
 

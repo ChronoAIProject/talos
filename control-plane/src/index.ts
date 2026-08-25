@@ -18,6 +18,7 @@ import { TestingRunService } from './services/testing-run-service.js';
 import {
   TestingAttemptService,
   type TestingAuthorizationProvider,
+  type TestingCleanupReceiptVerifier,
   type TestingRuntimeFactVerifier
 } from './services/testing-attempt-service.js';
 import {
@@ -48,6 +49,7 @@ export const createControlPlane = (
     openApiPath?: string;
     testingAuthorizationProvider?: TestingAuthorizationProvider;
     testingRuntimeFactVerifier?: TestingRuntimeFactVerifier;
+    testingCleanupReceiptVerifier?: TestingCleanupReceiptVerifier;
     testingClaimSigningKey?: KeyObject | string;
     testingClaimKeyId?: string;
     testingPlacementPolicy?: TestingPlacementPolicy;
@@ -81,6 +83,7 @@ export const createControlPlane = (
     claimKeyId: options.testingClaimKeyId ?? process.env.TALOS_TESTING_CLAIM_KEY_ID,
     authorizationProvider: options.testingAuthorizationProvider,
     runtimeFactVerifier: options.testingRuntimeFactVerifier,
+    cleanupReceiptVerifier: options.testingCleanupReceiptVerifier,
     clock: Date.now
   });
   const server = createApiServer(service, repository, {

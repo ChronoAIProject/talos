@@ -126,7 +126,17 @@ export const testingTerminalCommitBodySchema = testingAttemptBindingBodySchema.e
   summary: testingRunSummarySchema.optional(),
   results: testingTerminalRefsSchema.optional(),
   safe_error: testingSafeErrorSchema.optional()
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.execution_outcome === 'executing') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot still be executing', path: ['execution_outcome'] });
+  }
+  if (value.evidence_outcome === 'staging') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot still stage evidence', path: ['evidence_outcome'] });
+  }
+  if (value.cleanup_outcome === 'pending') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot have pending cleanup', path: ['cleanup_outcome'] });
+  }
+});
 
 export const testingNoLocalAcceptanceBodySchema = testingAttemptBindingBodySchema.extend({
   fact: testingNoLocalAcceptanceFactSchema
