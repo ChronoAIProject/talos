@@ -1,5 +1,20 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
-import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
+import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
+
+export interface TestingAttemptMutationGuard {
+  readonly attemptId: string;
+  readonly operation: 'start' | 'reconcile';
+  readonly generation: number;
+  readonly fenceToken: string;
+  readonly leaseId: string;
+  readonly leaseExpiresAt: string;
+}
+
+export interface TestingAttemptDispatchGuard extends TestingAttemptMutationGuard {
+  readonly status: TestingAttemptStatus;
+  readonly dispatchLeaseExpiresAt: string;
+  readonly dispatchAuthorizationExpiresAt: string;
+}
 
 export interface Repository {
   ping(): Promise<void>;
@@ -41,6 +56,20 @@ export interface Repository {
     run: TestingRunRecord,
     expectedRecordVersion: number,
     deadline: 'run' | 'reconcile',
+    observedNow: number
+  ): Promise<boolean>;
+  replaceTestingRunForAttempt(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptMutationGuard,
+    observedNow: number
+  ): Promise<boolean>;
+  replaceTestingRunForDispatch(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptDispatchGuard,
     observedNow: number
   ): Promise<boolean>;
   createTestingMachineReservation(reservation: TestingMachineReservationRecord): Promise<boolean>;

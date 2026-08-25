@@ -8,6 +8,7 @@ export class Scheduler {
     const profile = task.profileId === undefined ? undefined : await this.repository.getProfile(task.profileId);
     const machine = await this.repository.getMachine(machineId);
     if (machine === undefined || !machine.online || machine.activeLeases >= machine.capacity) return undefined;
+    if (machine.tags.testing_task_contract === 'talos.testing-task/v1') return undefined;
     if (task.poolId !== undefined && task.poolId !== machine.poolId) return undefined;
     if (profile?.machineId !== undefined && profile.machineId !== machine.id) return undefined;
     const pool = await this.repository.getPool(machine.poolId);

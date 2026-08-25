@@ -172,9 +172,10 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavai
     try {
       const digest = `sha256:${'a'.repeat(64)}`;
       const reference = (schema: string, ref: string) => ({ schema, ref, digest });
+      const observedNow = Date.now();
       const service = new TestingRunService(repository, {
         cursorSecret: 'repository-contract-secret-1234',
-        clock: () => Date.parse('2026-08-22T00:00:00.000Z')
+        clock: () => observedNow
       });
       const policy = {
         network_scope: 'environment_owned_loopback_exact_origins' as const,
@@ -214,6 +215,122 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavai
       if (run === undefined) throw new Error('testing run missing');
       expect(await repository.replaceTestingRun({ ...run, recordVersion: 2 }, 1)).toBe(true);
       expect(await repository.replaceTestingRun({ ...run, recordVersion: 3 }, 1)).toBe(false);
+
+      const leaseExpiresAt = new Date(observedNow + 120_000).toISOString();
+      const authorizationExpiresAt = new Date(observedNow + 60_000).toISOString();
+      const attempt = {
+        id: 'attempt-contract',
+        claimId: 'claim-contract',
+        operation: 'start' as const,
+        generation: 1,
+        status: 'claimed' as const,
+        machineId: 'machine-contract',
+        workerId: 'worker-contract',
+        leaseId: 'lease-contract',
+        leaseTokenHash: 'b'.repeat(64),
+        fenceToken: 'fence-contract',
+        admissionNonce: 'admission-contract',
+        priorClaims: [],
+        leaseClaim: {
+          schema: 'talos.testing-lease-claim/v1' as const,
+          ref: 'talos://testing/claims/run-contract/claim-contract',
+          digest,
+          expires_at: run.deadlineAt
+        },
+        authorization: {
+          ref: 'authorization://testing/attempt-contract',
+          digest,
+          expires_at: authorizationExpiresAt
+        },
+        leaseExpiresAt,
+        issuedAt: new Date(observedNow).toISOString(),
+        deadline: run.deadlineAt,
+        createdAt: new Date(observedNow).toISOString(),
+        updatedAt: new Date(observedNow).toISOString()
+      };
+      const attempted = {
+        ...run,
+        recordVersion: 3,
+        controlStatus: 'claimed' as const,
+        task: { ...run.task, status: 'claimed' as const },
+        attempts: [attempt],
+        currentAttemptId: attempt.id,
+        attempt: {
+          attempt_id: attempt.id,
+          task_id: run.task.id,
+          generation: attempt.generation,
+          machine_id: attempt.machineId
+        }
+      };
+      expect(await repository.replaceTestingRun(attempted, 2)).toBe(true);
+      const guard = {
+        attemptId: attempt.id,
+        operation: attempt.operation,
+        generation: attempt.generation,
+        fenceToken: attempt.fenceToken,
+        leaseId: attempt.leaseId,
+        leaseExpiresAt: attempt.leaseExpiresAt
+      };
+      const heartbeat = { ...attempted, recordVersion: 4 };
+      expect(await repository.replaceTestingRunForAttempt(heartbeat, 3, 'run', guard, observedNow)).toBe(true);
+      expect(await repository.replaceTestingRunForAttempt(
+        { ...heartbeat, recordVersion: 5 },
+        4,
+        'run',
+        { ...guard, fenceToken: 'stale-fence' },
+        observedNow
+      )).toBe(false);
+
+      const invalidLeaseAttempt = { ...attempt, leaseExpiresAt: 'invalid-lease-expiry' };
+      const invalidLeaseRun = { ...heartbeat, recordVersion: 5, attempts: [invalidLeaseAttempt] };
+      expect(await repository.replaceTestingRun(invalidLeaseRun, 4)).toBe(true);
+      expect(await repository.replaceTestingRunForAttempt(
+        { ...invalidLeaseRun, recordVersion: 6 },
+        5,
+        'run',
+        { ...guard, leaseExpiresAt: invalidLeaseAttempt.leaseExpiresAt },
+        observedNow
+      )).toBe(false);
+
+      const reservedAttempt = { ...attempt, status: 'reserved' as const, authorization: undefined };
+      const dispatchSource = { ...invalidLeaseRun, recordVersion: 6, attempts: [reservedAttempt] };
+      expect(await repository.replaceTestingRun(dispatchSource, 5)).toBe(true);
+      const dispatchedAttempt = { ...attempt, status: 'claimed' as const };
+      const dispatched = { ...dispatchSource, recordVersion: 7, attempts: [dispatchedAttempt] };
+      const dispatchGuard = {
+        ...guard,
+        status: reservedAttempt.status,
+        dispatchLeaseExpiresAt: dispatchedAttempt.leaseExpiresAt,
+        dispatchAuthorizationExpiresAt: authorizationExpiresAt
+      };
+      expect(await repository.replaceTestingRunForDispatch(
+        dispatched,
+        6,
+        'run',
+        dispatchGuard,
+        observedNow
+      )).toBe(true);
+      expect(await repository.replaceTestingRunForDispatch(
+        { ...dispatched, recordVersion: 8 },
+        7,
+        'run',
+        {
+          ...guard,
+          status: dispatchedAttempt.status,
+          dispatchLeaseExpiresAt: dispatchedAttempt.leaseExpiresAt,
+          dispatchAuthorizationExpiresAt: 'invalid-authorization-expiry'
+        },
+        observedNow
+      )).toBe(false);
+
+      const invalidDeadline = { ...dispatched, recordVersion: 8, deadlineAt: 'invalid-run-deadline' };
+      expect(await repository.replaceTestingRun(invalidDeadline, 7)).toBe(true);
+      expect(await repository.replaceTestingRunWithinDeadline(
+        { ...invalidDeadline, recordVersion: 9 },
+        8,
+        'run',
+        observedNow
+      )).toBe(false);
     } finally {
       await close();
     }

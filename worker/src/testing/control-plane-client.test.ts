@@ -165,6 +165,21 @@ describe('HttpTestingWorkerClient', () => {
     fetchMock.mockRestore();
   });
 
+  it('accepts control-plane cancellation canonicalization for a raced terminal commit', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(
+      mutationAck('terminal', terminalPayload, 'cancelled')
+    ), { status: 200 }));
+    const client = new HttpTestingWorkerClient({
+      controlPlaneUrl: 'https://nyxid.example/public/s/talos-worker',
+      workerId: 'worker-1',
+      machineId: 'machine-1',
+      workerToken: 'worker-token-123456'
+    });
+
+    await expect(client.commitTerminal(credentials, terminal)).resolves.toBeUndefined();
+    fetchMock.mockRestore();
+  });
+
   it('rejects a same-attempt acknowledgement for another mutation', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(
       mutationAck('running', {}, 'running', currentClaim)

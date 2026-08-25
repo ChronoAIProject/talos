@@ -45,6 +45,16 @@ describe('Scheduler eligibility', () => {
     expect(await scheduler.isEligible(task(), 'full', 'u')).toBeUndefined();
     await repository.saveMachine({ id: 'offline', poolId: 'platform', tags: {}, capacity: 1, activeLeases: 0, online: false, workerTokenHash: 'x' });
     expect(await scheduler.isEligible(task(), 'offline', 'u')).toBeUndefined();
+    await repository.saveMachine({
+      id: 'testing-only',
+      poolId: 'platform',
+      tags: { testing_task_contract: 'talos.testing-task/v1' },
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'x'
+    });
+    expect(await scheduler.isEligible(task(), 'testing-only', 'u')).toBeUndefined();
   });
 
   it('enforces org group sharing with closed-by-default semantics', async () => {

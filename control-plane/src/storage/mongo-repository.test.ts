@@ -42,17 +42,7 @@ class FakeCollection {
 
   public async findOne(filter: Readonly<Record<string, unknown>>): Promise<FakeDocument | null> {
     const document = [...this.documents.values()].find((candidate) =>
-      Object.entries(filter).every(([key, value]) => {
-        if (key !== '$expr') return candidate[key] === value;
-        const expression = value as {
-          $gt?: readonly [{ $dateFromString?: { dateString?: string } }, string];
-        };
-        const dateField = expression.$gt?.[0].$dateFromString?.dateString;
-        if (dateField?.startsWith('$') !== true || expression.$gt?.[1] !== '$$NOW') return false;
-        const dateValue = candidate[dateField.slice(1)];
-        return typeof dateValue === 'string' &&
-          Date.parse(dateValue) > Date.parse('2026-08-22T00:00:00.000Z');
-      }));
+      matchesFilter(candidate, filter));
     return document === undefined ? null : structuredClone(document);
   }
 
@@ -73,6 +63,47 @@ class FakeCollection {
     return { deletedCount: 1 };
   }
 }
+
+const matchesFilter = (
+  candidate: Readonly<Record<string, unknown>>,
+  filter: Readonly<Record<string, unknown>>
+): boolean => Object.entries(filter).every(([key, value]) => {
+  if (key === '$expr') return matchesExpression(candidate, value);
+  if (typeof value === 'object' && value !== null && '$elemMatch' in value) {
+    const items = candidate[key];
+    return Array.isArray(items) && items.some((item) =>
+      typeof item === 'object' && item !== null &&
+      matchesFilter(item as Readonly<Record<string, unknown>>, value.$elemMatch as Readonly<Record<string, unknown>>));
+  }
+  return dottedValue(candidate, key) === value;
+});
+
+const matchesExpression = (candidate: Readonly<Record<string, unknown>>, input: unknown): boolean => {
+  if (typeof input !== 'object' || input === null) return false;
+  if ('$and' in input) {
+    return Array.isArray(input.$and) && input.$and.every((expression) => matchesExpression(candidate, expression));
+  }
+  if (!('$gt' in input) || !Array.isArray(input.$gt) || input.$gt.length !== 2 || input.$gt[1] !== '$$NOW') {
+    return false;
+  }
+  const operand = input.$gt[0] as { $convert?: { input?: unknown; to?: unknown; onError?: unknown; onNull?: unknown } };
+  const conversion = operand.$convert;
+  if (conversion?.to !== 'date' || conversion.onError !== null || conversion.onNull !== null) return false;
+  const dateInput = conversion.input;
+  const dateValue = typeof dateInput === 'string' && dateInput.startsWith('$')
+    ? dottedValue(candidate, dateInput.slice(1))
+    : typeof dateInput === 'object' && dateInput !== null && '$literal' in dateInput
+      ? dateInput.$literal
+      : undefined;
+  return typeof dateValue === 'string' &&
+    Date.parse(dateValue) > Date.parse('2026-08-22T00:00:00.000Z');
+};
+
+const dottedValue = (candidate: Readonly<Record<string, unknown>>, path: string): unknown =>
+  path.split('.').reduce<unknown>((value, part) =>
+    typeof value === 'object' && value !== null
+      ? (value as Readonly<Record<string, unknown>>)[part]
+      : undefined, candidate);
 
 class FakeDatabase {
   private readonly collections = new Map<string, FakeCollection>();
@@ -203,6 +234,112 @@ describe('MongoRepository testing run persistence', () => {
     expect(await repository.replaceTestingRun(expired, 3)).toBe(true);
     expect(await repository.replaceTestingRunWithinDeadline({ ...expired, recordVersion: 5 }, 4, 'run', 0))
       .toBe(false);
+
+    const guardedAttempt = {
+      id: 'attempt-guarded',
+      claimId: 'claim-guarded',
+      operation: 'start' as const,
+      generation: 1,
+      status: 'claimed' as const,
+      machineId: 'machine-guarded',
+      workerId: 'worker-guarded',
+      leaseId: 'lease-guarded',
+      leaseTokenHash: 'a'.repeat(64),
+      fenceToken: 'fence-token-guarded',
+      admissionNonce: 'admission-nonce-guarded',
+      priorClaims: [],
+      leaseClaim: {
+        schema: 'talos.testing-lease-claim/v1' as const,
+        ref: 'talos://testing/claims/run-guarded/claim-guarded',
+        digest: `sha256:${'b'.repeat(64)}`,
+        expires_at: '2026-08-22T00:10:00.000Z'
+      },
+      authorization: {
+        ref: 'authorization://testing/run-guarded',
+        digest: `sha256:${'c'.repeat(64)}`,
+        expires_at: '2026-08-22T00:05:00.000Z'
+      },
+      leaseExpiresAt: '2026-08-22T00:01:00.000Z',
+      issuedAt: '2026-08-22T00:00:00.000Z',
+      deadline: '2026-08-22T00:10:00.000Z',
+      createdAt: '2026-08-22T00:00:00.000Z',
+      updatedAt: '2026-08-22T00:00:00.000Z'
+    };
+    const guardedRun: TestingRunRecord = {
+      ...run,
+      id: 'run-guarded',
+      idempotencyKey: 'guarded-key',
+      acceptance: { ...run.acceptance, run_id: 'run-guarded' },
+      deadlineAt: '2026-08-22T00:10:00.000Z',
+      attempts: [guardedAttempt],
+      currentAttemptId: guardedAttempt.id,
+      recordVersion: 1
+    };
+    expect(await repository.createTestingRun(guardedRun)).toBe(true);
+    const guard = {
+      attemptId: guardedAttempt.id,
+      operation: guardedAttempt.operation,
+      generation: guardedAttempt.generation,
+      fenceToken: guardedAttempt.fenceToken,
+      leaseId: guardedAttempt.leaseId,
+      leaseExpiresAt: guardedAttempt.leaseExpiresAt,
+      authorizationExpiresAt: guardedAttempt.authorization.expires_at
+    };
+    expect(await repository.replaceTestingRunForAttempt(
+      { ...guardedRun, recordVersion: 2 },
+      1,
+      'run',
+      guard,
+      0
+    )).toBe(true);
+    expect(await repository.replaceTestingRunForAttempt(
+      { ...guardedRun, recordVersion: 3 },
+      2,
+      'run',
+      { ...guard, leaseExpiresAt: '2026-08-21T23:59:59.000Z' },
+      0
+    )).toBe(false);
+
+    const dispatchedLeaseExpiresAt = '2026-08-22T00:02:00.000Z';
+    const dispatchedAuthorizationExpiresAt = '2026-08-22T00:05:00.000Z';
+    const dispatchedAttempt = {
+      ...guardedAttempt,
+      leaseExpiresAt: dispatchedLeaseExpiresAt,
+      authorization: {
+        ...guardedAttempt.authorization,
+        expires_at: dispatchedAuthorizationExpiresAt
+      }
+    };
+    const dispatchedRun = { ...guardedRun, attempts: [dispatchedAttempt], recordVersion: 3 };
+    expect(await repository.replaceTestingRunForDispatch(
+      dispatchedRun,
+      2,
+      'run',
+      {
+        ...guard,
+        status: guardedAttempt.status,
+        dispatchLeaseExpiresAt: dispatchedLeaseExpiresAt,
+        dispatchAuthorizationExpiresAt: dispatchedAuthorizationExpiresAt
+      },
+      0
+    )).toBe(true);
+    expect(await repository.replaceTestingRunForDispatch(
+      { ...dispatchedRun, recordVersion: 4 },
+      3,
+      'run',
+      {
+        attemptId: dispatchedAttempt.id,
+        operation: dispatchedAttempt.operation,
+        generation: dispatchedAttempt.generation,
+        fenceToken: dispatchedAttempt.fenceToken,
+        leaseId: dispatchedAttempt.leaseId,
+        leaseExpiresAt: dispatchedAttempt.leaseExpiresAt,
+        status: dispatchedAttempt.status,
+        dispatchLeaseExpiresAt: 'not-a-timestamp',
+        dispatchAuthorizationExpiresAt: dispatchedAuthorizationExpiresAt
+      },
+      0
+    )).toBe(false);
 
     const reservation = {
       machineId: 'machine-1',

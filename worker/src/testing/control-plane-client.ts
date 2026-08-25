@@ -135,7 +135,7 @@ export class HttpTestingWorkerClient implements TestingWorkerControlPlane {
       `/v1/worker/testing/runs/${encodeURIComponent(credentials.runId)}/result`,
       terminalBody(credentials, projection),
       signal
-    ), 'terminal', credentials, payload, projection.controlStatus);
+    ), 'terminal', credentials, payload, terminalAcknowledgementStatuses(projection.controlStatus));
   }
 
   public async commitReconcileTerminal(
@@ -148,7 +148,7 @@ export class HttpTestingWorkerClient implements TestingWorkerControlPlane {
       `/v1/worker/testing/runs/${encodeURIComponent(credentials.runId)}/reconcile`,
       terminalBody(credentials, projection),
       signal
-    ), 'reconcile_terminal', credentials, payload, projection.controlStatus);
+    ), 'reconcile_terminal', credentials, payload, terminalAcknowledgementStatuses(projection.controlStatus));
   }
 
   public async confirmNotAccepted(
@@ -316,7 +316,7 @@ const requireMutationAcknowledgement = (
   operation: TestingWorkerMutationOperation,
   credentials: TestingAttemptCredentials,
   payload: Readonly<Record<string, unknown>>,
-  expectedStatus?: string
+  expectedStatus?: string | readonly string[]
 ): ReturnType<typeof testingWorkerMutationAckSchema.parse> => {
   const acknowledgement = testingWorkerMutationAckSchema.parse(input);
   const mutationDigest = computeTestingWorkerMutationDigest({
@@ -335,10 +335,15 @@ const requireMutationAcknowledgement = (
     acknowledgement.generation !== credentials.generation ||
     acknowledgement.fence_token !== credentials.fenceToken ||
     acknowledgement.mutation_digest !== mutationDigest ||
-    (expectedStatus !== undefined && acknowledgement.control_status !== expectedStatus)
+    (expectedStatus !== undefined && !(Array.isArray(expectedStatus)
+      ? expectedStatus.includes(acknowledgement.control_status)
+      : acknowledgement.control_status === expectedStatus))
   ) throw acknowledgementMismatch();
   return acknowledgement;
 };
+
+const terminalAcknowledgementStatuses = (requested: TestingTerminalProjection['controlStatus']): readonly string[] =>
+  requested === 'cancelled' ? ['cancelled'] : [requested, 'cancelled'];
 
 const acknowledgementMismatch = (): WorkerClientError => new WorkerClientError(
   'testing_control_plane_ack_mismatch',

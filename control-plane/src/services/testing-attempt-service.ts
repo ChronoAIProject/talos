@@ -47,7 +47,7 @@ import type {
   TestingRunRecord
 } from '../domain/testing-types.js';
 import type { Machine, Pool } from '../domain/types.js';
-import type { Repository } from '../storage/repository.js';
+import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
@@ -265,12 +265,13 @@ export class TestingAttemptService {
             last_event_sequence: run.progress.last_event_sequence
           }
         }),
-        updatedAt: updatedAttempt.updatedAt
+        updatedAt: progress === undefined ? run.updatedAt : updatedAttempt.updatedAt
       });
-      if (!await this.repository.replaceTestingRunWithinDeadline(
+      if (!await this.repository.replaceTestingRunForAttempt(
         updated,
         run.recordVersion,
         this.deadlineKind(attempt),
+        this.mutationGuard(attempt),
         now
       )) continue;
       await this.updateReservation(updatedAttempt, run.task.id, this.reservationStatus(updatedAttempt), expiresAt);
@@ -414,7 +415,13 @@ export class TestingAttemptService {
       snapshotVersion: run.snapshotVersion + 1,
       updatedAt: now
     });
-    if (!await this.repository.replaceTestingRunWithinDeadline(updated, run.recordVersion, 'reconcile', this.clock())) {
+    if (!await this.repository.replaceTestingRunForDispatch(
+      updated,
+      run.recordVersion,
+      'reconcile',
+      this.dispatchGuard(attempt, leaseExpiresAt, authorization.expires_at),
+      this.clock()
+    )) {
       throw new TalosError('claim_superseded', 'testing reconcile claim was superseded', 409);
     }
     await this.updateReservation(updatedAttempt, run.task.id, 'reconcile_required', reconcileDeadline);
@@ -573,10 +580,11 @@ export class TestingAttemptService {
         events: appendBoundedEvents(run, terminalEvent === undefined ? [releaseEvent] : [releaseEvent, terminalEvent]),
         updatedAt: now
       });
-      if (!await this.repository.replaceTestingRunWithinDeadline(
+      if (!await this.repository.replaceTestingRunForAttempt(
         updated,
         run.recordVersion,
         'reconcile',
+        this.mutationGuard(attempt),
         this.clock()
       )) continue;
       await this.releaseReservation(attempt.machineId, attempt.id);
@@ -616,9 +624,7 @@ export class TestingAttemptService {
       if (!allowedStatuses.includes(attempt.status)) {
         throw new TalosError('invalid_testing_state', 'testing attempt is not ready for terminal commit', 409);
       }
-      if (run.controlStatus === 'cancel_requested' && input.controlStatus !== 'cancelled') {
-        throw new TalosError('cancel_requested', 'testing run must close as cancelled after cancel intent', 409);
-      }
+      const controlStatus = run.controlStatus === 'cancel_requested' ? 'cancelled' : input.controlStatus;
       const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
       if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
       this.assertCleanupProof(input.cleanupOutcome, results);
@@ -627,18 +633,18 @@ export class TestingAttemptService {
         run.progress.last_event_sequence + 1,
         'run.closing',
         now,
-        { reason_code: input.controlStatus }
+        { reason_code: controlStatus }
       );
-      const terminal = input.controlStatus === 'completed'
+      const terminal = controlStatus === 'completed'
         ? makeEvent(closing.sequence + 1, 'run.completed', now, { execution_outcome: input.executionOutcome })
-        : input.controlStatus === 'failed'
+        : controlStatus === 'failed'
           ? makeEvent(closing.sequence + 1, 'run.failed', now, { error_code: input.safeError?.code ?? 'testing_failed' })
           : makeEvent(closing.sequence + 1, 'run.cancelled', now, { cleanup_outcome: input.cleanupOutcome });
-      const updatedAttempt: TestingAttemptRecord = { ...attempt, status: input.controlStatus, updatedAt: now };
+      const updatedAttempt: TestingAttemptRecord = { ...attempt, status: controlStatus, updatedAt: now };
       const updated = this.withAttempt(run, updatedAttempt, {
         recordVersion: run.recordVersion + 1,
         snapshotVersion: run.snapshotVersion + 1,
-        controlStatus: input.controlStatus,
+        controlStatus,
         executionOutcome: input.executionOutcome,
         evidenceOutcome: input.evidenceOutcome,
         uploadOutcome: input.uploadOutcome,
@@ -646,15 +652,16 @@ export class TestingAttemptService {
         summary: input.summary,
         results,
         safeError: input.safeError,
-        task: { ...run.task, status: input.controlStatus, updatedAt: now },
-        progress: { ...run.progress, phase: input.controlStatus, last_event_sequence: terminal.sequence },
+        task: { ...run.task, status: controlStatus, updatedAt: now },
+        progress: { ...run.progress, phase: controlStatus, last_event_sequence: terminal.sequence },
         events: appendBoundedEvents(run, [closing, terminal]),
         updatedAt: now
       });
-      if (!await this.repository.replaceTestingRunWithinDeadline(
+      if (!await this.repository.replaceTestingRunForAttempt(
         updated,
         run.recordVersion,
         reconcile ? 'reconcile' : 'run',
+        this.mutationGuard(attempt),
         this.clock()
       )) continue;
       if (this.hasReservationReleaseProof(updated, updatedAttempt)) {
@@ -922,7 +929,13 @@ export class TestingAttemptService {
       events: appendBoundedEvents(reserved, [claimedEvent]),
       updatedAt: claimedAt
     });
-    if (!await this.repository.replaceTestingRunWithinDeadline(claimed, reserved.recordVersion, 'run', this.clock())) {
+    if (!await this.repository.replaceTestingRunForDispatch(
+      claimed,
+      reserved.recordVersion,
+      'run',
+      this.dispatchGuard(attempt, leaseExpiresAt, authorization.expires_at),
+      this.clock()
+    )) {
       await this.releaseBeforeAcceptance(reserved, attempt, 'claim_conflict');
       throw new TalosError('claim_superseded', 'testing claim was superseded before dispatch', 409);
     }
@@ -980,7 +993,13 @@ export class TestingAttemptService {
         events: appendBoundedEvents(run, [event]),
         updatedAt: now
       });
-      if (!await this.repository.replaceTestingRunWithinDeadline(updated, run.recordVersion, 'run', this.clock())) continue;
+      if (!await this.repository.replaceTestingRunForAttempt(
+        updated,
+        run.recordVersion,
+        'run',
+        this.mutationGuard(attempt),
+        this.clock()
+      )) continue;
       await this.updateReservation(
         updatedAttempt,
         run.task.id,
@@ -1016,9 +1035,6 @@ export class TestingAttemptService {
       if (this.operationDeadline(run, attempt) <= now) {
         throw new TalosError('testing_reconcile_deadline_exceeded', 'testing reconcile deadline has passed', 409);
       }
-      if (attempt.authorization === undefined || Date.parse(attempt.authorization.expires_at) <= now) {
-        throw new TalosError('testing_authorization_expired', 'testing reconcile authorization has expired', 409);
-      }
     } else if (this.operationDeadline(run, attempt) <= now) {
       throw new TalosError('testing_deadline_exceeded', 'testing deadline has passed', 409);
     }
@@ -1031,13 +1047,6 @@ export class TestingAttemptService {
     }
     if (run.controlStatus === 'cancel_requested' && !['heartbeat', 'runtime_cancel', 'terminal_commit', 'reconcile'].includes(effect)) {
       throw new TalosError('cancel_requested', 'testing run has a durable cancel intent', 409);
-    }
-    if (
-      effect === 'runtime_dispatch' &&
-      attempt.status === 'claimed' &&
-      (attempt.authorization === undefined || Date.parse(attempt.authorization.expires_at) <= now)
-    ) {
-      throw new TalosError('testing_authorization_expired', 'testing start authorization has expired', 409);
     }
     if (!activeAttemptStatuses.has(attempt.status) && !reconciling) {
       throw new TalosError('stale_testing_attempt', 'testing attempt is no longer active', 409);
@@ -1194,6 +1203,7 @@ export class TestingAttemptService {
   private async machineEligible(machine: Machine, run: TestingRunRecord): Promise<boolean> {
     const tags = machine.tags;
     if (
+      machine.activeLeases >= machine.capacity ||
       tags.testing_runtime !== run.request.placement_requirements.testing_runtime ||
       tags.testing_task_contract !== 'talos.testing-task/v1' ||
       tags.testing_backend !== 'browser' ||
@@ -1400,6 +1410,7 @@ export class TestingAttemptService {
     const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
     if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
     this.assertCleanupProof(input.cleanupOutcome, results);
+    const controlStatus = run.controlStatus === 'cancelled' ? 'cancelled' : input.controlStatus;
     const existing = {
       control_status: run.controlStatus,
       execution_outcome: run.executionOutcome,
@@ -1411,7 +1422,7 @@ export class TestingAttemptService {
       safe_error: run.safeError ?? null
     };
     const requested = {
-      control_status: input.controlStatus,
+      control_status: controlStatus,
       execution_outcome: input.executionOutcome,
       evidence_outcome: input.evidenceOutcome,
       upload_outcome: input.uploadOutcome,
@@ -1555,6 +1566,30 @@ export class TestingAttemptService {
 
   private deadlineKind(attempt: TestingAttemptRecord): 'run' | 'reconcile' {
     return attempt.operation === 'reconcile' ? 'reconcile' : 'run';
+  }
+
+  private mutationGuard(attempt: TestingAttemptRecord): TestingAttemptMutationGuard {
+    return {
+      attemptId: attempt.id,
+      operation: attempt.operation,
+      generation: attempt.generation,
+      fenceToken: attempt.fenceToken,
+      leaseId: attempt.leaseId,
+      leaseExpiresAt: attempt.leaseExpiresAt
+    };
+  }
+
+  private dispatchGuard(
+    attempt: TestingAttemptRecord,
+    dispatchLeaseExpiresAt: string,
+    dispatchAuthorizationExpiresAt: string
+  ): TestingAttemptDispatchGuard {
+    return {
+      ...this.mutationGuard(attempt),
+      status: attempt.status,
+      dispatchLeaseExpiresAt,
+      dispatchAuthorizationExpiresAt
+    };
   }
 
   private operationDeadline(run: TestingRunRecord, attempt: TestingAttemptRecord): number {

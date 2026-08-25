@@ -1,9 +1,17 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository } from './repository.js';
+import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
+
+const mongoDate = (input: unknown): Readonly<Record<string, unknown>> => ({
+  $convert: { input, to: 'date', onError: null, onNull: null }
+});
+
+const afterDatabaseNow = (input: unknown): Readonly<Record<string, unknown>> => ({
+  $gt: [mongoDate(input), '$$NOW']
+});
 
 export interface MongoRepositoryOptions {
   client?: MongoClient;
@@ -247,10 +255,76 @@ export class MongoRepository implements Repository {
       {
         _id: run.id,
         recordVersion: expectedRecordVersion,
+        $expr: afterDatabaseNow(`$${field}`)
+      },
+      { ...run, _id: run.id }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async replaceTestingRunForAttempt(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptMutationGuard,
+    _observedNow: number
+  ): Promise<boolean> {
+    const deadlineField = deadline === 'run' ? 'deadlineAt' : 'reconcileDeadlineAt';
+    const temporalChecks: unknown[] = [
+      afterDatabaseNow(`$${deadlineField}`),
+      afterDatabaseNow({ $literal: guard.leaseExpiresAt })
+    ];
+    const result = await this.testingRuns.replaceOne(
+      {
+        _id: run.id,
+        recordVersion: expectedRecordVersion,
+        currentAttemptId: guard.attemptId,
+        attempts: {
+          $elemMatch: {
+            id: guard.attemptId,
+            operation: guard.operation,
+            generation: guard.generation,
+            fenceToken: guard.fenceToken,
+            leaseId: guard.leaseId,
+            leaseExpiresAt: guard.leaseExpiresAt
+          }
+        },
+        $expr: { $and: temporalChecks }
+      },
+      { ...run, _id: run.id }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async replaceTestingRunForDispatch(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptDispatchGuard,
+    _observedNow: number
+  ): Promise<boolean> {
+    const deadlineField = deadline === 'run' ? 'deadlineAt' : 'reconcileDeadlineAt';
+    const result = await this.testingRuns.replaceOne(
+      {
+        _id: run.id,
+        recordVersion: expectedRecordVersion,
+        currentAttemptId: guard.attemptId,
+        attempts: {
+          $elemMatch: {
+            id: guard.attemptId,
+            status: guard.status,
+            operation: guard.operation,
+            generation: guard.generation,
+            fenceToken: guard.fenceToken,
+            leaseId: guard.leaseId,
+            leaseExpiresAt: guard.leaseExpiresAt
+          }
+        },
         $expr: {
-          $gt: [
-            { $dateFromString: { dateString: `$${field}` } },
-            '$$NOW'
+          $and: [
+            afterDatabaseNow(`$${deadlineField}`),
+            afterDatabaseNow({ $literal: guard.dispatchLeaseExpiresAt }),
+            afterDatabaseNow({ $literal: guard.dispatchAuthorizationExpiresAt })
           ]
         }
       },

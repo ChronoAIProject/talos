@@ -9,6 +9,7 @@ import {
   type TestingCancelRequest
 } from '@talos/testing-protocol';
 import { MemoryRepository } from '../storage/memory-repository.js';
+import type { TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from '../storage/repository.js';
 import { TalosError } from '../domain/errors.js';
 import type { TestingRunRecord } from '../domain/testing-types.js';
 import type { Machine } from '../domain/types.js';
@@ -252,6 +253,7 @@ const cancelRequest = (
 
 class DeadlineBarrierRepository extends MemoryRepository {
   private armed = false;
+  private dispatchOnly = false;
   private enteredResolve: (() => void) | undefined;
   private releaseResolve: (() => void) | undefined;
   private entered = Promise.resolve();
@@ -263,6 +265,17 @@ class DeadlineBarrierRepository extends MemoryRepository {
 
   public armDeadlineWrite(): void {
     this.armed = true;
+    this.dispatchOnly = false;
+    this.resetBarrier();
+  }
+
+  public armDispatchWrite(): void {
+    this.armed = true;
+    this.dispatchOnly = true;
+    this.resetBarrier();
+  }
+
+  private resetBarrier(): void {
     this.entered = new Promise<void>((resolve) => { this.enteredResolve = resolve; });
     this.release = new Promise<void>((resolve) => { this.releaseResolve = resolve; });
   }
@@ -281,12 +294,55 @@ class DeadlineBarrierRepository extends MemoryRepository {
     deadline: 'run' | 'reconcile',
     _observedNow: number
   ): Promise<boolean> {
-    if (this.armed) {
+    if (this.armed && !this.dispatchOnly) {
       this.armed = false;
       this.enteredResolve?.();
       await this.release;
     }
     return super.replaceTestingRunWithinDeadline(run, expectedRecordVersion, deadline, this.currentTime());
+  }
+
+  public override async replaceTestingRunForAttempt(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptMutationGuard,
+    _observedNow: number
+  ): Promise<boolean> {
+    if (this.armed && !this.dispatchOnly) {
+      this.armed = false;
+      this.enteredResolve?.();
+      await this.release;
+    }
+    return super.replaceTestingRunForAttempt(
+      run,
+      expectedRecordVersion,
+      deadline,
+      guard,
+      this.currentTime()
+    );
+  }
+
+  public override async replaceTestingRunForDispatch(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptDispatchGuard,
+    _observedNow: number
+  ): Promise<boolean> {
+    if (this.armed) {
+      this.armed = false;
+      this.dispatchOnly = false;
+      this.enteredResolve?.();
+      await this.release;
+    }
+    return super.replaceTestingRunForDispatch(
+      run,
+      expectedRecordVersion,
+      deadline,
+      guard,
+      this.currentTime()
+    );
   }
 }
 
@@ -353,7 +409,7 @@ describe('TestingAttemptService', () => {
   });
 
   it('rejects stale lease, generation, and fence writers', async () => {
-    const { runs, attempts } = await setup();
+    const { runs, attempts, advance } = await setup();
     await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     const exact = binding(claim);
@@ -367,10 +423,24 @@ describe('TestingAttemptService', () => {
       .rejects.toMatchObject({ code: 'stale_testing_worker' });
     await expect(attempts.heartbeat({ ...exact, machineId: 'machine-2' }, 10))
       .rejects.toMatchObject({ code: 'stale_testing_machine' });
+    const snapshotBeforeHeartbeat = await runs.get('run-1', 'user-1');
+    advance(1_000);
     const beforeHeartbeat = claim.current_claim.claim_digest;
     const heartbeat = await attempts.heartbeat(exact, 30);
     expect(heartbeat.current_claim.claim_digest).toBe(beforeHeartbeat);
     expect(heartbeat.current_claim.claim.expires_at).toBe(claim.task.deadline);
+    expect(await runs.get('run-1', 'user-1')).toEqual(snapshotBeforeHeartbeat);
+  });
+
+  it('does not place testing work on a machine with an active generic lease', async () => {
+    const { repository, runs, attempts } = await setup();
+    const current = await repository.getMachine('machine-1');
+    if (current === undefined) throw new Error('machine fixture missing');
+    await repository.saveMachine({ ...current, activeLeases: current.capacity });
+    await runs.submit('run-capacity', 'user-1', testingRequest('submit-capacity'));
+
+    await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
+    expect((await repository.getTestingRun('run-capacity'))?.attempts).toHaveLength(0);
   });
 
   it('projects bounded Runtime progress monotonically without replacing the Talos event cursor', async () => {
@@ -444,7 +514,7 @@ describe('TestingAttemptService', () => {
     })).rejects.toThrow();
   });
 
-  it('makes cancel win atomically against a concurrent non-cancel terminal commit', async () => {
+  it('canonically closes a concurrent non-cancel terminal commit after cancel intent', async () => {
     const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
     const repository = new DeadlineBarrierRepository(() => time.value);
     const { runs, attempts } = await setup({ repository, time });
@@ -462,8 +532,14 @@ describe('TestingAttemptService', () => {
     );
     repository.releaseDeadlineWrite();
 
-    await expect(terminalCommit).rejects.toMatchObject({ code: 'cancel_requested' });
-    expect((await repository.getTestingRun('run-cancel-race'))?.controlStatus).toBe('cancel_requested');
+    await expect(terminalCommit).resolves.toMatchObject({
+      controlStatus: 'cancelled',
+      executionOutcome: 'passed'
+    });
+    expect(await repository.getTestingRun('run-cancel-race')).toMatchObject({
+      controlStatus: 'cancelled',
+      executionOutcome: 'passed'
+    });
   });
 
   it('rejects a terminal write when the persisted run deadline passes while its CAS is blocked', async () => {
@@ -482,6 +558,157 @@ describe('TestingAttemptService', () => {
 
     await expect(terminalCommit).rejects.toMatchObject({ code: 'testing_deadline_exceeded' });
     expect((await repository.getTestingRun('run-deadline-race'))?.controlStatus).toBe('local_accepted');
+  });
+
+  it('rejects a terminal write when its lease expires while the attempt CAS is blocked', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const repository = new DeadlineBarrierRepository(() => time.value);
+    const { runs, attempts, advance } = await setup({ repository, time, leaseSeconds: 1 });
+    await runs.submit('run-lease-race', 'user-1', testingRequest('submit-lease-race'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(claim));
+    repository.armDeadlineWrite();
+
+    const terminalCommit = attempts.commitTerminal(terminal(claim));
+    await repository.waitForDeadlineWrite();
+    advance(1_001);
+    repository.releaseDeadlineWrite();
+
+    await expect(terminalCommit).rejects.toMatchObject({ code: 'testing_lease_expired' });
+    expect((await repository.getTestingRun('run-lease-race'))?.controlStatus).toBe('local_accepted');
+  });
+
+  it('rejects start dispatch when authorization expires while its CAS is blocked', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const repository = new DeadlineBarrierRepository(() => time.value);
+    const expiringAuthorization: TestingAuthorizationProvider = {
+      ...authorizationProvider,
+      issueStartAuthorization: async (context) => ({
+        ref: `authorization://local-qa-request/${context.attemptId}`,
+        digest,
+        expires_at: new Date(time.value + 1_000).toISOString()
+      })
+    };
+    const { runs, attempts, advance } = await setup({
+      repository,
+      time,
+      authorizationProvider: expiringAuthorization
+    });
+    await runs.submit('run-auth-race', 'user-1', testingRequest('submit-auth-race'));
+    repository.armDispatchWrite();
+
+    const claim = attempts.claim('worker-1', 'machine-1');
+    await repository.waitForDeadlineWrite();
+    advance(1_001);
+    repository.releaseDeadlineWrite();
+
+    await expect(claim).rejects.toMatchObject({ code: 'claim_superseded' });
+    expect((await repository.getTestingRun('run-auth-race'))?.controlStatus).toBe('submitted');
+  });
+
+  it('rejects start dispatch when its lease expires while the CAS is blocked', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const repository = new DeadlineBarrierRepository(() => time.value);
+    const { runs, attempts, advance } = await setup({ repository, time, leaseSeconds: 1 });
+    await runs.submit('run-dispatch-lease-race', 'user-1', testingRequest('submit-dispatch-lease-race'));
+    repository.armDispatchWrite();
+
+    const claim = attempts.claim('worker-1', 'machine-1');
+    await repository.waitForDeadlineWrite();
+    advance(1_001);
+    repository.releaseDeadlineWrite();
+
+    await expect(claim).rejects.toMatchObject({ code: 'claim_superseded' });
+    expect((await repository.getTestingRun('run-dispatch-lease-race'))?.controlStatus).toBe('submitted');
+  });
+
+  it('records local acceptance after an admitted start authorization expires', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const repository = new DeadlineBarrierRepository(() => time.value);
+    const expiringAuthorization: TestingAuthorizationProvider = {
+      ...authorizationProvider,
+      issueStartAuthorization: async (context) => ({
+        ref: `authorization://local-qa-request/${context.attemptId}`,
+        digest,
+        expires_at: new Date(time.value + 1_000).toISOString()
+      })
+    };
+    const { runs, attempts, advance } = await setup({ repository, time, authorizationProvider: expiringAuthorization });
+    await runs.submit('run-admitted-auth', 'user-1', testingRequest('submit-admitted-auth'));
+    const claim = await attempts.claim('worker-1', 'machine-1');
+    repository.armDeadlineWrite();
+
+    const localAcceptance = attempts.acceptLocal(binding(claim));
+    await repository.waitForDeadlineWrite();
+    advance(1_001);
+    repository.releaseDeadlineWrite();
+
+    await expect(localAcceptance).resolves.toMatchObject({ is_current: true, status: 'current' });
+    expect((await repository.getTestingRun('run-admitted-auth'))?.controlStatus).toBe('local_accepted');
+  });
+
+  it('rejects reconcile dispatch when authorization expires while its CAS is blocked', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const repository = new DeadlineBarrierRepository(() => time.value);
+    const expiringReconcileAuthorization: TestingAuthorizationProvider = {
+      ...authorizationProvider,
+      issueReconcileAuthorization: async (context) => ({
+        ref: `authorization://local-qa-reconcile/${context.attemptId}/${context.leaseId}`,
+        digest,
+        expires_at: new Date(time.value + 1_000).toISOString()
+      })
+    };
+    const { runs, attempts, advance } = await setup({
+      repository,
+      time,
+      leaseSeconds: 10,
+      authorizationProvider: expiringReconcileAuthorization
+    });
+    await runs.submit('run-reconcile-auth-race', 'user-1', testingRequest('submit-reconcile-auth-race'));
+    const start = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(start));
+    advance(10_001);
+    await attempts.sweep();
+    repository.armDispatchWrite();
+
+    const reconcile = attempts.claimReconcile('worker-restarted', 'machine-1', 'run-reconcile-auth-race');
+    await repository.waitForDeadlineWrite();
+    advance(1_001);
+    repository.releaseDeadlineWrite();
+
+    await expect(reconcile).rejects.toMatchObject({ code: 'claim_superseded' });
+    expect((await repository.getTestingRun('run-reconcile-auth-race'))?.attempts[0])
+      .toMatchObject({ operation: 'start', status: 'reconcile_required' });
+  });
+
+  it('commits an admitted reconcile fact after its request authorization expires', async () => {
+    const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
+    const expiringReconcileAuthorization: TestingAuthorizationProvider = {
+      ...authorizationProvider,
+      issueReconcileAuthorization: async (context) => ({
+        ref: `authorization://local-qa-reconcile/${context.attemptId}/${context.leaseId}`,
+        digest,
+        expires_at: new Date(time.value + 1_000).toISOString()
+      })
+    };
+    const { runs, attempts, advance } = await setup({
+      time,
+      leaseSeconds: 10,
+      authorizationProvider: expiringReconcileAuthorization
+    });
+    await runs.submit('run-reconcile-admitted', 'user-1', testingRequest('submit-reconcile-admitted'));
+    const start = await attempts.claim('worker-1', 'machine-1');
+    await attempts.acceptLocal(binding(start));
+    advance(10_001);
+    await attempts.sweep();
+    const reconcile = await attempts.claimReconcile('worker-restarted', 'machine-1', 'run-reconcile-admitted');
+
+    advance(1_001);
+
+    await expect(attempts.commitReconcileTerminal(terminal(reconcile))).resolves.toMatchObject({
+      controlStatus: 'completed',
+      executionOutcome: 'passed'
+    });
   });
 
   it('requires exact cleanup proof before releasing a locally accepted machine slot', async () => {
@@ -853,7 +1080,7 @@ describe('TestingAttemptService', () => {
     });
   });
 
-  it('rejects local acceptance after the operation-specific start authorization expires', async () => {
+  it('does not treat an admitted start authorization as the attempt lease', async () => {
     const { repository, runs, advance, now } = await setup();
     await runs.submit('run-short-auth', 'user-1', testingRequest('submit-short-auth'));
     const shortAuthorization = new TestingAttemptService(repository, {
@@ -871,6 +1098,6 @@ describe('TestingAttemptService', () => {
     const claim = await shortAuthorization.claim('worker-1', 'machine-1');
     advance(501);
     await expect(shortAuthorization.acceptLocal(binding(claim)))
-      .rejects.toMatchObject({ code: 'testing_authorization_expired' });
+      .resolves.toMatchObject({ is_current: true, status: 'current' });
   });
 });

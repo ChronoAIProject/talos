@@ -1,6 +1,12 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository } from './repository.js';
+import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+
+const isFutureTimestamp = (value: string | undefined, observedNow: number): boolean => {
+  if (value === undefined) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed > observedNow;
+};
 
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
@@ -187,9 +193,61 @@ export class MemoryRepository implements Repository {
   ): Promise<boolean> {
     const current = this.testingRuns.get(run.id);
     const deadlineAt = deadline === 'run' ? current?.deadlineAt : current?.reconcileDeadlineAt;
-    if (current?.recordVersion !== expectedRecordVersion || deadlineAt === undefined || Date.parse(deadlineAt) <= observedNow) {
+    if (current?.recordVersion !== expectedRecordVersion || !isFutureTimestamp(deadlineAt, observedNow)) {
       return false;
     }
+    this.testingRuns.set(run.id, run);
+    return true;
+  }
+
+  public async replaceTestingRunForAttempt(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptMutationGuard,
+    observedNow: number
+  ): Promise<boolean> {
+    const current = this.testingRuns.get(run.id);
+    const deadlineAt = deadline === 'run' ? current?.deadlineAt : current?.reconcileDeadlineAt;
+    const attempt = current?.attempts.find((candidate) => candidate.id === guard.attemptId);
+    if (
+      current?.recordVersion !== expectedRecordVersion ||
+      current.currentAttemptId !== guard.attemptId ||
+      !isFutureTimestamp(deadlineAt, observedNow) ||
+      attempt?.operation !== guard.operation ||
+      attempt.generation !== guard.generation ||
+      attempt.fenceToken !== guard.fenceToken ||
+      attempt.leaseId !== guard.leaseId ||
+      attempt.leaseExpiresAt !== guard.leaseExpiresAt ||
+      !isFutureTimestamp(guard.leaseExpiresAt, observedNow)
+    ) return false;
+    this.testingRuns.set(run.id, run);
+    return true;
+  }
+
+  public async replaceTestingRunForDispatch(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptDispatchGuard,
+    observedNow: number
+  ): Promise<boolean> {
+    const current = this.testingRuns.get(run.id);
+    const deadlineAt = deadline === 'run' ? current?.deadlineAt : current?.reconcileDeadlineAt;
+    const attempt = current?.attempts.find((candidate) => candidate.id === guard.attemptId);
+    if (
+      current?.recordVersion !== expectedRecordVersion ||
+      current.currentAttemptId !== guard.attemptId ||
+      !isFutureTimestamp(deadlineAt, observedNow) ||
+      attempt?.status !== guard.status ||
+      attempt.operation !== guard.operation ||
+      attempt.generation !== guard.generation ||
+      attempt.fenceToken !== guard.fenceToken ||
+      attempt.leaseId !== guard.leaseId ||
+      attempt.leaseExpiresAt !== guard.leaseExpiresAt ||
+      !isFutureTimestamp(guard.dispatchLeaseExpiresAt, observedNow) ||
+      !isFutureTimestamp(guard.dispatchAuthorizationExpiresAt, observedNow)
+    ) return false;
     this.testingRuns.set(run.id, run);
     return true;
   }
