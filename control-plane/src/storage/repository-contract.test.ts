@@ -7,6 +7,11 @@ import { MongoRepository } from './mongo-repository.js';
 import type { BrowserTask, WebhookEvent } from '../domain/types.js';
 import { TestingRunService } from '../services/testing-run-service.js';
 import { digestJson } from '@talos/testing-protocol';
+import {
+  provisionTestingPool,
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
 
 interface Harness {
   repository: Repository;
@@ -170,12 +175,15 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavai
     }
     const { repository, close } = await makeHarness();
     try {
+      await provisionTestingPool(repository, 'pool-1');
       const digest = `sha256:${'a'.repeat(64)}`;
       const reference = (schema: string, ref: string) => ({ schema, ref, digest });
       const observedNow = Date.now();
       const service = new TestingRunService(repository, {
         cursorSecret: 'repository-contract-secret-1234',
-        clock: () => observedNow
+        clock: () => observedNow,
+        placementPolicy: testTestingPlacementPolicy('pool-1'),
+        placementInputVerifier: testTestingPlacementInputVerifier()
       });
       const policy = {
         network_scope: 'environment_owned_loopback_exact_origins' as const,

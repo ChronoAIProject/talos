@@ -9,6 +9,10 @@ import { TestingRunService } from '../services/testing-run-service.js';
 import { WebhookSigner } from '../services/webhook-signer.js';
 import { MemoryRepository } from '../storage/memory-repository.js';
 import { createApiServer } from './server.js';
+import {
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -110,7 +114,9 @@ describe('Testing worker HTTP routes', () => {
     );
     const runs = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
-      clock: () => now
+      clock: () => now,
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier()
     });
     const attempts = new TestingAttemptService(repository, {
       authorizationProvider: {

@@ -27,6 +27,8 @@ import { TalosError, forbidden, notFound } from '../domain/errors.js';
 import type { TestingCursorPageRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
+import type { TestingPlacementPolicy } from './testing-placement-policy.js';
+import type { TestingPlacementInputVerifier } from './testing-placement-verifier.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
 export const TESTING_CURSOR_PAGE_RETENTION = 128;
@@ -79,6 +81,8 @@ const capabilities: TestingCapabilities = testingCapabilitiesSchema.parse({
 export interface TestingRunServiceOptions {
   readonly cursorSecret: string;
   readonly clock?: () => number;
+  readonly placementPolicy?: TestingPlacementPolicy;
+  readonly placementInputVerifier?: TestingPlacementInputVerifier;
 }
 
 export class TestingRunService {
@@ -105,7 +109,37 @@ export class TestingRunService {
     const runId = testingRunIdSchema.parse(runIdInput);
     const request = testingToolRequestSchema.parse(input);
     const requestDigest = computeTestingToolRequestDigest(runId, request);
+    const replay = await this.resolveExistingSubmit(
+      runId,
+      userId,
+      request.idempotency_key,
+      requestDigest
+    );
+    if (replay !== undefined) {
+      return {
+        acceptance: testingRunAcceptanceSchema.parse({ ...replay.acceptance, replayed: true }),
+        created: false
+      };
+    }
     const now = new Date(this.clock()).toISOString();
+    let placement: TestingRunRecord['placement'];
+    try {
+      placement = await this.selectPlacement(userId, requesterGroups, request, now);
+    } catch (error) {
+      const racedReplay = await this.resolveExistingSubmit(
+        runId,
+        userId,
+        request.idempotency_key,
+        requestDigest
+      );
+      if (racedReplay !== undefined) {
+        return {
+          acceptance: testingRunAcceptanceSchema.parse({ ...racedReplay.acceptance, replayed: true }),
+          created: false
+        };
+      }
+      throw error;
+    }
     const event = makeEvent(1, 'run.submitted', now, { request_digest: requestDigest });
     const acceptance = testingRunAcceptanceSchema.parse({
       schema_version: 'talos.testing-run-acceptance/v1',
@@ -124,6 +158,7 @@ export class TestingRunService {
       requestDigest,
       request,
       requesterGroups: [...requesterGroups],
+      placement,
       acceptance,
       deadlineAt: new Date(Date.parse(now) + request.policy.budgets.wall_time_ms).toISOString(),
       recordVersion: 1,
@@ -321,6 +356,77 @@ export class TestingRunService {
     throw new TalosError('concurrent_update', 'testing run creation could not be reconciled', 409);
   }
 
+  private async resolveExistingSubmit(
+    runId: string,
+    userId: string,
+    idempotencyKey: string,
+    requestDigest: string
+  ): Promise<TestingRunRecord | undefined> {
+    const byRun = await this.repository.getTestingRun(runId);
+    if (byRun !== undefined) {
+      if (
+        byRun.userId !== userId ||
+        byRun.requestDigest !== requestDigest ||
+        byRun.idempotencyKey !== idempotencyKey
+      ) {
+        throw new TalosError('run_identity_conflict', 'run_id is bound to another testing request', 409);
+      }
+      return byRun;
+    }
+    const byKey = await this.repository.getTestingRunByIdempotencyKey(userId, idempotencyKey);
+    if (byKey !== undefined) {
+      throw new TalosError('idempotency_conflict', 'idempotency key is bound to another run or request', 409);
+    }
+    return undefined;
+  }
+
+  private async selectPlacement(
+    userId: string,
+    requesterGroups: readonly string[],
+    request: ReturnType<typeof testingToolRequestSchema.parse>,
+    selectedAt: string
+  ): Promise<TestingRunRecord['placement']> {
+    const verifier = this.options.placementInputVerifier;
+    if (verifier === undefined) {
+      throw new TalosError('testing_placement_verifier_unavailable', 'testing placement input verifier is unavailable', 503);
+    }
+    const verifiedInputs = await verifier.verify({
+      callerUserId: userId,
+      callerGroups: requesterGroups,
+      inputs: request.inputs
+    });
+    if (verifiedInputs === undefined) {
+      throw new TalosError('testing_placement_inputs_unverified', 'testing provenance inputs are not approved for placement', 403);
+    }
+    const policy = this.options.placementPolicy;
+    if (policy === undefined) {
+      throw new TalosError('testing_placement_policy_unavailable', 'testing placement policy is unavailable', 503);
+    }
+    const decision = await policy.select({
+      callerUserId: userId,
+      callerGroups: requesterGroups,
+      verifiedInputs,
+      executionPolicy: request.policy_binding.policy,
+      budgets: request.policy_binding.budgets,
+      testingPackage: request.inputs.testing_package
+    });
+    if (decision === undefined) {
+      throw new TalosError('testing_placement_denied', 'testing request is not allowlisted for canary placement', 403);
+    }
+    const pool = await this.repository.getPool(decision.poolId);
+    if (pool === undefined) {
+      throw new TalosError('testing_placement_unavailable', 'testing canary pool is unavailable', 503);
+    }
+    if (!poolVisible(pool, userId, requesterGroups)) {
+      throw new TalosError('testing_placement_denied', 'testing canary pool is not visible to this identity', 403);
+    }
+    const machines = await this.repository.listMachines(pool.id);
+    if (!machines.some((machine) => machineMatchesPlacement(machine, decision))) {
+      throw new TalosError('testing_placement_unavailable', 'testing canary pool does not advertise the approved capability contract', 503);
+    }
+    return { ...decision, selectedAt };
+  }
+
   private snapshot(run: TestingRunRecord): TestingRunSnapshot {
     const core = {
       schema_version: 'talos.testing-run-snapshot/v1' as const,
@@ -450,3 +556,29 @@ const appendBoundedEvent = (run: TestingRunRecord, event: TestingRunEvent): read
   const events = [...run.events, event];
   return events.slice(-run.request.policy.budgets.max_events);
 };
+
+const poolVisible = (
+  pool: NonNullable<Awaited<ReturnType<Repository['getPool']>>>,
+  userId: string,
+  groups: readonly string[]
+): boolean => {
+  if (pool.visibility === 'platform' || pool.ownerUserId === userId) return true;
+  if (pool.visibility === 'private') return false;
+  return (pool.sharedWithGroups ?? []).some((group) => groups.includes(group));
+};
+
+const machineMatchesPlacement = (
+  machine: Awaited<ReturnType<Repository['listMachines']>>[number],
+  placement: Omit<TestingRunRecord['placement'], 'selectedAt'>
+): boolean => machine.poolId === placement.poolId &&
+  machine.capacity === placement.capability.maxTestingConcurrency &&
+  machine.tags.testing_runtime === placement.capability.testingRuntime &&
+  machine.tags.testing_task_contract === placement.capability.taskContract &&
+  machine.tags.testing_backend === placement.capability.backend &&
+  machine.tags.browser === placement.capability.browser &&
+  machine.tags.os === placement.capability.os &&
+  machine.tags.arch === placement.capability.arch &&
+  machine.tags.headed_display === placement.capability.headedDisplay &&
+  machine.tags.runner_package_id === placement.testingPackage.packageId &&
+  machine.tags.runner_package_version === placement.testingPackage.version &&
+  machine.tags.runner_package_digest === placement.testingPackage.digest;

@@ -20,6 +20,14 @@ import {
   type TestingAuthorizationProvider,
   type TestingRuntimeFactVerifier
 } from './services/testing-attempt-service.js';
+import {
+  StaticTestingPlacementPolicy,
+  type TestingPlacementPolicy
+} from './services/testing-placement-policy.js';
+import {
+  StaticTestingPlacementInputVerifier,
+  type TestingPlacementInputVerifier
+} from './services/testing-placement-verifier.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -42,6 +50,8 @@ export const createControlPlane = (
     testingRuntimeFactVerifier?: TestingRuntimeFactVerifier;
     testingClaimSigningKey?: KeyObject | string;
     testingClaimKeyId?: string;
+    testingPlacementPolicy?: TestingPlacementPolicy;
+    testingPlacementInputVerifier?: TestingPlacementInputVerifier;
   } = {}
 ): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
@@ -56,7 +66,12 @@ export const createControlPlane = (
     onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
     logger
   });
-  const testingRuns = new TestingRunService(repository, { cursorSecret: webhookSecret, clock: Date.now });
+  const testingRuns = new TestingRunService(repository, {
+    cursorSecret: webhookSecret,
+    clock: Date.now,
+    placementPolicy: options.testingPlacementPolicy,
+    placementInputVerifier: options.testingPlacementInputVerifier
+  });
   const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
   if (testingClaimSigningKey === undefined) {
     logger.warn('testing claim signing key is not configured; using a development-only ephemeral Ed25519 key');
@@ -124,7 +139,13 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     sweepIntervalMs: config.sweepIntervalMs,
     identityResolver,
     testingClaimSigningKey: config.testingClaimPrivateKey,
-    testingClaimKeyId: config.testingClaimKeyId
+    testingClaimKeyId: config.testingClaimKeyId,
+    testingPlacementPolicy: config.testingPlacementPolicy === undefined
+      ? undefined
+      : new StaticTestingPlacementPolicy(config.testingPlacementPolicy),
+    testingPlacementInputVerifier: config.testingPlacementVerifier === undefined
+      ? undefined
+      : new StaticTestingPlacementInputVerifier(config.testingPlacementVerifier)
   });
   const shutdown = (): void => {
     server.stopSweep();
@@ -142,6 +163,8 @@ export * from './domain/errors.js';
 export * from './services/task-service.js';
 export * from './services/testing-run-service.js';
 export * from './services/testing-attempt-service.js';
+export * from './services/testing-placement-policy.js';
+export * from './services/testing-placement-verifier.js';
 export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';

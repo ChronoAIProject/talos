@@ -1203,17 +1203,18 @@ export class TestingAttemptService {
   private async machineEligible(machine: Machine, run: TestingRunRecord): Promise<boolean> {
     const tags = machine.tags;
     if (
+      machine.poolId !== run.placement.poolId ||
       machine.activeLeases >= machine.capacity ||
-      tags.testing_runtime !== run.request.placement_requirements.testing_runtime ||
-      tags.testing_task_contract !== 'talos.testing-task/v1' ||
-      tags.testing_backend !== 'browser' ||
-      tags.browser !== 'chromium' ||
-      tags.os !== 'darwin' ||
-      tags.arch !== 'arm64' ||
-      tags.headed_display !== true ||
-      tags.runner_package_id !== run.request.inputs.testing_package.package_id ||
-      tags.runner_package_version !== run.request.inputs.testing_package.version ||
-      tags.runner_package_digest !== run.request.inputs.testing_package.digest
+      tags.testing_runtime !== run.placement.capability.testingRuntime ||
+      tags.testing_task_contract !== run.placement.capability.taskContract ||
+      tags.testing_backend !== run.placement.capability.backend ||
+      tags.browser !== run.placement.capability.browser ||
+      tags.os !== run.placement.capability.os ||
+      tags.arch !== run.placement.capability.arch ||
+      tags.headed_display !== run.placement.capability.headedDisplay ||
+      tags.runner_package_id !== run.placement.testingPackage.packageId ||
+      tags.runner_package_version !== run.placement.testingPackage.version ||
+      tags.runner_package_digest !== run.placement.testingPackage.digest
     ) return false;
     const pool = await this.repository.getPool(machine.poolId);
     return pool !== undefined && poolVisible(pool, run.userId, run.requesterGroups);

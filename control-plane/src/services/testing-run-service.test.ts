@@ -8,8 +8,15 @@ import { MemoryRepository } from '../storage/memory-repository.js';
 import {
   TESTING_CANCEL_RECORD_RETENTION,
   TESTING_CURSOR_PAGE_RETENTION,
-  TestingRunService
+  TestingRunService,
+  type TestingRunServiceOptions
 } from './testing-run-service.js';
+import {
+  provisionTestingPool,
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
+import type { TestingPlacementPolicy } from './testing-placement-policy.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -89,10 +96,22 @@ const cancelRequest = (
   };
 };
 
+const serviceFor = async (
+  repository: MemoryRepository,
+  options: Omit<TestingRunServiceOptions, 'placementPolicy'>
+): Promise<TestingRunService> => {
+  await provisionTestingPool(repository);
+  return new TestingRunService(repository, {
+    ...options,
+    placementPolicy: testTestingPlacementPolicy(),
+    placementInputVerifier: testTestingPlacementInputVerifier()
+  });
+};
+
 describe('TestingRunService', () => {
   it('atomically replays concurrent submit and rejects run/key identity conflicts before side effects', async () => {
     const repository = new MemoryRepository();
-    const service = new TestingRunService(repository, {
+    const service = await serviceFor(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => Date.parse('2026-08-22T00:00:00.000Z')
     });
@@ -101,6 +120,41 @@ describe('TestingRunService', () => {
     expect(submissions.filter((item) => item.created)).toHaveLength(1);
     expect(new Set(submissions.map((item) => item.acceptance.request_digest))).toHaveLength(1);
     expect(submissions.filter((item) => item.acceptance.replayed)).toHaveLength(19);
+    expect(await repository.getTestingRun('run-1')).toMatchObject({
+      placement: {
+        schemaVersion: 'talos.testing-placement-decision/v1',
+        policyId: 'test-canary-policy',
+        ruleId: 'test-canary-rule',
+        poolId: 'testing-pool',
+        caller: { type: 'user', value: 'user-1' },
+        repositoryId: 'repo-example',
+        environmentProfile: request().inputs.environment_profile,
+        inputVerification: {
+          schemaVersion: 'talos.testing-placement-input-verification/v1',
+          verifierId: 'test-provenance-verifier',
+          verificationId: 'approved-repo-example',
+          verificationDigest: expect.stringMatching(/^sha256:/)
+        },
+        executionPolicy: {
+          ref: request().policy_binding.policy.ref,
+          digest: request().policy_binding.policy.digest
+        },
+        budgets: {
+          ref: request().policy_binding.budgets.ref,
+          digest: request().policy_binding.budgets.digest
+        },
+        testingPackage: {
+          packageId: request().inputs.testing_package.package_id,
+          version: request().inputs.testing_package.version,
+          digest: request().inputs.testing_package.digest
+        },
+        capability: {
+          testingRuntime: 'local-qa-mvp/v1',
+          taskContract: 'talos.testing-task/v1',
+          maxTestingConcurrency: 1
+        }
+      }
+    });
     expect(await repository.listQueuedTasks()).toEqual([]);
 
     await expect(service.submit('run-1', 'user-1', { ...request(), display_goal: 'Changed' }))
@@ -112,10 +166,90 @@ describe('TestingRunService', () => {
     expect(await repository.getTestingRun('run:unsafe')).toBeUndefined();
   });
 
+  it('reconciles an identical concurrent submit that loses a placement-policy race', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const delegate = testTestingPlacementPolicy();
+    let calls = 0;
+    let denyEnteredResolve: (() => void) | undefined;
+    let releaseDeny: (() => void) | undefined;
+    const denyEntered = new Promise<void>((resolve) => { denyEnteredResolve = resolve; });
+    const denied = new Promise<void>((resolve) => { releaseDeny = resolve; });
+    const placementPolicy: TestingPlacementPolicy = {
+      select: async (context) => {
+        calls += 1;
+        if (calls === 1) return delegate.select(context);
+        denyEnteredResolve?.();
+        await denied;
+        return undefined;
+      }
+    };
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy,
+      placementInputVerifier: testTestingPlacementInputVerifier()
+    });
+
+    const winner = service.submit('run-policy-race', 'user-1', request('policy-race-key'));
+    const loser = service.submit('run-policy-race', 'user-1', request('policy-race-key'));
+    await denyEntered;
+    await expect(winner).resolves.toMatchObject({ created: true });
+    releaseDeny?.();
+    await expect(loser).resolves.toMatchObject({ created: false, acceptance: { replayed: true } });
+    expect(await repository.listTestingRuns()).toHaveLength(1);
+  });
+
+  it('rejects an approved rule when its canary pool lacks the frozen machine capability', async () => {
+    const repository = new MemoryRepository();
+    await repository.savePool({ id: 'testing-pool', visibility: 'platform', tags: {} });
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier()
+    });
+
+    await expect(service.submit('run-no-capability', 'user-1', request('no-capability-key')))
+      .rejects.toMatchObject({ code: 'testing_placement_unavailable', status: 503 });
+    expect(await repository.getTestingRun('run-no-capability')).toBeUndefined();
+  });
+
+  it('fails closed before run creation and replays an existing run without reevaluating policy', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    let enabled = true;
+    const delegate = testTestingPlacementPolicy();
+    const placementPolicy: TestingPlacementPolicy = {
+      select: async (context) => enabled ? delegate.select(context) : undefined
+    };
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy,
+      placementInputVerifier: testTestingPlacementInputVerifier()
+    });
+
+    await expect(service.submit('run-denied', 'user-denied', request('denied-key')))
+      .rejects.toMatchObject({ code: 'testing_placement_inputs_unverified', status: 403 });
+    expect(await repository.getTestingRun('run-denied')).toBeUndefined();
+
+    expect((await service.submit('run-replay-policy', 'user-1', request('replay-policy-key'))).created).toBe(true);
+    enabled = false;
+    await expect(service.submit('run-replay-policy', 'user-1', request('replay-policy-key')))
+      .resolves.toMatchObject({ created: false, acceptance: { replayed: true } });
+    await expect(service.submit('run-no-policy', 'user-1', request('new-policy-key')))
+      .rejects.toMatchObject({ code: 'testing_placement_denied' });
+
+    const unavailable = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementInputVerifier: testTestingPlacementInputVerifier()
+    });
+    await expect(unavailable.submit('run-unavailable', 'user-1', request('unavailable-key')))
+      .rejects.toMatchObject({ code: 'testing_placement_policy_unavailable', status: 503 });
+  });
+
   it('returns stable snapshots and replay-stable opaque event pages across later state changes', async () => {
     const repository = new MemoryRepository();
     let now = Date.parse('2026-08-22T00:00:00.000Z');
-    const service = new TestingRunService(repository, {
+    const service = await serviceFor(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now
     });
@@ -155,7 +289,7 @@ describe('TestingRunService', () => {
   it('binds cached event pages to limit and rotates a bounded cursor epoch with resync metadata', async () => {
     const repository = new MemoryRepository();
     let now = Date.parse('2026-08-22T00:00:00.000Z');
-    const service = new TestingRunService(repository, {
+    const service = await serviceFor(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now
     });
@@ -194,7 +328,7 @@ describe('TestingRunService', () => {
 
   it('bounds the embedded cancel idempotency ledger', async () => {
     const repository = new MemoryRepository();
-    const service = new TestingRunService(repository, {
+    const service = await serviceFor(repository, {
       cursorSecret: 'testing-cursor-secret-123456'
     });
     await service.submit('run-cancel-ledger', 'user-1', request('cancel-ledger-key'));
@@ -211,7 +345,7 @@ describe('TestingRunService', () => {
   });
 
   it('binds cancel idempotency to operation, run, key, and canonical digest', async () => {
-    const service = new TestingRunService(new MemoryRepository(), {
+    const service = await serviceFor(new MemoryRepository(), {
       cursorSecret: 'testing-cursor-secret-123456'
     });
     await service.submit('run-1', 'user-1', request());

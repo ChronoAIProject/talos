@@ -5,6 +5,11 @@ import { TestingRunService } from '../services/testing-run-service.js';
 import type { TestingRunRecord } from '../domain/testing-types.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
+import {
+  provisionTestingPool,
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
 
 type FakeDocument = { _id: string; [key: string]: unknown };
 
@@ -149,9 +154,12 @@ const makeTestingRun = async (): Promise<TestingRunRecord> => {
     }
   };
   const memory = new MemoryRepository();
+  await provisionTestingPool(memory);
   const service = new TestingRunService(memory, {
     cursorSecret: 'mongo-double-cursor-secret-1234',
-    clock: () => Date.parse('2026-08-22T00:00:00.000Z')
+    clock: () => Date.parse('2026-08-22T00:00:00.000Z'),
+    placementPolicy: testTestingPlacementPolicy(),
+    placementInputVerifier: testTestingPlacementInputVerifier()
   });
   await service.submit('run-mongo', 'user-1', {
     schema_version: 'talos.testing-tool-request/v1',

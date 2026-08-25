@@ -13,6 +13,10 @@ import type { TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from '.
 import { TalosError } from '../domain/errors.js';
 import type { TestingRunRecord } from '../domain/testing-types.js';
 import type { Machine } from '../domain/types.js';
+import {
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
 import { TestingRunService } from './testing-run-service.js';
 import {
   TESTING_MAX_ATTEMPTS,
@@ -148,7 +152,9 @@ const setup = async (options: {
   }
   const runs = new TestingRunService(repository, {
     cursorSecret: 'testing-attempt-cursor-secret-1234',
-    clock: () => time.value
+    clock: () => time.value,
+    placementPolicy: testTestingPlacementPolicy(),
+    placementInputVerifier: testTestingPlacementInputVerifier()
   });
   const attempts = new TestingAttemptService(repository, {
     claimSigningKey: signingKey,
@@ -402,8 +408,9 @@ describe('TestingAttemptService', () => {
       sharedWithGroups: ['qa-team'],
       tags: {}
     });
-    await runs.submit('run-hidden', 'user-1', testingRequest('submit-hidden'));
-    await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(runs.submit('run-hidden', 'user-1', testingRequest('submit-hidden')))
+      .rejects.toMatchObject({ code: 'testing_placement_denied' });
+    expect(await repository.getTestingRun('run-hidden')).toBeUndefined();
     await runs.submit('run-visible', 'user-1', testingRequest('submit-visible'), ['qa-team']);
     expect((await attempts.claim('worker-1', 'machine-1')).task.qa_run_id).toBe('run-visible');
   });
@@ -441,6 +448,19 @@ describe('TestingAttemptService', () => {
 
     await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
     expect((await repository.getTestingRun('run-capacity'))?.attempts).toHaveLength(0);
+  });
+
+  it('claims only from the pool frozen by Talos placement policy', async () => {
+    const { repository, runs, attempts } = await setup();
+    await repository.savePool({ id: 'other-visible-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ ...machine('machine-other'), poolId: 'other-visible-pool' });
+    await runs.submit('run-policy-pool', 'user-1', testingRequest('submit-policy-pool'));
+
+    await expect(attempts.claim('worker-other', 'machine-other')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(attempts.claim('worker-selected', 'machine-1')).resolves.toMatchObject({
+      task: { qa_run_id: 'run-policy-pool', machine_id: 'machine-1' }
+    });
+    expect((await repository.getTestingRun('run-policy-pool'))?.placement.poolId).toBe('testing-pool');
   });
 
   it('projects bounded Runtime progress monotonically without replacing the Talos event cursor', async () => {

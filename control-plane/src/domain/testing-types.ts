@@ -120,6 +120,52 @@ export interface TestingMachineReservationRecord {
   readonly recordVersion: number;
 }
 
+export interface TestingPlacementRecord {
+  readonly schemaVersion: 'talos.testing-placement-decision/v1';
+  readonly policyId: string;
+  readonly ruleId: string;
+  readonly poolId: string;
+  readonly caller: {
+    readonly type: 'user' | 'group';
+    readonly value: string;
+  };
+  readonly repositoryId: string;
+  readonly environmentProfile: {
+    readonly ref: string;
+    readonly digest: string;
+  };
+  readonly inputVerification: {
+    readonly schemaVersion: 'talos.testing-placement-input-verification/v1';
+    readonly verifierId: string;
+    readonly verificationId: string;
+    readonly verificationDigest: string;
+  };
+  readonly executionPolicy: {
+    readonly ref: string;
+    readonly digest: string;
+  };
+  readonly budgets: {
+    readonly ref: string;
+    readonly digest: string;
+  };
+  readonly testingPackage: {
+    readonly packageId: string;
+    readonly version: string;
+    readonly digest: string;
+  };
+  readonly capability: {
+    readonly testingRuntime: 'local-qa-mvp/v1';
+    readonly taskContract: 'talos.testing-task/v1';
+    readonly backend: 'browser';
+    readonly browser: 'chromium';
+    readonly os: 'darwin';
+    readonly arch: 'arm64';
+    readonly headedDisplay: true;
+    readonly maxTestingConcurrency: 1;
+  };
+  readonly selectedAt: string;
+}
+
 export interface TestingRunRecord {
   readonly id: string;
   readonly userId: string;
@@ -127,6 +173,7 @@ export interface TestingRunRecord {
   readonly requestDigest: string;
   readonly request: TestingToolRequest;
   readonly requesterGroups: readonly string[];
+  readonly placement: TestingPlacementRecord;
   readonly acceptance: TestingRunAcceptance;
   readonly deadlineAt: string;
   readonly reconcileDeadlineAt?: string;

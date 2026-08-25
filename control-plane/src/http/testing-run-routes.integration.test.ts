@@ -7,6 +7,11 @@ import { TESTING_CURSOR_PAGE_RETENTION, TestingRunService } from '../services/te
 import { WebhookSigner } from '../services/webhook-signer.js';
 import { MemoryRepository } from '../storage/memory-repository.js';
 import { createApiServer } from './server.js';
+import {
+  provisionTestingPool,
+  testTestingPlacementInputVerifier,
+  testTestingPlacementPolicy
+} from '../test-support/testing-placement.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -44,11 +49,14 @@ const submitRequest = {
 describe('Testing Tool HTTP routes', () => {
   it('serves the five authenticated, idempotent, bounded operations', async () => {
     const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
     let now = Date.parse('2026-08-22T00:00:00.000Z');
     const tasks = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
     const testingRuns = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
-      clock: () => now
+      clock: () => now,
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier()
     });
     const server = createApiServer(tasks, repository, { testingRunService: testingRuns, clock: () => now });
     await new Promise<void>((resolve) => server.listen(0, resolve));

@@ -1,5 +1,31 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import {
+  staticTestingPlacementPolicyConfigSchema,
+  type StaticTestingPlacementPolicyConfig
+} from './services/testing-placement-policy.js';
+import {
+  staticTestingPlacementVerifierConfigSchema,
+  type StaticTestingPlacementVerifierConfig
+} from './services/testing-placement-verifier.js';
+
+const testingPlacementPolicyEnvSchema = z.string().transform((value, context) => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'must be valid JSON' });
+    return z.NEVER;
+  }
+}).pipe(staticTestingPlacementPolicyConfigSchema);
+
+const testingPlacementVerifierEnvSchema = z.string().transform((value, context) => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'must be valid JSON' });
+    return z.NEVER;
+  }
+}).pipe(staticTestingPlacementVerifierConfigSchema);
 
 const configSchema = z.object({
   TALOS_WEBHOOK_SECRET: z.string().min(16),
@@ -13,7 +39,9 @@ const configSchema = z.object({
   TALOS_NYXID_ISSUER: z.string().min(1).optional(),
   TALOS_NYXID_AUDIENCE: z.string().min(1).optional(),
   TALOS_TESTING_CLAIM_PRIVATE_KEY: z.string().min(1).optional(),
-  TALOS_TESTING_CLAIM_KEY_ID: z.string().trim().min(1).max(255).optional()
+  TALOS_TESTING_CLAIM_KEY_ID: z.string().trim().min(1).max(255).optional(),
+  TALOS_TESTING_PLACEMENT_POLICY: testingPlacementPolicyEnvSchema.optional(),
+  TALOS_TESTING_PLACEMENT_VERIFIER: testingPlacementVerifierEnvSchema.optional()
 }).superRefine((value, context) => {
   const sourceConfigured = value.TALOS_NYXID_JWT_PUBLIC_KEY !== undefined || value.TALOS_NYXID_JWKS_URL !== undefined;
   if (sourceConfigured && value.TALOS_NYXID_ISSUER === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['TALOS_NYXID_ISSUER'], message: 'required when NyxID JWT verification is configured' });
@@ -35,6 +63,8 @@ export interface TalosConfig {
   nyxidAudience?: string;
   testingClaimPrivateKey?: string;
   testingClaimKeyId?: string;
+  testingPlacementPolicy?: StaticTestingPlacementPolicyConfig;
+  testingPlacementVerifier?: StaticTestingPlacementVerifierConfig;
 }
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): TalosConfig => {
@@ -52,7 +82,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): TalosConfig =>
     ...(parsed.data.TALOS_NYXID_ISSUER === undefined ? {} : { nyxidIssuer: parsed.data.TALOS_NYXID_ISSUER }),
     ...(parsed.data.TALOS_NYXID_AUDIENCE === undefined ? {} : { nyxidAudience: parsed.data.TALOS_NYXID_AUDIENCE }),
     ...(parsed.data.TALOS_TESTING_CLAIM_PRIVATE_KEY === undefined ? {} : { testingClaimPrivateKey: parsed.data.TALOS_TESTING_CLAIM_PRIVATE_KEY }),
-    ...(parsed.data.TALOS_TESTING_CLAIM_KEY_ID === undefined ? {} : { testingClaimKeyId: parsed.data.TALOS_TESTING_CLAIM_KEY_ID })
+    ...(parsed.data.TALOS_TESTING_CLAIM_KEY_ID === undefined ? {} : { testingClaimKeyId: parsed.data.TALOS_TESTING_CLAIM_KEY_ID }),
+    ...(parsed.data.TALOS_TESTING_PLACEMENT_POLICY === undefined ? {} : { testingPlacementPolicy: parsed.data.TALOS_TESTING_PLACEMENT_POLICY }),
+    ...(parsed.data.TALOS_TESTING_PLACEMENT_VERIFIER === undefined ? {} : { testingPlacementVerifier: parsed.data.TALOS_TESTING_PLACEMENT_VERIFIER })
   };
 };
 
