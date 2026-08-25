@@ -11,6 +11,8 @@ Required control-plane secrets are `TALOS_WEBHOOK_SECRET`, `TALOS_ADMIN_TOKEN`, 
 
 When `TALOS_DATABASE_URL` is set, the control plane automatically creates its indexes through `MongoRepository.initialize()` before it starts listening. The runtime database user needs `createIndex` rights during startup. Operators who restrict runtime permissions can pre-create the indexes with an administrative user, then run Talos with credentials limited to normal reads and writes.
 
+Repository contract tests must execute against real MongoDB semantics. `npm run test:mongo-contract` uses `TALOS_TEST_MONGODB_URL` when set; otherwise it starts the pinned MongoDB 7.0.14 `mongodb-memory-server` binary, matching the production minimum major while remaining compatible with supported development hosts. Setup includes a bounded connection preflight, and binary startup or connection failure fails the suite rather than substituting the in-memory repository or reporting a passing skip. External test databases use random `talos_test_*` names; cleanup attempts to drop only the database created by that harness, including after partial initialization, and always closes the client.
+
 ## Build and Push
 
 Run from the repository root:

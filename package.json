@@ -13,6 +13,7 @@
     "lint": "eslint \"**/*.{ts,tsx}\"",
     "bundle:worker": "node scripts/bundle-worker.mjs",
     "test": "vitest run --coverage",
+    "test:mongo-contract": "vitest run control-plane/src/storage/repository-contract.test.ts",
     "test:watch": "vitest"
   },
   "devDependencies": {

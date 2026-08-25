@@ -18,6 +18,14 @@ interface Harness {
   close: () => Promise<void>;
 }
 
+const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
+const MONGODB_CONNECT_TIMEOUT_MS = 5_000;
+const MONGODB_CONTRACT_TEST_TIMEOUT_MS = 30_000;
+const mongodbClientOptions = {
+  connectTimeoutMS: MONGODB_CONNECT_TIMEOUT_MS,
+  serverSelectionTimeoutMS: MONGODB_CONNECT_TIMEOUT_MS
+};
+
 const baseTask = (overrides: Partial<BrowserTask> = {}): BrowserTask => ({
   id: 'task-1', userId: 'user-1', kind: 'browse', goal: 'check status', constraints: {}, mode: 'read_only',
   interaction: 'autonomous', status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
@@ -30,39 +38,59 @@ const memoryHarness = async (): Promise<Harness> => {
 
 let mongoServer: MongoMemoryServer | undefined;
 let mongoUrl: string | undefined;
-let mongoUnavailable: string | undefined;
 
 beforeAll(async () => {
   mongoUrl = process.env.TALOS_TEST_MONGODB_URL;
   if (mongoUrl === undefined) {
-    try {
-      mongoServer = await MongoMemoryServer.create();
-      mongoUrl = mongoServer.getUri();
-    } catch (error) {
-      mongoUnavailable = error instanceof Error ? error.message : 'mongodb-memory-server unavailable';
-    }
+    mongoServer = await MongoMemoryServer.create({
+      binary: { version: MONGODB_MEMORY_SERVER_VERSION }
+    });
+    mongoUrl = mongoServer.getUri();
   }
-});
+  const client = new MongoClient(mongoUrl, mongodbClientOptions);
+  try {
+    await client.connect();
+    await client.db().command({ ping: 1 });
+  } finally {
+    await client.close();
+  }
+}, 300_000);
 
 afterAll(async () => {
   await mongoServer?.stop();
-});
+}, 30_000);
 
 const mongoHarness = async (): Promise<Harness> => {
-  if (mongoUrl === undefined) throw new Error(`Mongo contract unavailable: ${mongoUnavailable ?? 'set TALOS_TEST_MONGODB_URL to run against MongoDB'}`);
-  const client = new MongoClient(mongoUrl);
-  await client.connect();
-  const repository = new MongoRepository(mongoUrl, `talos_test_${Date.now()}_${Math.random().toString(16).slice(2)}`, { client });
-  await repository.initialize();
-  return { repository, close: () => repository.close() };
+  if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
+  const client = new MongoClient(mongoUrl, mongodbClientOptions);
+  const databaseName = `talos_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const repository = new MongoRepository(mongoUrl, databaseName, { client });
+  try {
+    await repository.initialize();
+  } catch (error) {
+    try {
+      await client.db(databaseName).dropDatabase();
+    } catch {
+      // Preserve the initialization failure while still attempting bounded cleanup.
+    } finally {
+      await repository.close();
+    }
+    throw error;
+  }
+  return {
+    repository,
+    close: async () => {
+      try {
+        await client.db(databaseName).dropDatabase();
+      } finally {
+        await repository.close();
+      }
+    }
+  };
 };
 
-const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
+const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('round-trips registry entities and task state', async () => {
-    if (allowUnavailable && mongoUrl === undefined) {
-      expect(mongoUnavailable).toBeTypeOf('string');
-      return;
-    }
     const { repository, close } = await makeHarness();
     try {
       await repository.savePool({ id: 'pool-1', visibility: 'org', ownerUserId: 'user-1', sharedWithGroups: ['eng'], tags: { os: 'linux' } });
@@ -91,13 +119,9 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
     } finally {
       await close();
     }
-  });
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
   it('keeps requeued tasks ahead of fresh tasks and updates records', async () => {
-    if (allowUnavailable && mongoUrl === undefined) {
-      expect(mongoUnavailable).toBeTypeOf('string');
-      return;
-    }
     const { repository, close } = await makeHarness();
     try {
       await repository.saveTask(baseTask({ id: 'fresh', createdAt: '2025-01-01T00:01:00.000Z' }));
@@ -108,13 +132,9 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
     } finally {
       await close();
     }
-  });
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
   it('atomically relays one interactive action and correlates its result', async () => {
-    if (allowUnavailable && mongoUrl === undefined) {
-      expect(mongoUnavailable).toBeTypeOf('string');
-      return;
-    }
     const { repository, close } = await makeHarness();
     try {
       const action = {
@@ -142,15 +162,11 @@ const contractTests = (makeHarness: () => Promise<Harness>, allowUnavailable = f
     } finally {
       await close();
     }
-  });
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 };
 
-const undefinedLeaseTest = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
+const undefinedLeaseTest = (makeHarness: () => Promise<Harness>): void => {
   it('round-trips explicitly undefined lease fields as undefined', async () => {
-    if (allowUnavailable && mongoUrl === undefined) {
-      expect(mongoUnavailable).toBeTypeOf('string');
-      return;
-    }
     const { repository, close } = await makeHarness();
     try {
       const claimed = baseTask({ status: 'claimed', leaseExpiresAt: '2025-01-01T00:01:00.000Z', leaseToken: 'lease-1', workerId: 'worker-1', machineId: 'machine-1' });
@@ -164,15 +180,11 @@ const undefinedLeaseTest = (makeHarness: () => Promise<Harness>, allowUnavailabl
     } finally {
       await close();
     }
-  });
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 };
 
-const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavailable = false): void => {
+const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
   it('atomically creates and compare-and-sets a testing run aggregate', async () => {
-    if (allowUnavailable && mongoUrl === undefined) {
-      expect(mongoUnavailable).toBeTypeOf('string');
-      return;
-    }
     const { repository, close } = await makeHarness();
     try {
       await provisionTestingPool(repository, 'pool-1');
@@ -342,7 +354,7 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>, allowUnavai
     } finally {
       await close();
     }
-  });
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 };
 
 describe('Repository contract: memory', () => {
@@ -351,11 +363,7 @@ describe('Repository contract: memory', () => {
   testingRunContractTest(memoryHarness);
 });
 describe('Repository contract: mongo', () => {
-  contractTests(mongoHarness, true);
-  undefinedLeaseTest(mongoHarness, true);
-  testingRunContractTest(mongoHarness, true);
-});
-
-it('reports when Mongo contract execution is unavailable', () => {
-  if (mongoUrl === undefined) expect(mongoUnavailable).toBeTypeOf('string');
+  contractTests(mongoHarness);
+  undefinedLeaseTest(mongoHarness);
+  testingRunContractTest(mongoHarness);
 });
