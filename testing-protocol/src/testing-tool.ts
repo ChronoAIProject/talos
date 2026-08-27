@@ -43,6 +43,8 @@ export const testingExecutionOutcomeSchema = z.enum([
   'failed',
   'blocked',
   'error',
+  'timed_out',
+  'all_skipped',
   'cancelled',
   'lost_or_inconclusive',
   'unobserved'
@@ -51,7 +53,7 @@ export const testingEvidenceOutcomeSchema = z.enum([
   'not_required', 'staging', 'complete', 'partial', 'unavailable', 'policy_blocked'
 ]);
 export const testingUploadOutcomeSchema = z.enum([
-  'not_required', 'pending', 'uploaded', 'upload_expired'
+  'not_required', 'pending', 'uploaded', 'failed', 'upload_expired'
 ]);
 export const testingCleanupOutcomeSchema = z.enum([
   'not_required', 'pending', 'complete', 'residual_retryable', 'residual_blocking', 'unobserved'
@@ -214,8 +216,41 @@ export const testingRunAttemptProjectionSchema = z.object({
   attempt_id: identifierSchema,
   task_id: identifierSchema,
   generation: z.number().int().positive(),
-  machine_id: identifierSchema.optional()
+  machine_id: identifierSchema,
+  worker_id: identifierSchema,
+  runtime: z.object({
+    capability: z.literal('local-qa-mvp/v1'),
+    locally_accepted_at: timestampSchema.nullable(),
+    event_sequence: z.number().int().nonnegative().nullable()
+  }).strict()
 }).strict();
+
+export const testingTerminalReasonCodeSchema = z.enum([
+  'execution_settled',
+  'execution_timed_out',
+  'execution_all_skipped',
+  'terminal_blocked',
+  'cancelled',
+  'control_failed',
+  'deadline_exceeded',
+  'attempt_limit_exceeded',
+  'reconcile_deadline_exceeded'
+]);
+
+export const testingTerminalReasonSchema = z.object({
+  code: testingTerminalReasonCodeSchema,
+  at: timestampSchema
+}).strict();
+
+export const testingRecoverableBlockingSchema = z.object({
+  reason_code: identifierSchema,
+  retry_at: timestampSchema,
+  deadline_at: timestampSchema,
+  next_action: z.enum(['retry_dispatch', 'retry_runtime', 'reconcile'])
+}).strict().refine((value) => Date.parse(value.retry_at) <= Date.parse(value.deadline_at), {
+  message: 'blocked retry_at cannot follow deadline_at',
+  path: ['retry_at']
+});
 
 export const testingRunProgressSchema = z.object({
   phase: identifierSchema,
@@ -232,9 +267,18 @@ export const testingRunSummarySchema = z.object({
   passed: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   blocked: z.number().int().nonnegative(),
-  error: z.number().int().nonnegative()
-}).strict().refine((value) => value.passed + value.failed + value.blocked + value.error <= value.total, {
-  message: 'summary outcomes cannot exceed total'
+  error: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  all_skipped: z.boolean()
+}).strict().superRefine((value, context) => {
+  const settled = value.passed + value.failed + value.blocked + value.error + value.skipped;
+  if (settled !== value.total) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'summary outcomes must equal total', path: ['total'] });
+  }
+  const allSkipped = value.total > 0 && value.skipped === value.total;
+  if (value.all_skipped !== allSkipped) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all_skipped must match summary counts', path: ['all_skipped'] });
+  }
 });
 
 export const testingTerminalRefsSchema = terminalReferenceProjectionSchema;
@@ -251,6 +295,7 @@ const testingRunSnapshotObjectSchema = z.object({
   request_id: identifierSchema,
   client_correlation_id: identifierSchema,
   authenticated_transport: testingAuthenticatedTransportContextSchema,
+  inputs: testingInputReferencesSchema,
   snapshot_version: z.number().int().positive(),
   snapshot_ref: talosReferenceSchema,
   control_status: testingControlStatusSchema,
@@ -258,6 +303,9 @@ const testingRunSnapshotObjectSchema = z.object({
   evidence_outcome: testingEvidenceOutcomeSchema,
   upload_outcome: testingUploadOutcomeSchema,
   cleanup_outcome: testingCleanupOutcomeSchema,
+  terminal: z.boolean(),
+  terminal_reason: testingTerminalReasonSchema.nullable(),
+  blocking: testingRecoverableBlockingSchema.nullable(),
   attempt: testingRunAttemptProjectionSchema.nullable(),
   progress: testingRunProgressSchema,
   summary: testingRunSummarySchema.nullable(),
@@ -271,16 +319,63 @@ const validateSnapshotResultBinding = (
   value: z.infer<typeof testingRunSnapshotObjectSchema>,
   context: z.RefinementCtx
 ): void => {
-  if (['completed', 'failed', 'cancelled', 'abandoned'].includes(value.control_status)) {
-    if (value.execution_outcome === 'executing') {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot still be executing', path: ['execution_outcome'] });
+  const controlClosed = ['completed', 'failed', 'cancelled', 'abandoned'].includes(value.control_status);
+  const outcomesSettled = value.execution_outcome !== 'executing' &&
+    value.evidence_outcome !== 'staging' && value.upload_outcome !== 'pending' &&
+    value.cleanup_outcome !== 'pending';
+  const canonicalTerminal = controlClosed && outcomesSettled;
+  if (value.terminal !== canonicalTerminal) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal must match closed control and settled outcomes', path: ['terminal'] });
+  }
+  if (canonicalTerminal !== (value.terminal_reason !== null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal_reason is required exactly for terminal snapshots', path: ['terminal_reason'] });
+  }
+  if (canonicalTerminal && value.terminal_reason !== null) {
+    const expectedCodes = value.control_status === 'cancelled'
+      ? ['cancelled']
+      : value.control_status === 'abandoned'
+        ? ['reconcile_deadline_exceeded']
+        : value.execution_outcome === 'timed_out'
+          ? ['execution_timed_out']
+          : value.execution_outcome === 'all_skipped'
+            ? ['execution_all_skipped']
+            : value.execution_outcome === 'blocked'
+              ? ['terminal_blocked']
+              : value.control_status === 'failed'
+                ? ['control_failed', 'deadline_exceeded', 'attempt_limit_exceeded']
+                : ['execution_settled'];
+    if (!expectedCodes.includes(value.terminal_reason.code)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal_reason code does not match control and execution outcome', path: ['terminal_reason', 'code'] });
     }
-    if (value.evidence_outcome === 'staging') {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot still stage evidence', path: ['evidence_outcome'] });
+  }
+  if (controlClosed && value.blocking !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshots cannot remain recoverably blocked', path: ['blocking'] });
+  }
+  if (value.control_status === 'reconcile_required' && value.blocking === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'reconcile-required snapshots must describe retry, deadline, and next action', path: ['blocking'] });
+  }
+  if (value.blocking !== null && value.execution_outcome !== 'not_started' && value.execution_outcome !== 'executing') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'recoverable blocking cannot assert a settled execution outcome', path: ['blocking'] });
+  }
+  if (value.execution_outcome === 'all_skipped' && value.summary?.all_skipped !== true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all_skipped execution requires all-skipped summary counts', path: ['summary'] });
+  }
+  if (value.execution_outcome === 'passed' && value.summary?.all_skipped === true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped execution cannot be passed', path: ['execution_outcome'] });
+  }
+  if (controlClosed && ['passed', 'failed', 'blocked', 'error', 'all_skipped'].includes(value.execution_outcome)) {
+    if (value.results?.case_result_set === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled Runner execution requires CaseResultSet reference', path: ['results', 'case_result_set'] });
     }
-    if (value.cleanup_outcome === 'pending') {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal snapshot cannot have pending cleanup', path: ['cleanup_outcome'] });
+    if (value.summary === null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled Runner execution requires bounded summary', path: ['summary'] });
     }
+  }
+  if (controlClosed && ['complete', 'partial'].includes(value.evidence_outcome) && value.results?.evidence_manifest === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled evidence requires EvidenceManifest reference', path: ['results', 'evidence_manifest'] });
+  }
+  if (controlClosed && !['pending', 'unobserved'].includes(value.cleanup_outcome) && value.results?.cleanup_receipt === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'observed cleanup requires CleanupReceipt reference', path: ['results', 'cleanup_receipt'] });
   }
   if (value.results === null) return;
   if (value.attempt === null) {
@@ -784,6 +879,9 @@ export type TestingEvidenceOutcome = z.infer<typeof testingEvidenceOutcomeSchema
 export type TestingUploadOutcome = z.infer<typeof testingUploadOutcomeSchema>;
 export type TestingCleanupOutcome = z.infer<typeof testingCleanupOutcomeSchema>;
 export type TestingRunAttemptProjection = z.infer<typeof testingRunAttemptProjectionSchema>;
+export type TestingTerminalReasonCode = z.infer<typeof testingTerminalReasonCodeSchema>;
+export type TestingTerminalReason = z.infer<typeof testingTerminalReasonSchema>;
+export type TestingRecoverableBlocking = z.infer<typeof testingRecoverableBlockingSchema>;
 export type TestingRunProgress = z.infer<typeof testingRunProgressSchema>;
 export type TestingRunSummary = z.infer<typeof testingRunSummarySchema>;
 export type TestingTerminalRefs = z.infer<typeof testingTerminalRefsSchema>;

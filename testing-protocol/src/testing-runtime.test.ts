@@ -257,7 +257,7 @@ describe('Local QA Runtime consumer contracts', () => {
     }).success).toBe(false);
   });
 
-  it('rejects terminal Runtime snapshots with staging evidence or pending cleanup', () => {
+  it('enforces settled Runtime outcomes and exact external terminal references', () => {
     const binding = {
       schema_version: 'talos.testing-runtime-execution-binding/v1' as const,
       run_id: attempt.run_id,
@@ -274,6 +274,28 @@ describe('Local QA Runtime consumer contracts', () => {
       generation: attempt.generation,
       fence_token: attempt.fence_token
     };
+    const results = {
+      schema_version: 'talos.testing-terminal-refs/v1' as const,
+      binding: resultBinding,
+      case_result_set: {
+        schema: 'testing-case-result-set.v2' as const,
+        ref: 'artifact://runtime/results/set-1',
+        digest,
+        binding: resultBinding
+      },
+      evidence_manifest: {
+        schema: 'testing-evidence-manifest.v1' as const,
+        ref: 'artifact://runtime/evidence/manifest-1',
+        digest,
+        binding: resultBinding
+      },
+      cleanup_receipt: {
+        schema: 'qa.local-cleanup-receipt/v2' as const,
+        ref: 'artifact://runtime/cleanup/receipt-1',
+        digest,
+        binding: resultBinding
+      }
+    };
     const core = {
       schema_version: 'local-qa-runtime-snapshot/v1' as const,
       snapshot_ref: 'local-qa://runtime/snapshots/terminal-1',
@@ -285,29 +307,76 @@ describe('Local QA Runtime consumer contracts', () => {
       progress: { phase: 'terminal', completed_cases: 1, total_cases: 1, last_event_sequence: 1 },
       execution_outcome: 'passed' as const,
       evidence_outcome: 'complete' as const,
-      upload_outcome: 'pending' as const,
+      upload_outcome: 'uploaded' as const,
       cleanup_outcome: 'complete' as const,
-      results: {
-        schema_version: 'talos.testing-terminal-refs/v1' as const,
-        binding: resultBinding,
-        cleanup_receipt: {
-          schema: 'qa.local-cleanup-receipt/v2' as const,
-          ref: 'artifact://runtime/cleanup/receipt-1',
-          digest,
-          binding: resultBinding
-        }
-      },
+      summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false },
+      results,
       updated_at: now
     };
-    const staging = { ...core, evidence_outcome: 'staging' as const };
-    const pending = { ...core, cleanup_outcome: 'pending' as const };
-    expect(localQARuntimeSnapshotSchema.safeParse({
-      ...staging,
-      snapshot_digest: computeLocalQARuntimeSnapshotDigest(staging)
-    }).success).toBe(false);
-    expect(localQARuntimeSnapshotSchema.safeParse({
-      ...pending,
-      snapshot_digest: computeLocalQARuntimeSnapshotDigest(pending)
-    }).success).toBe(false);
+    const validates = (candidate: unknown): boolean => {
+      try {
+        return localQARuntimeSnapshotSchema.safeParse({
+          ...(candidate as Record<string, unknown>),
+          snapshot_digest: computeLocalQARuntimeSnapshotDigest(candidate)
+        }).success;
+      } catch {
+        return false;
+      }
+    };
+    const { summary: _summary, ...withoutSummary } = core;
+    const { case_result_set: _caseResultSet, ...withoutCaseResultSet } = results;
+    const { evidence_manifest: _evidenceManifest, ...withoutEvidenceManifest } = results;
+    const { cleanup_receipt: _cleanupReceipt, ...withoutCleanupReceipt } = results;
+    void _summary;
+    void _caseResultSet;
+    void _evidenceManifest;
+    void _cleanupReceipt;
+
+    expect(validates(core)).toBe(true);
+    expect(validates({
+      ...withoutSummary,
+      execution_outcome: 'timed_out'
+    })).toBe(true);
+    expect(validates({
+      ...core,
+      execution_outcome: 'all_skipped',
+      summary: { total: 2, passed: 0, failed: 0, blocked: 0, error: 0, skipped: 2, all_skipped: true }
+    })).toBe(true);
+    expect(validates({
+      ...core,
+      cleanup_outcome: 'residual_blocking'
+    })).toBe(true);
+
+    for (const unsettled of [
+      { evidence_outcome: 'staging' },
+      { upload_outcome: 'pending' },
+      { cleanup_outcome: 'pending' }
+    ]) expect(validates({ ...core, ...unsettled })).toBe(false);
+
+    expect(validates({
+      ...core,
+      execution_outcome: 'passed',
+      summary: { total: 1, passed: 0, failed: 0, blocked: 0, error: 0, skipped: 1, all_skipped: true }
+    })).toBe(false);
+    expect(validates({
+      ...core,
+      execution_outcome: 'all_skipped',
+      summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false }
+    })).toBe(false);
+    expect(validates({
+      ...core,
+      summary: { ...core.summary, total: 2 }
+    })).toBe(false);
+
+    for (const incompleteResults of [
+      withoutCaseResultSet,
+      withoutEvidenceManifest,
+      withoutCleanupReceipt
+    ]) expect(validates({ ...core, results: incompleteResults })).toBe(false);
+    expect(validates({
+      ...core,
+      cleanup_outcome: 'residual_blocking',
+      results: withoutCleanupReceipt
+    })).toBe(false);
   });
 });

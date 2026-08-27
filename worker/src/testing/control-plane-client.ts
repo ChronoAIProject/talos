@@ -11,7 +11,12 @@ import {
   type TestingNoLocalAcceptanceFact,
   type TestingReconcileClaimResponse,
   type TestingRunProgress,
+  type TestingRunSummary,
   type TestingSafeError,
+  type TestingExecutionOutcome,
+  type TestingEvidenceOutcome,
+  type TestingUploadOutcome,
+  type TestingCleanupOutcome,
   type TestingTerminalRefs,
   type TestingWorkerMutationOperation
 } from '@talos/testing-protocol';
@@ -41,11 +46,11 @@ export interface TestingHeartbeatProgress extends Omit<TestingRunProgress, 'last
 
 export interface TestingTerminalProjection {
   readonly controlStatus: 'completed' | 'failed' | 'cancelled';
-  readonly executionOutcome: 'not_started' | 'executing' | 'passed' | 'failed' | 'blocked' | 'error' | 'cancelled' | 'lost_or_inconclusive' | 'unobserved';
-  readonly evidenceOutcome: 'not_required' | 'staging' | 'complete' | 'partial' | 'unavailable' | 'policy_blocked';
-  readonly uploadOutcome: 'not_required' | 'pending' | 'uploaded' | 'upload_expired';
-  readonly cleanupOutcome: 'not_required' | 'pending' | 'complete' | 'residual_retryable' | 'residual_blocking' | 'unobserved';
-  readonly summary?: { total: number; passed: number; failed: number; blocked: number; error: number };
+  readonly executionOutcome: TestingExecutionOutcome;
+  readonly evidenceOutcome: TestingEvidenceOutcome;
+  readonly uploadOutcome: TestingUploadOutcome;
+  readonly cleanupOutcome: TestingCleanupOutcome;
+  readonly summary?: TestingRunSummary;
   readonly results?: TestingTerminalRefs;
   readonly safeError?: TestingSafeError;
 }

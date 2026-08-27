@@ -760,9 +760,7 @@ const terminalProjection = (snapshot: LocalQARuntimeSnapshot): TestingTerminalPr
   ) throw new TestingExecutorError('runtime_not_terminal', 'Runtime snapshot does not contain a complete terminal projection');
   const controlStatus = snapshot.execution_outcome === 'cancelled'
     ? 'cancelled' as const
-    : ['not_started', 'error', 'lost_or_inconclusive'].includes(snapshot.execution_outcome)
-      ? 'failed' as const
-      : 'completed' as const;
+    : 'completed' as const;
   return {
     controlStatus,
     executionOutcome: snapshot.execution_outcome,

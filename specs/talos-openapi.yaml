@@ -679,25 +679,28 @@ components:
       enum: [submitted, reserved, claimed, local_accepted, running, cancel_requested, closing, reconcile_required, completed, failed, cancelled, abandoned]
     TestingExecutionOutcome:
       type: string
-      enum: [not_started, executing, passed, failed, blocked, error, cancelled, lost_or_inconclusive, unobserved]
+      enum: [not_started, executing, passed, failed, blocked, error, timed_out, all_skipped, cancelled, lost_or_inconclusive, unobserved]
     TestingEvidenceOutcome:
       type: string
       enum: [not_required, staging, complete, partial, unavailable, policy_blocked]
     TestingUploadOutcome:
       type: string
-      enum: [not_required, pending, uploaded, upload_expired]
+      enum: [not_required, pending, uploaded, failed, upload_expired]
     TestingCleanupOutcome:
       type: string
       enum: [not_required, pending, complete, residual_retryable, residual_blocking, unobserved]
     TestingTerminalExecutionOutcome:
       type: string
-      enum: [not_started, passed, failed, blocked, error, cancelled, lost_or_inconclusive, unobserved]
+      enum: [not_started, passed, failed, blocked, error, timed_out, all_skipped, cancelled, lost_or_inconclusive, unobserved]
     TestingTerminalEvidenceOutcome:
       type: string
       enum: [not_required, complete, partial, unavailable, policy_blocked]
     TestingTerminalCleanupOutcome:
       type: string
       enum: [not_required, complete, residual_retryable, residual_blocking, unobserved]
+    TestingWorkerTerminalCleanupOutcome:
+      type: string
+      enum: [not_required, complete, residual_retryable, residual_blocking]
     ArtifactPointer:
       type: object
       additionalProperties: false
@@ -896,12 +899,41 @@ components:
     TestingRunAttempt:
       type: object
       additionalProperties: false
-      required: [attempt_id, task_id, generation]
+      required: [attempt_id, task_id, generation, machine_id, worker_id, runtime]
       properties:
         attempt_id: { $ref: '#/components/schemas/Identifier' }
         task_id: { $ref: '#/components/schemas/Identifier' }
         generation: { type: integer, minimum: 1 }
         machine_id: { $ref: '#/components/schemas/Identifier' }
+        worker_id: { $ref: '#/components/schemas/Identifier' }
+        runtime: { $ref: '#/components/schemas/TestingRunRuntimeProvenance' }
+    TestingRunRuntimeProvenance:
+      type: object
+      additionalProperties: false
+      required: [capability, locally_accepted_at, event_sequence]
+      properties:
+        capability: { const: local-qa-mvp/v1 }
+        locally_accepted_at: { oneOf: [{ type: 'null' }, { type: string, format: date-time }] }
+        event_sequence: { oneOf: [{ type: 'null' }, { type: integer, minimum: 0 }] }
+    TestingTerminalReasonCode:
+      type: string
+      enum: [execution_settled, execution_timed_out, execution_all_skipped, terminal_blocked, cancelled, control_failed, deadline_exceeded, attempt_limit_exceeded, reconcile_deadline_exceeded]
+    TestingTerminalReason:
+      type: object
+      additionalProperties: false
+      required: [code, at]
+      properties:
+        code: { $ref: '#/components/schemas/TestingTerminalReasonCode' }
+        at: { type: string, format: date-time }
+    TestingRecoverableBlocking:
+      type: object
+      additionalProperties: false
+      required: [reason_code, retry_at, deadline_at, next_action]
+      properties:
+        reason_code: { $ref: '#/components/schemas/Identifier' }
+        retry_at: { type: string, format: date-time, description: Must be earlier than or equal to deadline_at. }
+        deadline_at: { type: string, format: date-time }
+        next_action: { type: string, enum: [retry_dispatch, retry_runtime, reconcile] }
     TestingRunProgress:
       type: object
       additionalProperties: false
@@ -914,13 +946,16 @@ components:
     TestingRunSummary:
       type: object
       additionalProperties: false
-      required: [total, passed, failed, blocked, error]
+      description: Non-authoritative bounded projection. Counts close exactly over total; all_skipped is true exactly when total is positive and every case is skipped. The upstream CaseResultSet remains authoritative.
+      required: [total, passed, failed, blocked, error, skipped, all_skipped]
       properties:
         total: { type: integer, minimum: 0 }
         passed: { type: integer, minimum: 0 }
         failed: { type: integer, minimum: 0 }
         blocked: { type: integer, minimum: 0 }
         error: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        all_skipped: { type: boolean }
     TestingAttemptBinding:
       type: object
       additionalProperties: false
@@ -934,6 +969,7 @@ components:
     TestingCaseResultSetReference:
       type: object
       additionalProperties: false
+      description: Opaque reference to the Testing Packages owning repository's authoritative CaseResultSet schema. Talos validates identity, digest, and attempt binding only.
       required: [schema, ref, digest, binding]
       properties:
         schema: { const: testing-case-result-set.v2 }
@@ -943,6 +979,7 @@ components:
     TestingEvidenceManifestReference:
       type: object
       additionalProperties: false
+      description: Opaque reference to the Local QA Runtime owning repository's authoritative EvidenceManifest schema. Talos validates identity, digest, and attempt binding only.
       required: [schema, ref, digest, binding]
       properties:
         schema: { const: testing-evidence-manifest.v1 }
@@ -952,6 +989,7 @@ components:
     TestingCleanupReceiptReference:
       type: object
       additionalProperties: false
+      description: Opaque reference to the Local QA Runtime owning repository's authoritative CleanupReceipt schema. Talos validates identity, digest, and attempt binding only.
       required: [schema, ref, digest, binding]
       properties:
         schema: { const: qa.local-cleanup-receipt/v2 }
@@ -961,6 +999,7 @@ components:
     TestingTerminalRefs:
       type: object
       additionalProperties: false
+      description: Talos-owned bounded projection of externally owned facts. It is not a second CaseResultSet, EvidenceManifest, or CleanupReceipt authority.
       required: [schema_version, binding]
       properties:
         schema_version: { const: talos.testing-terminal-refs/v1 }
@@ -979,13 +1018,15 @@ components:
     TestingRunSnapshot:
       type: object
       additionalProperties: false
-      required: [schema_version, run_id, request_id, client_correlation_id, authenticated_transport, snapshot_version, snapshot_ref, snapshot_digest, resume_cursor, control_status, execution_outcome, evidence_outcome, upload_outcome, cleanup_outcome, attempt, progress, summary, results, safe_error, created_at, updated_at]
+      description: The sole canonical Talos run authority. terminal is true exactly when control is closed and execution, evidence, upload, and cleanup are settled. A closed control_status with upload_outcome=pending remains non-terminal and advances through this same Snapshot authority. There is no independent public result authority or result digest.
+      required: [schema_version, run_id, request_id, client_correlation_id, authenticated_transport, inputs, snapshot_version, snapshot_ref, snapshot_digest, resume_cursor, control_status, execution_outcome, evidence_outcome, upload_outcome, cleanup_outcome, terminal, terminal_reason, blocking, attempt, progress, summary, results, safe_error, created_at, updated_at]
       properties:
         schema_version: { const: talos.testing-run-snapshot/v1 }
         run_id: { $ref: '#/components/schemas/TestingRunIdValue' }
         request_id: { $ref: '#/components/schemas/Identifier' }
         client_correlation_id: { $ref: '#/components/schemas/Identifier' }
         authenticated_transport: { $ref: '#/components/schemas/TestingAuthenticatedTransportContext' }
+        inputs: { $ref: '#/components/schemas/TestingInputs' }
         snapshot_version: { type: integer, minimum: 1 }
         snapshot_ref: { $ref: '#/components/schemas/TalosReference' }
         snapshot_digest: { $ref: '#/components/schemas/Sha256Digest' }
@@ -995,6 +1036,9 @@ components:
         evidence_outcome: { $ref: '#/components/schemas/TestingEvidenceOutcome' }
         upload_outcome: { $ref: '#/components/schemas/TestingUploadOutcome' }
         cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' }
+        terminal: { type: boolean }
+        terminal_reason: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingTerminalReason' }] }
+        blocking: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingRecoverableBlocking' }] }
         attempt: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingRunAttempt' }] }
         progress: { $ref: '#/components/schemas/TestingRunProgress' }
         summary: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingRunSummary' }] }
@@ -1002,6 +1046,44 @@ components:
         safe_error: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/TestingSafeError' }] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+      allOf:
+        - if:
+            allOf:
+              - { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] } }, required: [control_status] }
+              - { properties: { execution_outcome: { not: { const: executing } } }, required: [execution_outcome] }
+              - { properties: { evidence_outcome: { not: { const: staging } } }, required: [evidence_outcome] }
+              - { properties: { upload_outcome: { not: { const: pending } } }, required: [upload_outcome] }
+              - { properties: { cleanup_outcome: { not: { const: pending } } }, required: [cleanup_outcome] }
+          then:
+            properties:
+              terminal: { const: true }
+              terminal_reason: { $ref: '#/components/schemas/TestingTerminalReason' }
+          else:
+            properties:
+              terminal: { const: false }
+              terminal_reason: { type: 'null' }
+        - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, execution_outcome: { enum: [passed, failed, blocked, error, all_skipped] } }, required: [control_status, execution_outcome] }
+          then: { required: [summary, results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [case_result_set] }] } } }
+        - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, evidence_outcome: { enum: [complete, partial] } }, required: [control_status, evidence_outcome] }
+          then: { required: [results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [evidence_manifest] }] } } }
+        - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, cleanup_outcome: { enum: [not_required, complete, residual_retryable, residual_blocking] } }, required: [control_status, cleanup_outcome] }
+          then: { required: [results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [cleanup_receipt] }] } } }
+        - if: { properties: { control_status: { const: reconcile_required } }, required: [control_status] }
+          then: { properties: { blocking: { $ref: '#/components/schemas/TestingRecoverableBlocking' } } }
+        - if: { properties: { terminal: { const: true }, control_status: { const: cancelled } }, required: [terminal, control_status] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: cancelled } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { const: abandoned } }, required: [terminal, control_status] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: reconcile_deadline_exceeded } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { enum: [completed, failed] }, execution_outcome: { const: timed_out } }, required: [terminal, control_status, execution_outcome] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: execution_timed_out } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { enum: [completed, failed] }, execution_outcome: { const: all_skipped } }, required: [terminal, control_status, execution_outcome] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: execution_all_skipped } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { enum: [completed, failed] }, execution_outcome: { const: blocked } }, required: [terminal, control_status, execution_outcome] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: terminal_blocked } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { const: completed }, execution_outcome: { not: { enum: [timed_out, all_skipped, blocked] } } }, required: [terminal, control_status, execution_outcome] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { const: execution_settled } } }] } } }
+        - if: { properties: { terminal: { const: true }, control_status: { const: failed }, execution_outcome: { not: { enum: [timed_out, all_skipped, blocked] } } }, required: [terminal, control_status, execution_outcome] }
+          then: { properties: { terminal_reason: { allOf: [{ $ref: '#/components/schemas/TestingTerminalReason' }, { properties: { code: { enum: [control_failed, deadline_exceeded, attempt_limit_exceeded] } } }] } } }
     TestingRunEvent:
       type: object
       additionalProperties: false
@@ -1403,13 +1485,24 @@ components:
         fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
         lease_token: { type: string, minLength: 1, maxLength: 512 }
         control_status: { type: string, enum: [completed, failed, cancelled] }
-        execution_outcome: { $ref: '#/components/schemas/TestingExecutionOutcome' }
-        evidence_outcome: { $ref: '#/components/schemas/TestingEvidenceOutcome' }
+        execution_outcome: { $ref: '#/components/schemas/TestingTerminalExecutionOutcome' }
+        evidence_outcome: { $ref: '#/components/schemas/TestingTerminalEvidenceOutcome' }
         upload_outcome: { $ref: '#/components/schemas/TestingUploadOutcome' }
-        cleanup_outcome: { $ref: '#/components/schemas/TestingCleanupOutcome' }
+        cleanup_outcome: { $ref: '#/components/schemas/TestingWorkerTerminalCleanupOutcome' }
         summary: { $ref: '#/components/schemas/TestingRunSummary' }
         results: { $ref: '#/components/schemas/TestingTerminalRefs' }
         safe_error: { $ref: '#/components/schemas/TestingSafeError' }
+      allOf:
+        - if: { properties: { execution_outcome: { enum: [passed, failed, blocked, error, all_skipped] } }, required: [execution_outcome] }
+          then: { required: [summary, results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [case_result_set] }] } } }
+        - if: { properties: { execution_outcome: { const: all_skipped } }, required: [execution_outcome] }
+          then: { properties: { summary: { allOf: [{ $ref: '#/components/schemas/TestingRunSummary' }, { properties: { all_skipped: { const: true } } }] } } }
+        - if: { properties: { execution_outcome: { const: passed } }, required: [execution_outcome] }
+          then: { properties: { summary: { allOf: [{ $ref: '#/components/schemas/TestingRunSummary' }, { properties: { all_skipped: { const: false } } }] } } }
+        - if: { properties: { evidence_outcome: { enum: [complete, partial] } }, required: [evidence_outcome] }
+          then: { required: [results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [evidence_manifest] }] } } }
+        - if: { properties: { cleanup_outcome: { enum: [not_required, complete, residual_retryable, residual_blocking] } }, required: [cleanup_outcome] }
+          then: { required: [results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [cleanup_receipt] }] } } }
     TestingWorkerMutationAck:
       type: object
       additionalProperties: false

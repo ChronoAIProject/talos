@@ -251,6 +251,38 @@ describe('TestingExecutor', () => {
     expect(calls).toContain('commit:cancelled');
   });
 
+  it('keeps Talos control closure independent from settled Runner outcomes', async () => {
+    for (const outcome of ['failed', 'error', 'timed_out', 'blocked', 'all_skipped'] as const) {
+      const fixture = startFixture();
+      const calls: string[] = [];
+      const terminal = snapshot(fixture.attempt, 'terminal', outcome);
+      await new TestingExecutor({
+        controlPlane: fakeControlPlane(fixture, calls),
+        runtime: {
+          getCapabilities: async () => capabilities(fixture.claim.task.runner),
+          submitRun: async (request) => ({
+            schema_version: 'local-qa-runtime-admission/v1',
+            disposition: 'new',
+            accepted: true,
+            run_id: fixture.attempt.run_id,
+            request_digest: request.request_digest,
+            attempt: fixture.attempt,
+            journal_version: 1,
+            snapshot: terminal
+          }),
+          getSnapshot: async () => terminal,
+          listEvents: async () => eventPage(fixture.attempt.run_id, 0, terminal.snapshot_digest),
+          cancelRun: async () => { throw new Error('must not cancel'); },
+          reconcileTerminal: async () => { throw new Error('must not reconcile'); }
+        },
+        authorizations: resolver(),
+        heartbeatMs: 60_000,
+        clock
+      }).runStart(fixture.claim);
+      expect(calls, outcome).toContain('commit:completed');
+    }
+  });
+
   it('rejects a cancel acknowledgement bound to another request', async () => {
     const fixture = startFixture();
     const calls: string[] = [];
@@ -1239,7 +1271,7 @@ const capabilities = (
 const snapshot = (
   attempt: TestingRuntimeAttempt,
   state: LocalQARuntimeSnapshot['state'],
-  outcome?: 'passed' | 'failed' | 'cancelled'
+  outcome?: 'passed' | 'failed' | 'blocked' | 'error' | 'timed_out' | 'all_skipped' | 'cancelled'
 ): LocalQARuntimeSnapshot => {
   const binding = {
     schema_version: 'talos.testing-runtime-execution-binding/v1' as const,
@@ -1257,6 +1289,17 @@ const snapshot = (
     generation: attempt.generation,
     fence_token: attempt.fence_token
   };
+  const summary = outcome === 'passed'
+    ? { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false }
+    : outcome === 'failed'
+      ? { total: 1, passed: 0, failed: 1, blocked: 0, error: 0, skipped: 0, all_skipped: false }
+      : outcome === 'blocked'
+        ? { total: 1, passed: 0, failed: 0, blocked: 1, error: 0, skipped: 0, all_skipped: false }
+        : outcome === 'error'
+          ? { total: 1, passed: 0, failed: 0, blocked: 0, error: 1, skipped: 0, all_skipped: false }
+          : outcome === 'all_skipped'
+            ? { total: 1, passed: 0, failed: 0, blocked: 0, error: 0, skipped: 1, all_skipped: true }
+            : undefined;
   const core = {
     schema_version: 'local-qa-runtime-snapshot/v1' as const,
     snapshot_ref: 'local-qa://runtime/snapshots/1',
@@ -1271,12 +1314,26 @@ const snapshot = (
       evidence_outcome: 'complete' as const,
       upload_outcome: 'not_required' as const,
       cleanup_outcome: 'complete' as const,
-      summary: { total: 1, passed: outcome === 'passed' ? 1 : 0, failed: outcome === 'failed' ? 1 : 0, blocked: 0, error: 0 },
       results: {
         schema_version: 'talos.testing-terminal-refs/v1' as const,
         binding: resultBinding,
+        ...(summary === undefined ? {} : {
+          case_result_set: {
+            schema: 'testing-case-result-set.v2' as const,
+            ref: 'artifact://runtime/results/1',
+            digest,
+            binding: resultBinding
+          }
+        }),
+        evidence_manifest: {
+          schema: 'testing-evidence-manifest.v1' as const,
+          ref: 'artifact://runtime/evidence-manifests/1',
+          digest,
+          binding: resultBinding
+        },
         cleanup_receipt: { schema: 'qa.local-cleanup-receipt/v2' as const, ref: 'artifact://runtime/cleanup-receipts/1', digest, binding: resultBinding }
-      }
+      },
+      ...(summary === undefined ? {} : { summary })
     }),
     updated_at: observedAt
   };

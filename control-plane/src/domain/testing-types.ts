@@ -17,7 +17,9 @@ import type {
   TestingTask,
   TestingLeaseClaimReference,
   TestingNoLocalAcceptanceFact,
-  TestingReconcileClosure
+  TestingReconcileClosure,
+  TestingRecoverableBlocking,
+  TestingTerminalReason
 } from '@talos/testing-protocol';
 
 export interface TestingCursorPageRecord {
@@ -44,7 +46,11 @@ export interface TestingCleanupVerificationRecord {
     readonly generation: number;
     readonly fenceToken: string;
   };
-  readonly disposition: 'cleanup_complete' | 'cleanup_not_required';
+  readonly disposition:
+    | 'cleanup_complete'
+    | 'cleanup_not_required'
+    | 'cleanup_residual_retryable'
+    | 'cleanup_residual_blocking';
   readonly verifiedAt: string;
 }
 
@@ -204,6 +210,8 @@ export interface TestingRunRecord {
   readonly evidenceOutcome: TestingEvidenceOutcome;
   readonly uploadOutcome: TestingUploadOutcome;
   readonly cleanupOutcome: TestingCleanupOutcome;
+  readonly terminalReason?: TestingTerminalReason;
+  readonly blocking?: TestingRecoverableBlocking;
   readonly attempt?: TestingRunAttemptProjection;
   readonly progress: TestingRunProgress;
   readonly summary?: TestingRunSummary;
@@ -220,3 +228,36 @@ export interface TestingRunRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export const projectTestingRunAttempt = (
+  run: TestingRunRecord
+): TestingRunAttemptProjection | undefined => {
+  const attempt = run.currentAttemptId === undefined
+    ? undefined
+    : run.attempts.find((candidate) => candidate.id === run.currentAttemptId);
+  if (attempt === undefined) return undefined;
+  return {
+    attempt_id: attempt.id,
+    task_id: run.task.id,
+    generation: attempt.generation,
+    machine_id: attempt.machineId,
+    worker_id: attempt.workerId,
+    runtime: {
+      capability: run.request.placement_requirements.testing_runtime,
+      locally_accepted_at: attempt.localAcceptedAt ?? null,
+      event_sequence: attempt.runtimeEventSequence ?? null
+    }
+  };
+};
+
+export const testingOutcomesSettled = (run: Pick<
+TestingRunRecord,
+'executionOutcome' | 'evidenceOutcome' | 'uploadOutcome' | 'cleanupOutcome'
+>): boolean => run.executionOutcome !== 'executing' && run.evidenceOutcome !== 'staging' &&
+  run.uploadOutcome !== 'pending' && run.cleanupOutcome !== 'pending';
+
+export const isTestingRunCanonicalTerminal = (run: Pick<
+TestingRunRecord,
+'controlStatus' | 'executionOutcome' | 'evidenceOutcome' | 'uploadOutcome' | 'cleanupOutcome'
+>): boolean => ['completed', 'failed', 'cancelled', 'abandoned'].includes(run.controlStatus) &&
+  testingOutcomesSettled(run);

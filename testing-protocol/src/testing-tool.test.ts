@@ -184,12 +184,28 @@ describe('Testing Tool contracts', () => {
   });
 
   it('keeps control and operational outcomes independent in a digest-bound snapshot', () => {
+    const attempt = {
+      attempt_id: 'attempt-1',
+      task_id: 'task-1',
+      generation: 2,
+      machine_id: 'machine-1',
+      worker_id: 'worker-1',
+      runtime: { capability: 'local-qa-mvp/v1' as const, locally_accepted_at: timestamp, event_sequence: 4 }
+    };
+    const binding = {
+      run_id: 'run-1',
+      task_id: attempt.task_id,
+      attempt_id: attempt.attempt_id,
+      generation: attempt.generation,
+      fence_token: 'fence-token-123456'
+    };
     const core = {
       schema_version: 'talos.testing-run-snapshot/v1' as const,
       run_id: 'run-1',
       request_id: request.request_id,
       client_correlation_id: request.client_correlation_id,
       authenticated_transport: authenticatedTransport,
+      inputs: request.inputs,
       snapshot_version: 3,
       snapshot_ref: 'talos://testing/runs/run-1/snapshots/3',
       control_status: 'completed' as const,
@@ -197,10 +213,34 @@ describe('Testing Tool contracts', () => {
       evidence_outcome: 'complete' as const,
       upload_outcome: 'pending' as const,
       cleanup_outcome: 'residual_blocking' as const,
-      attempt: null,
+      terminal: false,
+      terminal_reason: null,
+      blocking: null,
+      attempt,
       progress: { phase: 'closing', completed_cases: 1, total_cases: 1, last_event_sequence: 4 },
-      summary: { total: 1, passed: 0, failed: 1, blocked: 0, error: 0 },
-      results: null,
+      summary: { total: 1, passed: 0, failed: 1, blocked: 0, error: 0, skipped: 0, all_skipped: false },
+      results: {
+        schema_version: 'talos.testing-terminal-refs/v1' as const,
+        binding,
+        case_result_set: {
+          schema: 'testing-case-result-set.v2' as const,
+          ref: 'artifact://testing/results/result-1',
+          digest,
+          binding
+        },
+        evidence_manifest: {
+          schema: 'testing-evidence-manifest.v1' as const,
+          ref: 'artifact://testing/evidence/manifest-1',
+          digest,
+          binding
+        },
+        cleanup_receipt: {
+          schema: 'qa.local-cleanup-receipt/v2' as const,
+          ref: 'artifact://testing/cleanup/receipt-1',
+          digest,
+          binding
+        }
+      },
       safe_error: null,
       created_at: timestamp,
       updated_at: timestamp
@@ -215,7 +255,8 @@ describe('Testing Tool contracts', () => {
       control_status: 'completed',
       execution_outcome: 'failed',
       upload_outcome: 'pending',
-      cleanup_outcome: 'residual_blocking'
+      cleanup_outcome: 'residual_blocking',
+      terminal: false
     });
     expect(() => testingRunSnapshotSchema.parse({ ...snapshot, execution_outcome: 'passed' })).toThrow(
       'snapshot_digest does not match snapshot'
@@ -223,9 +264,15 @@ describe('Testing Tool contracts', () => {
     for (const unsettled of [
       { execution_outcome: 'executing' as const },
       { evidence_outcome: 'staging' as const },
+      { upload_outcome: 'pending' as const },
       { cleanup_outcome: 'pending' as const }
     ]) {
-      const invalidCore = { ...core, ...unsettled };
+      const invalidCore = {
+        ...core,
+        ...unsettled,
+        terminal: true,
+        terminal_reason: { code: 'execution_settled' as const, at: timestamp }
+      };
       expect(testingRunSnapshotSchema.safeParse({
         ...invalidCore,
         snapshot_digest: digestJson(invalidCore),
@@ -233,18 +280,34 @@ describe('Testing Tool contracts', () => {
       }).success).toBe(false);
     }
 
-    const attempt = { attempt_id: 'attempt-1', task_id: 'task-1', generation: 2, machine_id: 'machine-1' };
-    const binding = {
-      run_id: 'run-1',
-      task_id: attempt.task_id,
-      attempt_id: attempt.attempt_id,
-      generation: attempt.generation,
-      fence_token: 'fence-token-123456'
-    };
     const terminalCore = {
       ...core,
+      upload_outcome: 'uploaded' as const,
+      terminal: true,
+      terminal_reason: { code: 'execution_settled' as const, at: timestamp },
       attempt,
-      results: { schema_version: 'talos.testing-terminal-refs/v1' as const, binding }
+      results: {
+        schema_version: 'talos.testing-terminal-refs/v1' as const,
+        binding,
+        case_result_set: {
+          schema: 'testing-case-result-set.v2' as const,
+          ref: 'artifact://testing/results/result-1',
+          digest,
+          binding
+        },
+        evidence_manifest: {
+          schema: 'testing-evidence-manifest.v1' as const,
+          ref: 'artifact://testing/evidence/manifest-1',
+          digest,
+          binding
+        },
+        cleanup_receipt: {
+          schema: 'qa.local-cleanup-receipt/v2' as const,
+          ref: 'artifact://testing/cleanup/receipt-1',
+          digest,
+          binding
+        }
+      }
     };
     expect(testingRunSnapshotSchema.parse({
       ...terminalCore,
@@ -252,11 +315,205 @@ describe('Testing Tool contracts', () => {
       resume_cursor: snapshot.resume_cursor
     }).results).toMatchObject({ binding });
 
+    const validatesSnapshot = (candidate: unknown): boolean => {
+      try {
+        return testingRunSnapshotSchema.safeParse({
+          ...(candidate as Record<string, unknown>),
+          snapshot_digest: computeTestingRunSnapshotDigest(candidate as typeof terminalCore),
+          resume_cursor: snapshot.resume_cursor
+        }).success;
+      } catch {
+        return false;
+      }
+    };
+    const { case_result_set: _caseResultSet, ...withoutCaseResultSet } = terminalCore.results;
+    const { evidence_manifest: _evidenceManifest, ...withoutEvidenceManifest } = terminalCore.results;
+    const { cleanup_receipt: _cleanupReceipt, ...withoutCleanupReceipt } = terminalCore.results;
+    void _caseResultSet;
+    void _evidenceManifest;
+    void _cleanupReceipt;
+
+    const terminalFixtures = [
+      {
+        name: 'control completed with execution passed',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'passed',
+          summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false }
+        }
+      },
+      { name: 'execution failed', core: terminalCore },
+      {
+        name: 'execution error',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'error',
+          summary: { total: 1, passed: 0, failed: 0, blocked: 0, error: 1, skipped: 0, all_skipped: false }
+        }
+      },
+      {
+        name: 'execution timed out',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'timed_out',
+          terminal_reason: { code: 'execution_timed_out', at: timestamp },
+          summary: null,
+          results: withoutCaseResultSet
+        }
+      },
+      {
+        name: 'all skipped',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'all_skipped',
+          terminal_reason: { code: 'execution_all_skipped', at: timestamp },
+          summary: { total: 2, passed: 0, failed: 0, blocked: 0, error: 0, skipped: 2, all_skipped: true }
+        }
+      },
+      {
+        name: 'terminal blocked',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'blocked',
+          terminal_reason: { code: 'terminal_blocked', at: timestamp },
+          summary: { total: 1, passed: 0, failed: 0, blocked: 1, error: 0, skipped: 0, all_skipped: false }
+        }
+      },
+      {
+        name: 'abandoned',
+        core: {
+          ...terminalCore,
+          control_status: 'abandoned',
+          execution_outcome: 'lost_or_inconclusive',
+          evidence_outcome: 'unavailable',
+          upload_outcome: 'upload_expired',
+          cleanup_outcome: 'unobserved',
+          terminal_reason: { code: 'reconcile_deadline_exceeded', at: timestamp },
+          summary: null,
+          results: { schema_version: 'talos.testing-terminal-refs/v1', binding }
+        }
+      },
+      {
+        name: 'cancelled',
+        core: {
+          ...terminalCore,
+          control_status: 'cancelled',
+          execution_outcome: 'cancelled',
+          evidence_outcome: 'unavailable',
+          upload_outcome: 'not_required',
+          cleanup_outcome: 'unobserved',
+          terminal_reason: { code: 'cancelled', at: timestamp },
+          summary: null,
+          results: { schema_version: 'talos.testing-terminal-refs/v1', binding }
+        }
+      },
+      {
+        name: 'evidence unavailable',
+        core: { ...terminalCore, evidence_outcome: 'unavailable', results: withoutEvidenceManifest }
+      },
+      { name: 'evidence partial', core: { ...terminalCore, evidence_outcome: 'partial' } },
+      { name: 'upload failed', core: { ...terminalCore, upload_outcome: 'failed' } },
+      { name: 'upload expired', core: { ...terminalCore, upload_outcome: 'upload_expired' } },
+      {
+        name: 'upload pending',
+        core: { ...terminalCore, upload_outcome: 'pending', terminal: false, terminal_reason: null }
+      },
+      {
+        name: 'cleanup failed',
+        core: {
+          ...terminalCore,
+          execution_outcome: 'passed',
+          cleanup_outcome: 'residual_blocking',
+          summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false },
+          results: terminalCore.results
+        }
+      },
+      {
+        name: 'cleanup incomplete',
+        core: { ...terminalCore, cleanup_outcome: 'residual_retryable' }
+      },
+      {
+        name: 'cleanup unknown',
+        core: { ...terminalCore, cleanup_outcome: 'unobserved', results: withoutCleanupReceipt }
+      }
+    ];
+    for (const fixture of terminalFixtures) {
+      expect(validatesSnapshot(fixture.core), fixture.name).toBe(true);
+    }
+    const assertionsPassedCleanupFailed = terminalFixtures.find((fixture) => fixture.name === 'cleanup failed');
+    expect(assertionsPassedCleanupFailed?.core).toMatchObject({
+      execution_outcome: 'passed',
+      summary: { passed: 1, failed: 0 },
+      cleanup_outcome: 'residual_blocking'
+    });
+
+    const recoverableBlocked = {
+      ...terminalCore,
+      control_status: 'reconcile_required' as const,
+      execution_outcome: 'executing' as const,
+      evidence_outcome: 'staging' as const,
+      upload_outcome: 'pending' as const,
+      cleanup_outcome: 'pending' as const,
+      terminal: false,
+      terminal_reason: null,
+      blocking: {
+        reason_code: 'lease_expired',
+        retry_at: timestamp,
+        deadline_at: '2026-08-22T00:10:00.000Z',
+        next_action: 'reconcile' as const
+      },
+      summary: null,
+      results: null
+    };
+    expect(validatesSnapshot(recoverableBlocked)).toBe(true);
+    expect(validatesSnapshot({ ...recoverableBlocked, blocking: null })).toBe(false);
+
+    expect(validatesSnapshot({
+      ...terminalCore,
+      execution_outcome: 'passed',
+      summary: { total: 1, passed: 0, failed: 0, blocked: 0, error: 0, skipped: 1, all_skipped: true }
+    })).toBe(false);
+    expect(validatesSnapshot({
+      ...terminalCore,
+      summary: { ...terminalCore.summary, total: 2 }
+    })).toBe(false);
+    expect(validatesSnapshot({
+      ...terminalCore,
+      terminal_reason: { code: 'cancelled', at: timestamp }
+    })).toBe(false);
+    expect(validatesSnapshot({
+      ...terminalCore,
+      evidence_outcome: 'partial',
+      results: withoutEvidenceManifest
+    })).toBe(false);
+    expect(validatesSnapshot({
+      ...terminalCore,
+      cleanup_outcome: 'complete',
+      results: withoutCleanupReceipt
+    })).toBe(false);
+    expect(validatesSnapshot({
+      ...terminalCore,
+      cleanup_outcome: 'residual_blocking',
+      results: withoutCleanupReceipt
+    })).toBe(false);
+
     const foreignRunCore = {
       ...terminalCore,
       results: {
         ...terminalCore.results,
-        binding: { ...binding, run_id: 'run-2' }
+        binding: { ...binding, run_id: 'run-2' },
+        case_result_set: {
+          ...terminalCore.results.case_result_set,
+          binding: { ...binding, run_id: 'run-2' }
+        },
+        evidence_manifest: {
+          ...terminalCore.results.evidence_manifest,
+          binding: { ...binding, run_id: 'run-2' }
+        },
+        cleanup_receipt: {
+          ...terminalCore.results.cleanup_receipt,
+          binding: { ...binding, run_id: 'run-2' }
+        }
       }
     };
     expect(() => computeTestingRunSnapshotDigest(foreignRunCore)).toThrow(

@@ -31,7 +31,8 @@ const localQaReferenceSchema = z.string().min(1).max(2048)
 const idempotencyKeySchema = z.string().min(1).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const fenceTokenSchema = z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const localQAExecutionOutcomeSchema = z.enum([
-  'not_started', 'executing', 'passed', 'failed', 'blocked', 'error', 'cancelled', 'lost_or_inconclusive'
+  'not_started', 'executing', 'passed', 'failed', 'blocked', 'error', 'timed_out', 'all_skipped',
+  'cancelled', 'lost_or_inconclusive'
 ]);
 const localQACleanupOutcomeSchema = z.enum([
   'not_required', 'pending', 'complete', 'residual_retryable', 'residual_blocking'
@@ -169,11 +170,32 @@ export const localQARuntimeSnapshotSchema = localQARuntimeSnapshotCoreSchema.ext
     if (value.evidence_outcome === 'staging') {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot still stage evidence', path: ['evidence_outcome'] });
     }
+    if (value.upload_outcome === 'pending') {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot have pending upload', path: ['upload_outcome'] });
+    }
     if (value.cleanup_outcome === 'pending') {
       context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal Runtime snapshot cannot have pending cleanup', path: ['cleanup_outcome'] });
     }
-    if (['complete', 'not_required'].includes(value.cleanup_outcome ?? '') && value.results?.cleanup_receipt === undefined) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled cleanup requires an exact cleanup receipt', path: ['results', 'cleanup_receipt'] });
+    if (value.execution_outcome === 'all_skipped' && value.summary?.all_skipped !== true) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped Runtime execution requires exact all-skipped summary counts', path: ['summary'] });
+    }
+    if (value.execution_outcome === 'passed' && value.summary?.all_skipped === true) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped Runtime execution cannot be passed', path: ['execution_outcome'] });
+    }
+    if (['passed', 'failed', 'blocked', 'error', 'all_skipped'].includes(value.execution_outcome ?? '')) {
+      if (value.summary === undefined || value.results?.case_result_set === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'settled Runner execution requires bounded summary and exact CaseResultSet reference',
+          path: ['results', 'case_result_set']
+        });
+      }
+    }
+    if (['complete', 'partial'].includes(value.evidence_outcome ?? '') && value.results?.evidence_manifest === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled evidence requires an exact EvidenceManifest reference', path: ['results', 'evidence_manifest'] });
+    }
+    if (value.cleanup_outcome !== undefined && value.cleanup_outcome !== 'pending' && value.results?.cleanup_receipt === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'observed cleanup requires an exact CleanupReceipt reference', path: ['results', 'cleanup_receipt'] });
     }
   }
   if (value.results !== undefined) {

@@ -133,8 +133,25 @@ export const testingTerminalCommitBodySchema = testingAttemptBindingBodySchema.e
   if (value.evidence_outcome === 'staging') {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot still stage evidence', path: ['evidence_outcome'] });
   }
-  if (value.cleanup_outcome === 'pending') {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot have pending cleanup', path: ['cleanup_outcome'] });
+  if (value.cleanup_outcome === 'pending' || value.cleanup_outcome === 'unobserved') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'worker terminal commit requires an observed, settled cleanup outcome', path: ['cleanup_outcome'] });
+  }
+  if (value.execution_outcome === 'all_skipped' && value.summary?.all_skipped !== true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped execution requires exact all-skipped summary counts', path: ['summary'] });
+  }
+  if (value.execution_outcome === 'passed' && value.summary?.all_skipped === true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped execution cannot be passed', path: ['execution_outcome'] });
+  }
+  if (['passed', 'failed', 'blocked', 'error', 'all_skipped'].includes(value.execution_outcome)) {
+    if (value.summary === undefined || value.results?.case_result_set === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled Runner execution requires summary and CaseResultSet reference', path: ['results'] });
+    }
+  }
+  if (['complete', 'partial'].includes(value.evidence_outcome) && value.results?.evidence_manifest === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled evidence requires EvidenceManifest reference', path: ['results', 'evidence_manifest'] });
+  }
+  if (value.results?.cleanup_receipt === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'observed cleanup requires CleanupReceipt reference', path: ['results', 'cleanup_receipt'] });
   }
 });
 

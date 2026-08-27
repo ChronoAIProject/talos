@@ -22,6 +22,7 @@ import {
   testingReconcileClosureSchema,
   testingReconcileTaskSchema,
   testingRunEventSchema,
+  testingRunSummarySchema,
   testingTaskSchema,
   testingTerminalRefsSchema,
   type TestingCleanupOutcome,
@@ -39,16 +40,20 @@ import {
   type TestingReconcileTask,
   type TestingNoLocalAcceptanceFact,
   type TestingTerminalRefs,
-  type TestingUploadOutcome
+  type TestingUploadOutcome,
+  type TestingTerminalReasonCode
 } from '@talos/testing-protocol';
 import { z } from 'zod';
 import { TalosError, notFound } from '../domain/errors.js';
-import type {
-  TestingAttemptClaimRecord,
-  TestingAttemptRecord,
-  TestingCleanupVerificationRecord,
-  TestingMachineReservationRecord,
-  TestingRunRecord
+import {
+  isTestingRunCanonicalTerminal,
+  projectTestingRunAttempt,
+  testingOutcomesSettled,
+  type TestingAttemptClaimRecord,
+  type TestingAttemptRecord,
+  type TestingCleanupVerificationRecord,
+  type TestingMachineReservationRecord,
+  type TestingRunRecord
 } from '../domain/testing-types.js';
 import type { Machine, Pool } from '../domain/types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from '../storage/repository.js';
@@ -67,7 +72,12 @@ const testingCleanupReceiptVerificationSchema = z.object({
   receiptRef: z.string().min(1).max(2_048)
     .regex(/^artifact:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/),
   receiptDigest: sha256DigestSchema,
-  disposition: z.enum(['cleanup_complete', 'cleanup_not_required']),
+  disposition: z.enum([
+    'cleanup_complete',
+    'cleanup_not_required',
+    'cleanup_residual_retryable',
+    'cleanup_residual_blocking'
+  ]),
   verifiedAt: z.string().datetime({ offset: true })
 }).strict();
 
@@ -147,7 +157,11 @@ export interface TestingCleanupReceiptVerification {
   readonly verificationId: string;
   readonly receiptRef: string;
   readonly receiptDigest: string;
-  readonly disposition: 'cleanup_complete' | 'cleanup_not_required';
+  readonly disposition:
+    | 'cleanup_complete'
+    | 'cleanup_not_required'
+    | 'cleanup_residual_retryable'
+    | 'cleanup_residual_blocking';
   readonly verifiedAt: string;
 }
 
@@ -161,7 +175,7 @@ export interface TestingCleanupReceiptVerifier {
       readonly machineId: string;
       readonly generation: number;
       readonly fenceToken: string;
-      readonly cleanupOutcome: 'complete' | 'not_required';
+      readonly cleanupOutcome: 'complete' | 'not_required' | 'residual_retryable' | 'residual_blocking';
     }
   ): Promise<TestingCleanupReceiptVerification | undefined>;
 }
@@ -601,7 +615,7 @@ export class TestingAttemptService {
         { attempt_id: attempt.id, generation: attempt.generation, reason_code: reason }
       );
       const terminalEvent = terminalStatus === 'cancelled'
-        ? makeEvent(releaseEvent.sequence + 1, 'run.cancelled', now, { cleanup_outcome: 'not_required' })
+        ? makeEvent(releaseEvent.sequence + 1, 'run.cancelled', now, { cleanup_outcome: 'unobserved' })
         : terminalStatus === 'failed'
           ? makeEvent(releaseEvent.sequence + 1, 'run.failed', now, { error_code: 'deadline_exceeded' })
           : undefined;
@@ -611,7 +625,16 @@ export class TestingAttemptService {
         snapshotVersion: run.snapshotVersion + 1,
         controlStatus: nextStatus,
         executionOutcome: 'not_started',
-        cleanupOutcome: 'not_required',
+        cleanupOutcome: 'unobserved',
+        ...(terminalStatus === undefined
+          ? {}
+          : {
+              terminalReason: {
+                code: terminalStatus === 'cancelled' ? 'cancelled' as const : 'deadline_exceeded' as const,
+                at: now
+              },
+              blocking: undefined
+            }),
         task: { ...run.task, status: nextStatus, updatedAt: now },
         currentAttemptId: terminalStatus === undefined ? undefined : run.currentAttemptId,
         attempt: terminalStatus === undefined ? undefined : run.attempt,
@@ -677,7 +700,7 @@ export class TestingAttemptService {
       const controlStatus = run.controlStatus === 'cancel_requested' ? 'cancelled' : input.controlStatus;
       const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
       if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
-      this.assertTerminalOutcomes(input);
+      this.assertTerminalOutcomes(input, results);
       const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
       const now = new Date(this.clock()).toISOString();
       const closing = makeEvent(
@@ -700,6 +723,13 @@ export class TestingAttemptService {
         evidenceOutcome: input.evidenceOutcome,
         uploadOutcome: input.uploadOutcome,
         cleanupOutcome: input.cleanupOutcome,
+        terminalReason: testingOutcomesSettled({
+          executionOutcome: input.executionOutcome,
+          evidenceOutcome: input.evidenceOutcome,
+          uploadOutcome: input.uploadOutcome,
+          cleanupOutcome: input.cleanupOutcome
+        }) ? { code: this.terminalReasonCode(controlStatus, input.executionOutcome), at: now } : undefined,
+        blocking: undefined,
         summary: input.summary,
         results,
         ...(cleanupVerification === undefined ? {} : { cleanupVerification }),
@@ -758,10 +788,17 @@ export class TestingAttemptService {
   public async sweep(now = this.clock()): Promise<void> {
     const runs = await this.repository.listTestingRuns();
     for (const candidate of runs) {
-      if (terminalStatuses.has(candidate.controlStatus)) continue;
+      if (isTestingRunCanonicalTerminal(candidate)) continue;
       const run = await this.repository.getTestingRun(candidate.id);
-      if (run === undefined || terminalStatuses.has(run.controlStatus)) continue;
+      if (run === undefined || isTestingRunCanonicalTerminal(run)) continue;
       const attempt = this.currentAttempt(run);
+      if (terminalStatuses.has(run.controlStatus)) {
+        if (
+          run.uploadOutcome === 'pending' && attempt !== undefined &&
+          Math.min(Date.parse(attempt.leaseExpiresAt), this.operationDeadline(run, attempt)) <= now
+        ) await this.expireClosedUpload(run, now);
+        continue;
+      }
       if (run.controlStatus === 'cancel_requested' && attempt === undefined) {
         await this.closeBeforeAcceptance(run, undefined, 'cancelled_before_acceptance', 'cancelled');
         continue;
@@ -898,7 +935,13 @@ export class TestingAttemptService {
         attempt_id: attempt.id,
         task_id: run.task.id,
         generation,
-        machine_id: machine.id
+        machine_id: machine.id,
+        worker_id: workerId,
+        runtime: {
+          capability: run.request.placement_requirements.testing_runtime,
+          locally_accepted_at: null,
+          event_sequence: null
+        }
       },
       progress: { ...run.progress, phase: 'reserved', last_event_sequence: reservedEvent.sequence },
       events: appendBoundedEvents(run, [reservedEvent]),
@@ -1073,6 +1116,8 @@ export class TestingAttemptService {
     this.assertAttemptIdentity(attempt, input);
     const now = this.clock();
     const reconciling = attempt.operation === 'reconcile';
+    const postControlUpload = effect === 'artifact_upload' && terminalStatuses.has(run.controlStatus) &&
+      !isTestingRunCanonicalTerminal(run) && run.uploadOutcome === 'pending';
     if (effect === 'reconcile' && !reconciling) {
       throw new TalosError('stale_testing_operation', 'testing reconcile requires a fresh reconcile claim', 409);
     }
@@ -1093,14 +1138,16 @@ export class TestingAttemptService {
     if (Date.parse(attempt.leaseExpiresAt) <= now) {
       throw new TalosError('testing_lease_expired', 'testing lease has expired', 409);
     }
-    if (terminalStatuses.has(run.controlStatus)) throw new TalosError('testing_run_terminal', 'testing run is terminal', 409);
+    if (terminalStatuses.has(run.controlStatus) && !postControlUpload) {
+      throw new TalosError('testing_run_terminal', 'testing run is terminal', 409);
+    }
     if (run.controlStatus === 'reconcile_required' && !reconciling) {
       throw new TalosError('testing_reconcile_required', 'testing run requires same-machine reconciliation', 409);
     }
     if (run.controlStatus === 'cancel_requested' && !['heartbeat', 'runtime_cancel', 'terminal_commit', 'reconcile'].includes(effect)) {
       throw new TalosError('cancel_requested', 'testing run has a durable cancel intent', 409);
     }
-    if (!activeAttemptStatuses.has(attempt.status) && !reconciling) {
+    if (!activeAttemptStatuses.has(attempt.status) && !reconciling && !postControlUpload) {
       throw new TalosError('stale_testing_attempt', 'testing attempt is no longer active', 409);
     }
     return attempt;
@@ -1151,21 +1198,23 @@ export class TestingAttemptService {
     const operationDeadline = claim.operation === 'reconcile'
       ? Date.parse(run.reconcileDeadlineAt ?? attempt.reconcileDeadline ?? claim.leaseClaim.expires_at)
       : Date.parse(run.deadlineAt);
+    const postControlUpload = terminalStatuses.has(run.controlStatus) &&
+      !isTestingRunCanonicalTerminal(run) && run.uploadOutcome === 'pending';
     const operationCurrent = claim.operation === 'start'
-      ? activeAttemptStatuses.has(attempt.status) &&
-        run.controlStatus !== 'cancel_requested' &&
-        run.controlStatus !== 'reconcile_required'
-      : ['acceptance_unknown', 'reconcile_required'].includes(attempt.status) &&
-        ['cancel_requested', 'reconcile_required'].includes(run.controlStatus);
+      ? (activeAttemptStatuses.has(attempt.status) &&
+          run.controlStatus !== 'cancel_requested' &&
+          run.controlStatus !== 'reconcile_required') || postControlUpload
+      : (['acceptance_unknown', 'reconcile_required'].includes(attempt.status) &&
+          ['cancel_requested', 'reconcile_required'].includes(run.controlStatus)) || postControlUpload;
     const current = sameClaim &&
       run.currentAttemptId === attempt.id &&
       operationCurrent &&
-      !terminalStatuses.has(run.controlStatus) &&
+      !isTestingRunCanonicalTerminal(run) &&
       Date.parse(claim.leaseExpiresAt) > now &&
       operationDeadline > now;
     const status = current
       ? 'current'
-      : terminalStatuses.has(run.controlStatus)
+      : isTestingRunCanonicalTerminal(run)
         ? 'terminal'
         : !sameClaim
           ? 'superseded'
@@ -1342,7 +1391,7 @@ export class TestingAttemptService {
       }));
     }
     events.push(status === 'cancelled'
-      ? makeEvent(++sequence, 'run.cancelled', now, { cleanup_outcome: 'not_required' })
+      ? makeEvent(++sequence, 'run.cancelled', now, { cleanup_outcome: 'unobserved' })
       : makeEvent(++sequence, 'run.failed', now, { error_code: 'deadline_exceeded' }));
     const terminalAttempt = attempt === undefined
       ? undefined
@@ -1363,7 +1412,12 @@ export class TestingAttemptService {
       snapshotVersion: run.snapshotVersion + 1,
       controlStatus: status,
       executionOutcome: 'not_started',
-      cleanupOutcome: 'not_required',
+      cleanupOutcome: 'unobserved',
+      terminalReason: {
+        code: status === 'cancelled' ? 'cancelled' : 'deadline_exceeded',
+        at: now
+      },
+      blocking: undefined,
       task: { ...run.task, status, updatedAt: now },
       safeError: status === 'failed'
         ? { code: 'deadline_exceeded', message: 'testing run deadline expired before local acceptance', retryable: false }
@@ -1404,6 +1458,12 @@ export class TestingAttemptService {
       snapshotVersion: run.snapshotVersion + 1,
       controlStatus,
       reconcileDeadlineAt: reconcileDeadline,
+      blocking: {
+        reason_code: reasonCode,
+        retry_at: now,
+        deadline_at: reconcileDeadline,
+        next_action: 'reconcile'
+      },
       task: { ...run.task, status: controlStatus, updatedAt: now },
       progress: { ...run.progress, phase: controlStatus, last_event_sequence: event.sequence },
       events: appendBoundedEvents(run, [event]),
@@ -1433,7 +1493,9 @@ export class TestingAttemptService {
       snapshotVersion: run.snapshotVersion + 1,
       controlStatus: 'abandoned',
       executionOutcome: 'lost_or_inconclusive',
-      cleanupOutcome: 'residual_blocking',
+      cleanupOutcome: 'unobserved',
+      terminalReason: { code: 'reconcile_deadline_exceeded', at: now },
+      blocking: undefined,
       task: { ...run.task, status: 'abandoned', updatedAt: now },
       safeError: { code: 'reconcile_deadline_exceeded', message: 'same-machine reconciliation did not converge', retryable: false },
       progress: { ...run.progress, phase: 'abandoned', last_event_sequence: event.sequence },
@@ -1444,6 +1506,41 @@ export class TestingAttemptService {
     if (await this.repository.replaceTestingRun(updated, run.recordVersion)) {
       await this.updateReservation(abandoned, run.task.id, 'residual_blocking', attempt.reconcileDeadline ?? now);
     }
+  }
+
+  private async expireClosedUpload(
+    run: TestingRunRecord,
+    nowMs: number
+  ): Promise<void> {
+    if (
+      !terminalStatuses.has(run.controlStatus) || run.uploadOutcome !== 'pending' ||
+      run.executionOutcome === 'executing' || run.evidenceOutcome === 'staging' ||
+      run.cleanupOutcome === 'pending'
+    ) return;
+    const now = new Date(nowMs).toISOString();
+    const event = makeEvent(
+      run.progress.last_event_sequence + 1,
+      'run.terminal_projection_updated',
+      now,
+      {
+        evidence_outcome: run.evidenceOutcome,
+        upload_outcome: 'upload_expired',
+        cleanup_outcome: run.cleanupOutcome
+      }
+    );
+    const reasonCode = run.controlStatus === 'abandoned'
+      ? 'reconcile_deadline_exceeded' as const
+      : this.terminalReasonCode(run.controlStatus as 'completed' | 'failed' | 'cancelled', run.executionOutcome);
+    await this.repository.replaceTestingRun({
+      ...run,
+      recordVersion: run.recordVersion + 1,
+      snapshotVersion: run.snapshotVersion + 1,
+      uploadOutcome: 'upload_expired',
+      terminalReason: run.terminalReason ?? { code: reasonCode, at: now },
+      progress: { ...run.progress, last_event_sequence: event.sequence },
+      events: appendBoundedEvents(run, [event]),
+      updatedAt: now
+    }, run.recordVersion);
   }
 
   private async replayTerminal(
@@ -1461,7 +1558,7 @@ export class TestingAttemptService {
     }
     const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
     if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
-    this.assertTerminalOutcomes(input);
+    this.assertTerminalOutcomes(input, results);
     const controlStatus = run.controlStatus === 'cancelled' || run.controlStatus === 'abandoned'
       ? run.controlStatus
       : input.controlStatus;
@@ -1487,6 +1584,19 @@ export class TestingAttemptService {
     };
     if (canonicalJson(existing) !== canonicalJson(requested)) {
       this.assertTerminalAdvance(run, input, results, controlStatus);
+      if (!this.isCleanupOnlyRepair(run, input, results)) {
+        const nowMs = this.clock();
+        if (Date.parse(attempt.leaseExpiresAt) <= nowMs) {
+          throw new TalosError('testing_lease_expired', 'testing lease has expired', 409);
+        }
+        if (this.operationDeadline(run, attempt) <= nowMs) {
+          throw new TalosError(
+            attempt.operation === 'reconcile' ? 'testing_reconcile_deadline_exceeded' : 'testing_deadline_exceeded',
+            'testing terminal projection authority has expired',
+            409
+          );
+        }
+      }
       const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
       const now = new Date(this.clock()).toISOString();
       const event = makeEvent(
@@ -1506,6 +1616,19 @@ export class TestingAttemptService {
         evidenceOutcome: input.evidenceOutcome,
         uploadOutcome: input.uploadOutcome,
         cleanupOutcome: input.cleanupOutcome,
+        terminalReason: run.terminalReason ?? (testingOutcomesSettled({
+          executionOutcome: input.executionOutcome,
+          evidenceOutcome: input.evidenceOutcome,
+          uploadOutcome: input.uploadOutcome,
+          cleanupOutcome: input.cleanupOutcome
+        })
+          ? {
+              code: controlStatus === 'abandoned'
+                ? 'reconcile_deadline_exceeded' as const
+                : this.terminalReasonCode(controlStatus, input.executionOutcome),
+              at: now
+            }
+          : undefined),
         results,
         ...(cleanupVerification === undefined
           ? { cleanupVerification: run.cleanupVerification }
@@ -1549,6 +1672,17 @@ export class TestingAttemptService {
     return run;
   }
 
+  private isCleanupOnlyRepair(
+    run: TestingRunRecord,
+    input: TestingTerminalCommit,
+    results: TestingTerminalRefs | undefined
+  ): boolean {
+    return run.evidenceOutcome === input.evidenceOutcome && run.uploadOutcome === input.uploadOutcome &&
+      run.cleanupOutcome !== input.cleanupOutcome &&
+      canonicalJson(run.results?.case_result_set ?? null) === canonicalJson(results?.case_result_set ?? null) &&
+      canonicalJson(run.results?.evidence_manifest ?? null) === canonicalJson(results?.evidence_manifest ?? null);
+  }
+
   private assertTerminalBinding(
     run: TestingRunRecord,
     attempt: TestingAttemptRecord,
@@ -1564,10 +1698,60 @@ export class TestingAttemptService {
     ) throw new TalosError('stale_terminal_binding', 'terminal references are bound to another attempt', 409);
   }
 
-  private assertTerminalOutcomes(input: TestingTerminalCommit): asserts input is SettledTestingTerminalCommit {
-    if (input.executionOutcome === 'executing' || input.evidenceOutcome === 'staging' || input.cleanupOutcome === 'pending') {
+  private assertTerminalOutcomes(
+    input: TestingTerminalCommit,
+    results: TestingTerminalRefs | undefined
+  ): asserts input is SettledTestingTerminalCommit {
+    if (
+      input.executionOutcome === 'executing' ||
+      input.evidenceOutcome === 'staging' ||
+      input.cleanupOutcome === 'pending' ||
+      input.cleanupOutcome === 'unobserved'
+    ) {
       throw new TalosError('invalid_terminal_projection', 'testing terminal outcomes are not settled', 409);
     }
+    const summary = input.summary === undefined ? undefined : testingRunSummarySchema.parse(input.summary);
+    if (input.executionOutcome === 'all_skipped' && summary?.all_skipped !== true) {
+      throw new TalosError('invalid_terminal_projection', 'all-skipped execution requires exact all-skipped summary counts', 409);
+    }
+    if (input.executionOutcome === 'passed' && summary?.all_skipped === true) {
+      throw new TalosError('invalid_terminal_projection', 'all-skipped execution cannot be passed', 409);
+    }
+    if (['passed', 'failed', 'blocked', 'error', 'all_skipped'].includes(input.executionOutcome)) {
+      if (summary === undefined || results?.case_result_set === undefined) {
+        throw new TalosError(
+          'terminal_case_results_required',
+          'settled Runner execution requires bounded summary and exact CaseResultSet reference',
+          409
+        );
+      }
+    }
+    if (['complete', 'partial'].includes(input.evidenceOutcome) && results?.evidence_manifest === undefined) {
+      throw new TalosError(
+        'terminal_evidence_manifest_required',
+        'settled evidence requires an exact EvidenceManifest reference',
+        409
+      );
+    }
+    if (results?.cleanup_receipt === undefined) {
+      throw new TalosError(
+        'cleanup_proof_required',
+        'observed cleanup outcome requires an exact attempt-bound CleanupReceipt reference',
+        409
+      );
+    }
+  }
+
+  private terminalReasonCode(
+    controlStatus: 'completed' | 'failed' | 'cancelled',
+    executionOutcome: TestingExecutionOutcome
+  ): TestingTerminalReasonCode {
+    if (controlStatus === 'cancelled') return 'cancelled';
+    if (executionOutcome === 'timed_out') return 'execution_timed_out';
+    if (executionOutcome === 'all_skipped') return 'execution_all_skipped';
+    if (executionOutcome === 'blocked') return 'terminal_blocked';
+    if (controlStatus === 'failed') return 'control_failed';
+    return 'execution_settled';
   }
 
   private assertTerminalAdvance(
@@ -1593,7 +1777,10 @@ export class TestingAttemptService {
     cleanupOutcome: TestingCleanupOutcome,
     results: TestingTerminalRefs | undefined
   ): Promise<TestingCleanupVerificationRecord | undefined> {
-    if (cleanupOutcome !== 'complete' && cleanupOutcome !== 'not_required') return undefined;
+    if (cleanupOutcome === 'unobserved') return undefined;
+    if (cleanupOutcome === 'pending') {
+      throw new TalosError('invalid_terminal_projection', 'terminal cleanup cannot remain pending', 409);
+    }
     const receipt = results?.cleanup_receipt;
     if (receipt === undefined) {
       throw new TalosError(
@@ -1608,7 +1795,7 @@ export class TestingAttemptService {
       existing.binding.runId === run.id && existing.binding.taskId === run.task.id &&
       existing.binding.attemptId === attempt.id && existing.binding.generation === attempt.generation &&
       existing.binding.fenceToken === attempt.fenceToken &&
-      existing.disposition === (cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required')
+      existing.disposition === cleanupVerificationDisposition(cleanupOutcome)
     ) return existing;
     const verifier = this.options.cleanupReceiptVerifier;
     if (verifier === undefined) {
@@ -1629,7 +1816,7 @@ export class TestingAttemptService {
       throw new TalosError('cleanup_verifier_unavailable', 'cleanup receipt verifier is unavailable', 503);
     }
     const parsedVerification = testingCleanupReceiptVerificationSchema.safeParse(verification);
-    const expectedDisposition = cleanupOutcome === 'complete' ? 'cleanup_complete' : 'cleanup_not_required';
+    const expectedDisposition = cleanupVerificationDisposition(cleanupOutcome);
     if (
       !parsedVerification.success ||
       parsedVerification.data.receiptRef !== receipt.ref || parsedVerification.data.receiptDigest !== receipt.digest ||
@@ -1796,6 +1983,7 @@ export class TestingAttemptService {
       request_id: run.request.request_id,
       client_correlation_id: run.request.client_correlation_id,
       authenticated_transport: run.authenticatedTransport,
+      inputs: run.request.inputs,
       snapshot_version: run.snapshotVersion,
       snapshot_ref: `talos://testing/runs/${run.id}/snapshots/${run.snapshotVersion}`,
       control_status: run.controlStatus,
@@ -1803,7 +1991,10 @@ export class TestingAttemptService {
       evidence_outcome: run.evidenceOutcome,
       upload_outcome: run.uploadOutcome,
       cleanup_outcome: run.cleanupOutcome,
-      attempt: run.attempt ?? null,
+      terminal: isTestingRunCanonicalTerminal(run),
+      terminal_reason: run.terminalReason ?? null,
+      blocking: run.blocking ?? null,
+      attempt: projectTestingRunAttempt(run) ?? null,
       progress: run.progress,
       summary: run.summary ?? null,
       results: run.results ?? null,
@@ -1856,7 +2047,9 @@ export class TestingAttemptService {
       snapshotVersion: run.snapshotVersion + 1,
       controlStatus: 'failed',
       executionOutcome: 'not_started',
-      cleanupOutcome: 'not_required',
+      cleanupOutcome: 'unobserved',
+      terminalReason: { code: 'attempt_limit_exceeded', at: now },
+      blocking: undefined,
       task: { ...run.task, status: 'failed', updatedAt: now },
       safeError: {
         code: 'attempt_limit_exceeded',
@@ -1923,8 +2116,8 @@ const isUploadAdvance = (
   current: TestingUploadOutcome,
   requested: TestingUploadOutcome
 ): boolean => current === requested ||
-  (current === 'pending' && ['uploaded', 'upload_expired'].includes(requested)) ||
-  (current === 'upload_expired' && requested === 'uploaded');
+  (current === 'pending' && ['uploaded', 'failed', 'upload_expired'].includes(requested)) ||
+  (['failed', 'upload_expired'].includes(current) && requested === 'uploaded');
 
 const isCleanupAdvance = (
   current: TestingCleanupOutcome,
@@ -1933,6 +2126,15 @@ const isCleanupAdvance = (
   (current === 'residual_blocking' && ['residual_retryable', 'complete', 'not_required'].includes(requested)) ||
   (current === 'residual_retryable' && ['complete', 'not_required'].includes(requested)) ||
   (current === 'unobserved' && ['residual_blocking', 'residual_retryable', 'complete', 'not_required'].includes(requested));
+
+const cleanupVerificationDisposition = (
+  outcome: Exclude<TestingCleanupOutcome, 'pending' | 'unobserved'>
+): TestingCleanupReceiptVerification['disposition'] => ({
+  complete: 'cleanup_complete',
+  not_required: 'cleanup_not_required',
+  residual_retryable: 'cleanup_residual_retryable',
+  residual_blocking: 'cleanup_residual_blocking'
+} as const)[outcome];
 
 const areTerminalRefsMonotonic = (
   current: TestingTerminalRefs | undefined,

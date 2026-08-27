@@ -320,9 +320,22 @@ describe('Testing worker HTTP routes', () => {
           evidence_outcome: 'complete',
           upload_outcome: 'uploaded',
           cleanup_outcome: 'complete',
+          summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false },
           results: {
             schema_version: 'talos.testing-terminal-refs/v1',
             binding: terminalBinding,
+            case_result_set: {
+              schema: 'testing-case-result-set.v2',
+              ref: 'artifact://testing/results/run-http',
+              digest,
+              binding: terminalBinding
+            },
+            evidence_manifest: {
+              schema: 'testing-evidence-manifest.v1',
+              ref: 'artifact://testing/evidence/run-http',
+              digest,
+              binding: terminalBinding
+            },
             cleanup_receipt: {
               schema: 'qa.local-cleanup-receipt/v2',
               ref: 'artifact://testing/cleanup/run-http',

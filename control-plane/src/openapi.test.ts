@@ -34,6 +34,12 @@ describe('OpenAPI loader', () => {
       'listTestingRunEvents',
       'cancelTestingRun'
     ]);
+    expect(Object.keys(parsed.paths).filter((path) => path.startsWith('/v1/tools/testing'))).toEqual([
+      '/v1/tools/testing/capabilities',
+      '/v1/tools/testing/runs/{run_id}',
+      '/v1/tools/testing/runs/{run_id}/events',
+      '/v1/tools/testing/runs/{run_id}:cancel'
+    ]);
     expect([
       operationId('/v1/worker/testing/claim', 'post'),
       operationId('/v1/worker/testing/reconcile-claim', 'post'),
@@ -76,6 +82,9 @@ describe('OpenAPI loader', () => {
       'TestingBudgetsReference',
       'TestingRunSnapshot',
       'TestingRunAttempt',
+      'TestingRunRuntimeProvenance',
+      'TestingTerminalReason',
+      'TestingRecoverableBlocking',
       'TestingRunProgress',
       'TestingRunSummary',
       'TestingTerminalRefs',
@@ -119,8 +128,15 @@ describe('OpenAPI loader', () => {
       'request_id', 'client_correlation_id', 'authenticated_transport'
     ]));
     expect(schema('TestingRunSnapshot').required).toEqual(expect.arrayContaining([
-      'request_id', 'client_correlation_id', 'authenticated_transport'
+      'request_id', 'client_correlation_id', 'authenticated_transport', 'inputs', 'terminal',
+      'terminal_reason', 'blocking'
     ]));
+    expect(schema('TestingRunAttempt').required).toEqual(expect.arrayContaining([
+      'attempt_id', 'task_id', 'generation', 'machine_id', 'worker_id', 'runtime'
+    ]));
+    expect(schema('TestingRunSummary').required).toEqual([
+      'total', 'passed', 'failed', 'blocked', 'error', 'skipped', 'all_skipped'
+    ]);
     expect(schema('TestingRunSubmittedData').required).toEqual(expect.arrayContaining([
       'request_id', 'client_correlation_id', 'request_digest', 'authenticated_transport'
     ]));
@@ -179,6 +195,9 @@ describe('OpenAPI loader', () => {
       expect(schema(eventData).additionalProperties, eventData).toBe(false);
     }
     expect(schema('TestingTerminalExecutionOutcome').enum).not.toContain('executing');
+    expect(schema('TestingExecutionOutcome').enum).toEqual(expect.arrayContaining(['timed_out', 'all_skipped']));
+    expect(schema('TestingTerminalExecutionOutcome').enum).toEqual(expect.arrayContaining(['timed_out', 'all_skipped']));
+    expect(schema('TestingUploadOutcome').enum).toContain('failed');
     expect(schema('TestingTerminalEvidenceOutcome').enum).not.toContain('staging');
     expect(schema('TestingTerminalCleanupOutcome').enum).not.toContain('pending');
     expect(asObject(properties('TestingRunCompletedData').execution_outcome)).toEqual({
@@ -187,6 +206,18 @@ describe('OpenAPI loader', () => {
     expect(asObject(properties('TestingRunCancelledData').cleanup_outcome)).toEqual({
       $ref: '#/components/schemas/TestingTerminalCleanupOutcome'
     });
+    expect(asObject(properties('TestingTerminalCommitRequest').execution_outcome)).toEqual({
+      $ref: '#/components/schemas/TestingTerminalExecutionOutcome'
+    });
+    expect(asObject(properties('TestingTerminalCommitRequest').evidence_outcome)).toEqual({
+      $ref: '#/components/schemas/TestingTerminalEvidenceOutcome'
+    });
+    expect(asObject(properties('TestingTerminalCommitRequest').cleanup_outcome)).toEqual({
+      $ref: '#/components/schemas/TestingWorkerTerminalCleanupOutcome'
+    });
+    expect(schema('TestingWorkerTerminalCleanupOutcome').enum).not.toContain('unobserved');
+    expect(schema('TestingTerminalCommitRequest').allOf).toHaveLength(5);
+    expect((schema('TestingRunSnapshot').allOf as unknown[]).length).toBeGreaterThanOrEqual(12);
     const eventPath = asObject(parsed.paths['/v1/tools/testing/runs/{run_id}/events']);
     const eventGet = asObject(eventPath.get);
     const eventResponses = asObject(eventGet.responses);
@@ -195,6 +226,11 @@ describe('OpenAPI loader', () => {
     const expiredJson = asObject(expiredContent['application/json']);
     expect(expiredJson.schema).toEqual({ $ref: '#/components/schemas/TestingCursorExpiredError' });
     expect(schema('TestingCursorExpiredError').additionalProperties).toBe(false);
+    expect(schema('TestingRunSnapshot').description).toContain('sole canonical Talos run authority');
+    expect(schema('TestingTerminalRefs').description).toContain('externally owned facts');
+    expect(schema('TestingCaseResultSetReference').description).toContain('Testing Packages owning repository');
+    expect(schema('TestingEvidenceManifestReference').description).toContain('Local QA Runtime owning repository');
+    expect(schema('TestingCleanupReceiptReference').description).toContain('Local QA Runtime owning repository');
     expect(document.raw).toContain('openapi: 3.1.0');
   });
 

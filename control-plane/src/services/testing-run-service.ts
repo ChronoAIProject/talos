@@ -26,7 +26,12 @@ import {
   type TestingAuthenticatedTransportContext
 } from '@talos/testing-protocol';
 import { TalosError, forbidden, notFound } from '../domain/errors.js';
-import type { TestingCursorPageRecord, TestingRunRecord } from '../domain/testing-types.js';
+import {
+  isTestingRunCanonicalTerminal,
+  projectTestingRunAttempt,
+  type TestingCursorPageRecord,
+  type TestingRunRecord
+} from '../domain/testing-types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { TestingPlacementPolicy } from './testing-placement-policy.js';
@@ -317,8 +322,9 @@ export class TestingRunService {
         });
       }
 
-      const alreadyTerminal = terminalStatuses.has(run.controlStatus);
-      const status = alreadyTerminal ? run.controlStatus : 'cancel_requested';
+      const controlClosed = terminalStatuses.has(run.controlStatus);
+      const alreadyTerminal = isTestingRunCanonicalTerminal(run);
+      const status = controlClosed ? run.controlStatus : 'cancel_requested';
       const stateChanged = status !== run.controlStatus;
       const now = new Date(this.clock()).toISOString();
       const nextEvent = stateChanged
@@ -486,6 +492,7 @@ export class TestingRunService {
       request_id: run.request.request_id,
       client_correlation_id: run.request.client_correlation_id,
       authenticated_transport: run.authenticatedTransport,
+      inputs: run.request.inputs,
       snapshot_version: run.snapshotVersion,
       snapshot_ref: `talos://testing/runs/${run.id}/snapshots/${run.snapshotVersion}`,
       control_status: run.controlStatus,
@@ -493,7 +500,10 @@ export class TestingRunService {
       evidence_outcome: run.evidenceOutcome,
       upload_outcome: run.uploadOutcome,
       cleanup_outcome: run.cleanupOutcome,
-      attempt: run.attempt ?? null,
+      terminal: isTestingRunCanonicalTerminal(run),
+      terminal_reason: run.terminalReason ?? null,
+      blocking: run.blocking ?? null,
+      attempt: projectTestingRunAttempt(run) ?? null,
       progress: run.progress,
       summary: run.summary ?? null,
       results: run.results ?? null,

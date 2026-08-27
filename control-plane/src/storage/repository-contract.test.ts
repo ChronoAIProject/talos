@@ -282,7 +282,13 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
           attempt_id: attempt.id,
           task_id: run.task.id,
           generation: attempt.generation,
-          machine_id: attempt.machineId
+          machine_id: attempt.machineId,
+          worker_id: attempt.workerId,
+          runtime: {
+            capability: 'local-qa-mvp/v1' as const,
+            locally_accepted_at: null,
+            event_sequence: null
+          }
         }
       };
       expect(await repository.replaceTestingRun(attempted, 2)).toBe(true);
