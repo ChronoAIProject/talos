@@ -94,6 +94,7 @@ export type TestingAttemptStatus =
 export interface TestingAttemptClaimRecord {
   readonly claimId: string;
   readonly operation: 'start' | 'reconcile';
+  readonly taskPayloadDigest: string;
   readonly workerId: string;
   readonly leaseId: string;
   readonly leaseTokenHash: string;

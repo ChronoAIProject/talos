@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   computeLocalQARuntimeSnapshotDigest,
   computeTestingCurrentClaimDigest,
+  computeTestingReconcileTaskPayloadDigest,
+  computeTestingTaskPayloadDigest,
   digestJson,
   testingAuthorizationResolutionSchema,
   testingClaimResponseSchema,
@@ -72,6 +74,48 @@ describe('TestingExecutor', () => {
     expect(submitted).not.toHaveProperty('goal');
     expect(submitted?.request_id).toMatch(/^start-[a-f0-9]{64}$/);
     expect(submitted?.idempotency_key).toMatch(/^start:[a-f0-9]{64}$/);
+  });
+
+  it('rejects an altered task payload even when the attacker recomputes its unsigned payload digest', async () => {
+    const fixture = startFixture();
+    const calls: string[] = [];
+    const alteredTaskWithoutDigest = {
+      ...fixture.claim.task,
+      inputs: {
+        ...fixture.claim.task.inputs,
+        structured_plan: {
+          ...fixture.claim.task.inputs.structured_plan,
+          digest: `sha256:${'b'.repeat(64)}`
+        }
+      }
+    };
+    const alteredClaim = {
+      ...fixture.claim,
+      task: {
+        ...alteredTaskWithoutDigest,
+        task_payload_digest: computeTestingTaskPayloadDigest(alteredTaskWithoutDigest)
+      }
+    };
+    const runtimeCapabilities = vi.fn(async () => capabilities(fixture.claim.task.runner));
+    const resolveAuthorization = vi.fn();
+
+    await expect(new TestingExecutor({
+      controlPlane: fakeControlPlane(fixture, calls),
+      runtime: {
+        getCapabilities: runtimeCapabilities,
+        submitRun: async () => { throw new Error('must not submit'); },
+        getSnapshot: async () => { throw new Error('must not read'); },
+        listEvents: async () => { throw new Error('must not read'); },
+        cancelRun: async () => { throw new Error('must not cancel'); },
+        reconcileTerminal: async () => { throw new Error('must not reconcile'); }
+      },
+      authorizations: { resolve: resolveAuthorization },
+      heartbeatMs: 60_000,
+      clock
+    }).runStart(alteredClaim)).rejects.toMatchObject({ code: 'invalid_testing_claim' });
+    expect(calls).toEqual([]);
+    expect(runtimeCapabilities).not.toHaveBeenCalled();
+    expect(resolveAuthorization).not.toHaveBeenCalled();
   });
 
   it('fails closed on unsupported Runtime capability without submitting or falling back', async () => {
@@ -1112,7 +1156,7 @@ const startFixture = () => {
 
 const reconcileFixture = (claimNumber = 2) => {
   const authorization = authorizationEnvelope('reconcile');
-  const task = {
+  const taskWithoutPayloadDigest = {
     schema_version: 'talos.testing-reconcile-task/v1' as const,
     operation: 'reconcile' as const,
     qa_run_id: 'run-1',
@@ -1128,6 +1172,10 @@ const reconcileFixture = (claimNumber = 2) => {
     local_request_authorization: { ref: `authorization://local-qa-request/reconcile-${claimNumber}`, digest: digestJson(authorization), expires_at: deadline },
     deadline
   };
+  const task = {
+    ...taskWithoutPayloadDigest,
+    task_payload_digest: computeTestingReconcileTaskPayloadDigest(taskWithoutPayloadDigest)
+  };
   const identity = claimIdentity(task, 'reconcile');
   task.lease_claim.digest = computeTestingCurrentClaimDigest(identity);
   const attempt = runtimeAttempt(task, 'reconcile');
@@ -1140,37 +1188,43 @@ const reconcileFixture = (claimNumber = 2) => {
   return { authorization, claim, attempt, executionAttempt };
 };
 
-const taskFixture = (authorizationDigest: string) => ({
-  schema_version: 'talos.testing-task/v1' as const,
-  id: 'task-1',
-  kind: 'testing' as const,
-  interaction: 'managed' as const,
-  qa_run_id: 'run-1',
-  dispatch_attempt_id: 'attempt-1',
-  generation: 1,
-  machine_id: 'machine-1',
-  worker_id: 'worker-1',
-  lease_id: 'lease-1',
-  fence_token: 'testing-fence-token-1',
-  admission_nonce: 'testing-admission-1',
-  lease_claim: { schema: 'talos.testing-lease-claim/v1' as const, ref: 'talos://testing/claims/run-1/claim-1', digest, expires_at: deadline },
-  inputs: {
-    schema_version: 'talos.testing-input-references/v1' as const,
-    project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1' as const, ref: 'artifact://pql/snapshots/1', digest },
-    test_selection: { schema: 'pql.test-selection/v1' as const, ref: 'artifact://pql/selections/1', digest },
-    testing_design_input_set: { schema: 'pql.testing-design-input-set.v1' as const, ref: 'artifact://pql/input-sets/1', digest },
-    source_revision: { repository_id: 'repo-1', exact_revision: 'b'.repeat(40), ref: 'artifact://source/archives/1', digest },
-    structured_plan: { schema: 'testing-structured-plan.v2' as const, ref: 'artifact://plans/structured/1', digest },
-    environment_profile: { ref: 'artifact://environments/profiles/1', digest },
-    testing_package: { package_id: 'testing-browser-runner', version: '1.0.0', digest }
-  },
-  runner: { package_id: 'testing-browser-runner', version: '1.0.0', digest },
-  policy_ref: { schema: 'talos.testing-execution-policy/v1' as const, ref: 'talos://policies/testing/1', digest },
-  budgets_ref: { schema: 'talos.testing-budgets/v1' as const, ref: 'talos://budgets/testing/1', digest },
-  local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest: authorizationDigest, expires_at: deadline },
-  expected_runtime_capability: 'local-qa-mvp/v1' as const,
-  deadline
-});
+const taskFixture = (authorizationDigest: string) => {
+  const taskWithoutPayloadDigest = {
+    schema_version: 'talos.testing-task/v1' as const,
+    id: 'task-1',
+    kind: 'testing' as const,
+    interaction: 'managed' as const,
+    qa_run_id: 'run-1',
+    dispatch_attempt_id: 'attempt-1',
+    generation: 1,
+    machine_id: 'machine-1',
+    worker_id: 'worker-1',
+    lease_id: 'lease-1',
+    fence_token: 'testing-fence-token-1',
+    admission_nonce: 'testing-admission-1',
+    lease_claim: { schema: 'talos.testing-lease-claim/v1' as const, ref: 'talos://testing/claims/run-1/claim-1', digest, expires_at: deadline },
+    inputs: {
+      schema_version: 'talos.testing-input-references/v1' as const,
+      project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1' as const, ref: 'artifact://pql/snapshots/1', digest },
+      test_selection: { schema: 'pql.test-selection/v1' as const, ref: 'artifact://pql/selections/1', digest },
+      testing_design_input_set: { schema: 'pql.testing-design-input-set.v1' as const, ref: 'artifact://pql/input-sets/1', digest },
+      source_revision: { repository_id: 'repo-1', exact_revision: 'b'.repeat(40), ref: 'artifact://source/archives/1', digest },
+      structured_plan: { schema: 'testing-structured-plan.v2' as const, ref: 'artifact://plans/structured/1', digest },
+      environment_profile: { ref: 'artifact://environments/profiles/1', digest },
+      testing_package: { package_id: 'testing-browser-runner', version: '1.0.0', digest }
+    },
+    runner: { package_id: 'testing-browser-runner', version: '1.0.0', digest },
+    policy_ref: { schema: 'talos.testing-execution-policy/v1' as const, ref: 'talos://policies/testing/1', digest },
+    budgets_ref: { schema: 'talos.testing-budgets/v1' as const, ref: 'talos://budgets/testing/1', digest },
+    local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest: authorizationDigest, expires_at: deadline },
+    expected_runtime_capability: 'local-qa-mvp/v1' as const,
+    deadline
+  };
+  return {
+    ...taskWithoutPayloadDigest,
+    task_payload_digest: computeTestingTaskPayloadDigest(taskWithoutPayloadDigest)
+  };
+};
 
 type RuntimeTask = TestingTask | TestingReconcileTask;
 
@@ -1191,6 +1245,7 @@ const runtimeAttempt = (
   lease_id: task.lease_id,
   fence_token: task.fence_token,
   admission_nonce: task.admission_nonce,
+  task_payload_digest: task.task_payload_digest,
   lease_claim: task.lease_claim,
   deadline: task.deadline
 });
@@ -1211,6 +1266,7 @@ const claimIdentity = (
   lease_id: task.lease_id,
   fence_token: task.fence_token,
   admission_nonce: task.admission_nonce,
+  task_payload_digest: task.task_payload_digest,
   issued_at: observedAt,
   expires_at: deadline
 });
@@ -1251,6 +1307,7 @@ const currentClaim = (
   lease_id: attempt.lease_id,
   fence_token: attempt.fence_token,
   admission_nonce: attempt.admission_nonce,
+  task_payload_digest: attempt.task_payload_digest,
   issued_at: observedAt,
   expires_at: deadline
 }, audience, status);
@@ -1320,6 +1377,7 @@ const snapshot = (
         ...(summary === undefined ? {} : {
           case_result_set: {
             schema: 'testing-case-result-set.v2' as const,
+            schema_digest: digest,
             ref: 'artifact://runtime/results/1',
             digest,
             binding: resultBinding
@@ -1327,11 +1385,12 @@ const snapshot = (
         }),
         evidence_manifest: {
           schema: 'testing-evidence-manifest.v1' as const,
+          schema_digest: digest,
           ref: 'artifact://runtime/evidence-manifests/1',
           digest,
           binding: resultBinding
         },
-        cleanup_receipt: { schema: 'qa.local-cleanup-receipt/v2' as const, ref: 'artifact://runtime/cleanup-receipts/1', digest, binding: resultBinding }
+        cleanup_receipt: { schema: 'qa.local-cleanup-receipt/v2' as const, schema_digest: digest, ref: 'artifact://runtime/cleanup-receipts/1', digest, binding: resultBinding }
       },
       ...(summary === undefined ? {} : { summary })
     }),

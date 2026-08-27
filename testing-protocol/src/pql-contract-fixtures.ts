@@ -196,18 +196,21 @@ const snapshot = (
   const resultRefs = {
     case_result_set: {
       schema: 'testing-case-result-set.v2' as const,
+      schema_digest: digest,
       ref: `artifact://testing/results/${fixtureId}`,
       digest: digestJson({ fixture: fixtureId, type: 'case_result_set' }),
       binding
     },
     evidence_manifest: {
       schema: 'testing-evidence-manifest.v1' as const,
+      schema_digest: digest,
       ref: `artifact://testing/evidence/${fixtureId}`,
       digest: digestJson({ fixture: fixtureId, type: 'evidence_manifest' }),
       binding
     },
     cleanup_receipt: {
       schema: 'qa.local-cleanup-receipt/v2' as const,
+      schema_digest: digest,
       ref: `artifact://testing/cleanup/${fixtureId}`,
       digest: digestJson({ fixture: fixtureId, type: 'cleanup_receipt' }),
       binding

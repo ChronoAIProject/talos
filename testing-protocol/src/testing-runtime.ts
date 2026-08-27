@@ -52,6 +52,7 @@ export const testingRuntimeAttemptSchema = z.object({
   lease_id: identifierSchema,
   fence_token: fenceTokenSchema,
   admission_nonce: requestNonceSchema,
+  task_payload_digest: sha256DigestSchema,
   lease_claim: testingLeaseClaimReferenceSchema,
   deadline: timestampSchema
 }).strict();

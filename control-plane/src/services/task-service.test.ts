@@ -6,7 +6,7 @@ import { Scheduler } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { WebhookSigner } from './webhook-signer.js';
 import type { Task } from '../domain/types.js';
-import { testingTaskSchema } from '@talos/testing-protocol';
+import { computeTestingTaskPayloadDigest, testingTaskSchema } from '@talos/testing-protocol';
 
 const setup = (clock: { value: number } = { value: Date.now() }) => {
   const repository = new MemoryRepository();
@@ -144,7 +144,7 @@ describe('task service', () => {
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
     const digest = `sha256:${'a'.repeat(64)}`;
-    const testing = testingTaskSchema.parse({
+    const testingTaskInput = {
       schema_version: 'talos.testing-task/v1',
       id: 'testing-task',
       kind: 'testing',
@@ -174,6 +174,10 @@ describe('task service', () => {
       local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
       expected_runtime_capability: 'local-qa-mvp/v1',
       deadline: '2026-08-22T00:10:00.000Z'
+    } as const;
+    const testing = testingTaskSchema.parse({
+      ...testingTaskInput,
+      task_payload_digest: computeTestingTaskPayloadDigest(testingTaskInput)
     });
     const queuedTestingTask: Task = {
       id: 'testing-task',
@@ -201,7 +205,7 @@ describe('task service', () => {
   it('fails closed for testing tasks on every generic user, worker, and lease-expiry path', async () => {
     const { repository, service } = setup({ value: 2_000 });
     const digest = `sha256:${'a'.repeat(64)}`;
-    const testing = testingTaskSchema.parse({
+    const testingTaskInput = {
       schema_version: 'talos.testing-task/v1',
       id: 'testing-task-guarded',
       kind: 'testing',
@@ -231,6 +235,10 @@ describe('task service', () => {
       local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
       expected_runtime_capability: 'local-qa-mvp/v1',
       deadline: '2026-08-22T00:10:00.000Z'
+    } as const;
+    const testing = testingTaskSchema.parse({
+      ...testingTaskInput,
+      task_payload_digest: computeTestingTaskPayloadDigest(testingTaskInput)
     });
     const task: Task = {
       id: testing.id,

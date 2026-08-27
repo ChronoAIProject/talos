@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  computeTestingReconcileTaskPayloadDigest,
+  computeTestingTaskPayloadDigest,
   computeLocalQAControlRequestDigest,
   computeLocalQAControlEffectId,
   computeLocalQARunRequestDigest,
@@ -644,6 +646,7 @@ const startAttempt = (claim: TestingClaimResponse): TestingRuntimeAttempt => tes
   lease_id: claim.task.lease_id,
   fence_token: claim.task.fence_token,
   admission_nonce: claim.task.admission_nonce,
+  task_payload_digest: claim.task.task_payload_digest,
   lease_claim: claim.task.lease_claim,
   deadline: claim.task.deadline
 });
@@ -660,6 +663,7 @@ const reconcileAttempt = (claim: TestingReconcileClaimResponse): TestingRuntimeA
   lease_id: claim.task.lease_id,
   fence_token: claim.task.fence_token,
   admission_nonce: claim.task.admission_nonce,
+  task_payload_digest: claim.task.task_payload_digest,
   lease_claim: claim.task.lease_claim,
   deadline: claim.task.deadline
 });
@@ -688,7 +692,10 @@ const assertStartClaim = (claim: TestingClaimResponse, now: number): void => {
     identity.attempt_id !== task.dispatch_attempt_id || identity.machine_id !== task.machine_id ||
     identity.worker_id !== task.worker_id || identity.generation !== task.generation ||
     identity.lease_id !== task.lease_id || identity.fence_token !== task.fence_token ||
-    identity.admission_nonce !== task.admission_nonce || claim.lease.lease_id !== task.lease_id ||
+    identity.admission_nonce !== task.admission_nonce ||
+    identity.task_payload_digest !== task.task_payload_digest ||
+    computeTestingTaskPayloadDigest(task) !== task.task_payload_digest ||
+    claim.lease.lease_id !== task.lease_id ||
     claim.current_claim.claim_digest !== task.lease_claim.digest || !claim.current_claim.is_current ||
     claim.current_claim.audience !== 'talos-worker' || Date.parse(task.deadline) <= now
   ) throw new TestingExecutorError('invalid_testing_claim', 'testing claim and task bindings differ');
@@ -702,7 +709,10 @@ const assertReconcileClaim = (claim: TestingReconcileClaimResponse, now: number)
     identity.attempt_id !== task.dispatch_attempt_id || identity.machine_id !== task.machine_id ||
     identity.worker_id !== task.worker_id || identity.generation !== task.generation ||
     identity.lease_id !== task.lease_id || identity.fence_token !== task.fence_token ||
-    identity.admission_nonce !== task.admission_nonce || claim.current_claim.claim_digest !== task.lease_claim.digest ||
+    identity.admission_nonce !== task.admission_nonce ||
+    identity.task_payload_digest !== task.task_payload_digest ||
+    computeTestingReconcileTaskPayloadDigest(task) !== task.task_payload_digest ||
+    claim.current_claim.claim_digest !== task.lease_claim.digest ||
     !claim.current_claim.is_current || claim.current_claim.audience !== 'talos-worker' || Date.parse(task.deadline) <= now
   ) throw new TestingExecutorError('invalid_testing_reconcile_claim', 'testing reconcile claim and task bindings differ');
 };
@@ -846,7 +856,8 @@ const assertResolvedCurrentClaim = (
     identity.task_id !== attempt.task_id || identity.attempt_id !== attempt.attempt_id ||
     identity.machine_id !== attempt.machine_id || identity.worker_id !== attempt.worker_id ||
     identity.generation !== attempt.generation || identity.lease_id !== attempt.lease_id ||
-    identity.fence_token !== attempt.fence_token || identity.admission_nonce !== attempt.admission_nonce
+    identity.fence_token !== attempt.fence_token || identity.admission_nonce !== attempt.admission_nonce ||
+    identity.task_payload_digest !== attempt.task_payload_digest
   ) {
     throw new TestingExecutorError(
       'testing_current_claim_mismatch',

@@ -4,6 +4,7 @@ import {
   computeLocalQARuntimeEventDigest,
   computeLocalQARuntimeSnapshotDigest,
   computeTestingCurrentClaimDigest,
+  computeTestingTaskPayloadDigest,
   digestJson,
   localQARunRequestSchema,
   localQACancelAckSchema,
@@ -20,7 +21,7 @@ const deadline = '2026-08-24T00:10:00.000Z';
 const authorization = { schema_version: 'owner.pending-authorization/v1', signature: 'signed-envelope' };
 const authorizationDigest = digestJson(authorization);
 
-const task = {
+const taskWithoutPayloadDigest = {
   schema_version: 'talos.testing-task/v1' as const,
   id: 'task-1',
   kind: 'testing' as const,
@@ -60,6 +61,10 @@ const task = {
   expected_runtime_capability: 'local-qa-mvp/v1' as const,
   deadline
 };
+const task = {
+  ...taskWithoutPayloadDigest,
+  task_payload_digest: computeTestingTaskPayloadDigest(taskWithoutPayloadDigest)
+};
 
 const attempt = testingRuntimeAttemptSchema.parse({
   schema_version: 'talos.testing-runtime-attempt/v1',
@@ -73,6 +78,7 @@ const attempt = testingRuntimeAttemptSchema.parse({
   lease_id: task.lease_id,
   fence_token: task.fence_token,
   admission_nonce: task.admission_nonce,
+  task_payload_digest: task.task_payload_digest,
   lease_claim: task.lease_claim,
   deadline
 });
@@ -90,6 +96,7 @@ const claimIdentity = {
   lease_id: attempt.lease_id,
   fence_token: attempt.fence_token,
   admission_nonce: attempt.admission_nonce,
+  task_payload_digest: attempt.task_payload_digest,
   issued_at: now,
   expires_at: deadline
 };
@@ -279,18 +286,21 @@ describe('Local QA Runtime consumer contracts', () => {
       binding: resultBinding,
       case_result_set: {
         schema: 'testing-case-result-set.v2' as const,
+        schema_digest: digest,
         ref: 'artifact://runtime/results/set-1',
         digest,
         binding: resultBinding
       },
       evidence_manifest: {
         schema: 'testing-evidence-manifest.v1' as const,
+        schema_digest: digest,
         ref: 'artifact://runtime/evidence/manifest-1',
         digest,
         binding: resultBinding
       },
       cleanup_receipt: {
         schema: 'qa.local-cleanup-receipt/v2' as const,
+        schema_digest: digest,
         ref: 'artifact://runtime/cleanup/receipt-1',
         digest,
         binding: resultBinding

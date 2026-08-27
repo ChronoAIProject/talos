@@ -19,6 +19,7 @@ import {
 import type { TestingPlacementPolicy } from './testing-placement-policy.js';
 import type { TestingMachineReservationRecord } from '../domain/testing-types.js';
 import { submitTestingRun, testAuthenticatedTransportContext } from '../test-support/testing-transport.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -233,6 +234,35 @@ describe('TestingRunService', () => {
       status: 'unavailable',
       reason_code: 'testing_placement_verifier_unavailable'
     });
+  });
+
+  it('projects only owning-repo schema identities supplied by the live authority boundary', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const verified = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
+    });
+    const available = await verified.getCapabilities('user-1');
+    expect(available.external_schema_capabilities).toHaveLength(6);
+    expect(available.external_schema_capabilities.every((entry) => entry.status === 'available')).toBe(true);
+    expect(available.external_schema_capabilities[3]).toMatchObject({
+      contract: 'case_result_set',
+      owner: 'testing-packages',
+      schemas: [{ schema_id: 'testing-case-result-set', version: 'v2', digest }]
+    });
+
+    const unavailable = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      externalSchemaAuthority: {
+        getCapabilities: async () => { throw new Error('upstream unavailable'); },
+        verifyTerminalReference: async () => undefined
+      }
+    });
+    expect((await unavailable.getCapabilities('user-1')).external_schema_capabilities)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ status: 'unavailable', reason_code: 'upstream_schema_manifest_unavailable' })
+      ]));
   });
 
   it('reports bounded Runner package projection truncation instead of silently omitting identities', async () => {

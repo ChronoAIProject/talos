@@ -111,14 +111,17 @@ describe('shared Talos testing contracts', () => {
       binding,
       case_result_set: {
         ...reference('testing-case-result-set.v2', 'artifact://results/result-1'),
+        schema_digest: digestA,
         binding
       },
       evidence_manifest: {
         ...reference('testing-evidence-manifest.v1', 'artifact://results/evidence-1'),
+        schema_digest: digestA,
         binding
       },
       cleanup_receipt: {
         ...reference('qa.local-cleanup-receipt/v2', 'artifact://results/cleanup-1'),
+        schema_digest: digestA,
         binding
       }
     };

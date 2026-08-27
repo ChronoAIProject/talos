@@ -20,6 +20,7 @@ const claimIdentity = {
   lease_id: 'lease-1',
   fence_token: 'testing-fence-token-1',
   admission_nonce: 'testing-admission-1',
+  task_payload_digest: `sha256:${'a'.repeat(64)}`,
   issued_at: '2026-08-24T00:00:00.000Z',
   expires_at: deadline
 };

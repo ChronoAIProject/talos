@@ -14,6 +14,7 @@ import {
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
 import { testResolvedIdentity } from '../test-support/testing-transport.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -115,11 +116,13 @@ describe('Testing worker HTTP routes', () => {
       new ProfileLockService(repository),
       new WebhookSigner('webhook-secret-1234')
     );
+    const externalSchemaAuthority = testTestingExternalSchemaAuthority();
     const runs = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now,
       placementPolicy: testTestingPlacementPolicy(),
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      externalSchemaAuthority
     });
     const attempts = new TestingAttemptService(repository, {
       authorizationProvider: {
@@ -154,6 +157,7 @@ describe('Testing worker HTTP routes', () => {
           verifiedAt: new Date(now).toISOString()
         })
       },
+      externalSchemaAuthority,
       clock: () => now,
       leaseSeconds: 1
     });
@@ -326,18 +330,21 @@ describe('Testing worker HTTP routes', () => {
             binding: terminalBinding,
             case_result_set: {
               schema: 'testing-case-result-set.v2',
+              schema_digest: digest,
               ref: 'artifact://testing/results/run-http',
               digest,
               binding: terminalBinding
             },
             evidence_manifest: {
               schema: 'testing-evidence-manifest.v1',
+              schema_digest: digest,
               ref: 'artifact://testing/evidence/run-http',
               digest,
               binding: terminalBinding
             },
             cleanup_receipt: {
               schema: 'qa.local-cleanup-receipt/v2',
+              schema_digest: digest,
               ref: 'artifact://testing/cleanup/run-http',
               digest,
               binding: terminalBinding
@@ -417,6 +424,7 @@ describe('Testing worker HTTP routes', () => {
             binding: reconcileTerminalBinding,
             cleanup_receipt: {
               schema: 'qa.local-cleanup-receipt/v2',
+              schema_digest: digest,
               ref: 'artifact://testing/cleanup/run-reconcile',
               digest,
               binding: reconcileTerminalBinding

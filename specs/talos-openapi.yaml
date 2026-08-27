@@ -20,6 +20,7 @@ paths:
       responses:
         '200': { description: Bounded Testing Tool capabilities, content: { application/json: { schema: { $ref: '#/components/schemas/TestingCapabilities' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/tools/testing/runs/{run_id}:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     put:
@@ -38,14 +39,17 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
     get:
       operationId: getTestingRun
       responses:
         '200': { description: Bounded immutable run snapshot, content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunSnapshot' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/tools/testing/runs/{run_id}/events:
     parameters:
       - { $ref: '#/components/parameters/TestingRunId' }
@@ -59,7 +63,9 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '410': { description: Cursor expired; resync from the replacement snapshot and cursor., content: { application/json: { schema: { $ref: '#/components/schemas/TestingCursorExpiredError' } } } }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/tools/testing/runs/{run_id}:cancel:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:
@@ -76,6 +82,8 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/tasks:
     post:
       operationId: submitTask
@@ -1067,9 +1075,10 @@ components:
       type: object
       additionalProperties: false
       description: Opaque reference to the Testing Packages owning repository's authoritative CaseResultSet schema. Talos validates identity, digest, and attempt binding only.
-      required: [schema, ref, digest, binding]
+      required: [schema, schema_digest, ref, digest, binding]
       properties:
         schema: { const: testing-case-result-set.v2 }
+        schema_digest: { $ref: '#/components/schemas/Sha256Digest' }
         ref: { $ref: '#/components/schemas/ArtifactReference' }
         digest: { $ref: '#/components/schemas/Sha256Digest' }
         binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
@@ -1077,9 +1086,10 @@ components:
       type: object
       additionalProperties: false
       description: Opaque reference to the Local QA Runtime owning repository's authoritative EvidenceManifest schema. Talos validates identity, digest, and attempt binding only.
-      required: [schema, ref, digest, binding]
+      required: [schema, schema_digest, ref, digest, binding]
       properties:
         schema: { const: testing-evidence-manifest.v1 }
+        schema_digest: { $ref: '#/components/schemas/Sha256Digest' }
         ref: { $ref: '#/components/schemas/ArtifactReference' }
         digest: { $ref: '#/components/schemas/Sha256Digest' }
         binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
@@ -1087,9 +1097,10 @@ components:
       type: object
       additionalProperties: false
       description: Opaque reference to the Local QA Runtime owning repository's authoritative CleanupReceipt schema. Talos validates identity, digest, and attempt binding only.
-      required: [schema, ref, digest, binding]
+      required: [schema, schema_digest, ref, digest, binding]
       properties:
         schema: { const: qa.local-cleanup-receipt/v2 }
+        schema_digest: { $ref: '#/components/schemas/Sha256Digest' }
         ref: { $ref: '#/components/schemas/ArtifactReference' }
         digest: { $ref: '#/components/schemas/Sha256Digest' }
         binding: { $ref: '#/components/schemas/TestingAttemptBinding' }
@@ -1160,7 +1171,11 @@ components:
               terminal: { const: false }
               terminal_reason: { type: 'null' }
         - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, execution_outcome: { enum: [passed, failed, blocked, error, all_skipped] } }, required: [control_status, execution_outcome] }
-          then: { required: [summary, results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [case_result_set] }] } } }
+          then: { required: [summary, results], properties: { summary: { $ref: '#/components/schemas/TestingRunSummary' }, results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [case_result_set] }] } } }
+        - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, execution_outcome: { const: all_skipped } }, required: [control_status, execution_outcome] }
+          then: { properties: { summary: { allOf: [{ $ref: '#/components/schemas/TestingRunSummary' }, { properties: { all_skipped: { const: true } } }] } } }
+        - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, execution_outcome: { const: passed } }, required: [control_status, execution_outcome] }
+          then: { properties: { summary: { allOf: [{ $ref: '#/components/schemas/TestingRunSummary' }, { properties: { all_skipped: { const: false } } }] } } }
         - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, evidence_outcome: { enum: [complete, partial] } }, required: [control_status, evidence_outcome] }
           then: { required: [results], properties: { results: { allOf: [{ $ref: '#/components/schemas/TestingTerminalRefs' }, { required: [evidence_manifest] }] } } }
         - if: { properties: { control_status: { enum: [completed, failed, cancelled, abandoned] }, cleanup_outcome: { enum: [not_required, complete, residual_retryable, residual_blocking] } }, required: [control_status, cleanup_outcome] }
@@ -1345,7 +1360,7 @@ components:
     TestingCurrentClaimIdentity:
       type: object
       additionalProperties: false
-      required: [schema_version, operation, claim_id, run_id, task_id, attempt_id, machine_id, worker_id, generation, lease_id, fence_token, admission_nonce, issued_at, expires_at]
+      required: [schema_version, operation, claim_id, run_id, task_id, attempt_id, machine_id, worker_id, generation, lease_id, fence_token, admission_nonce, task_payload_digest, issued_at, expires_at]
       properties:
         schema_version: { const: talos.testing-claim-identity/v1 }
         operation: { type: string, enum: [start, reconcile] }
@@ -1359,6 +1374,7 @@ components:
         lease_id: { $ref: '#/components/schemas/Identifier' }
         fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
         admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
+        task_payload_digest: { $ref: '#/components/schemas/Sha256Digest' }
         issued_at: { type: string, format: date-time }
         expires_at: { type: string, format: date-time }
     TestingCurrentClaimEnvelope:
@@ -1389,7 +1405,7 @@ components:
     TestingTask:
       type: object
       additionalProperties: false
-      required: [schema_version, id, kind, interaction, qa_run_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, inputs, runner, policy_ref, budgets_ref, local_request_authorization, expected_runtime_capability, deadline]
+      required: [schema_version, id, kind, interaction, qa_run_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, task_payload_digest, inputs, runner, policy_ref, budgets_ref, local_request_authorization, expected_runtime_capability, deadline]
       properties:
         schema_version: { const: talos.testing-task/v1 }
         id: { $ref: '#/components/schemas/Identifier' }
@@ -1404,6 +1420,7 @@ components:
         fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
         admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
         lease_claim: { $ref: '#/components/schemas/TestingLeaseClaimReference' }
+        task_payload_digest: { $ref: '#/components/schemas/Sha256Digest' }
         inputs: { $ref: '#/components/schemas/TestingInputs' }
         runner: { $ref: '#/components/schemas/TestingPackageReference' }
         policy_ref: { $ref: '#/components/schemas/TestingPolicyReference' }
@@ -1414,7 +1431,7 @@ components:
     TestingReconcileTask:
       type: object
       additionalProperties: false
-      required: [schema_version, operation, qa_run_id, task_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, local_request_authorization, deadline]
+      required: [schema_version, operation, qa_run_id, task_id, dispatch_attempt_id, generation, machine_id, worker_id, lease_id, fence_token, admission_nonce, lease_claim, task_payload_digest, local_request_authorization, deadline]
       properties:
         schema_version: { const: talos.testing-reconcile-task/v1 }
         operation: { const: reconcile }
@@ -1428,6 +1445,7 @@ components:
         fence_token: { type: string, minLength: 16, maxLength: 512, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$' }
         admission_nonce: { $ref: '#/components/schemas/RequestNonce' }
         lease_claim: { $ref: '#/components/schemas/TestingLeaseClaimReference' }
+        task_payload_digest: { $ref: '#/components/schemas/Sha256Digest' }
         local_request_authorization: { $ref: '#/components/schemas/LocalRequestAuthorizationReference' }
         deadline: { type: string, format: date-time }
     TestingNoLocalAcceptanceFact:

@@ -32,8 +32,9 @@ AND cleanup_outcome != pending
 
 It carries exact inputs, attempt/machine/worker/runtime provenance, verified NyxID transport
 lineage, five orthogonal outcomes, a bounded non-authoritative summary, and opaque attempt-bound
-CaseResultSet/EvidenceManifest/CleanupReceipt refs and payload digests. `snapshot_digest` is the
-single terminal identity. Talos does not create `result_digest` or a second result identity.
+CaseResultSet/EvidenceManifest/CleanupReceipt refs, payload digests, and owning-schema digests.
+`snapshot_digest` is the single terminal identity. Talos does not create `result_digest` or a
+second result identity.
 
 `control_status=completed` means that Talos control has closed. It does not mean a Case passed.
 For example, `control_status=completed + upload_outcome=pending` is closed but not canonical
@@ -61,12 +62,17 @@ The Zod types in `testing-protocol/src/testing-runtime.ts` are bounded consumer-
 validators. They are not a publication of Runtime-owned or Testing-Packages-owned authoritative
 Schemas. Talos OpenAPI does not inline a hand-maintained second copy of those external Schemas.
 
-As of 2026-08-27, the local Testing Packages owning repo does not publish a cross-repository
+As of 2026-08-28, the local Testing Packages owning repo does not publish a cross-repository
 Action/Observation/Assertion/CaseResultSet schema manifest with exact IDs, versions, and digests,
 and the Local QA Runtime owning repo does not publish an equivalent EvidenceManifest/CleanupReceipt
 manifest. `get_capabilities` therefore reports those `upstream_manifest` entries as `unavailable`
-with `upstream_schema_manifest_unpublished`. Talos must not synthesize identities. Once owners
-publish manifests, Talos can pin and expose them after conformance verification.
+with `upstream_schema_manifest_unpublished`. The same injected authority boundary is used by
+terminal admission: while an owning manifest is unavailable, Talos rejects terminal refs with
+`external_schema_authority_unavailable` and cannot publish a positive canonical terminal Snapshot
+that depends on them. A manifest identity mismatch is rejected with
+`invalid_external_schema_reference`. Talos must not synthesize identities. Once owners publish
+manifests, their adapter can expose and verify exact schema ID/version/digest tuples through this
+boundary without copying an authoritative Schema into Talos.
 
 The legacy `result_contracts` strings in capability and terminal ref envelopes identify the current
 Talos adapter slots. They do not transfer Schema ownership and are not a substitute for the missing
@@ -88,7 +94,8 @@ upstream manifest digest.
 - stable public error contract/catalog versions and execution/evidence limits.
 
 Availability is advisory and identity-scoped. Available capacity subtracts both generic machine
-leases and current Testing reservation records; `residual_blocking` reservations remain occupied
+leases and every durable Testing reservation record, including expired records that have not yet
+been state-aware swept or explicitly released. `residual_blocking` reservations remain occupied
 until their explicit release proof is persisted. Hardware/package availability is separate from
 `admission_availability`, so an unconfigured placement verifier or policy cannot look end-to-end
 ready. Capability observation does not reserve capacity and cannot replace submit-time input
@@ -113,11 +120,17 @@ PQL validation but does not compute `ProductQualityAssessment` or `ReleaseGateDe
 | Hop | Validates | Does not trust or revalidate |
 | --- | --- | --- |
 | PQL to Talos admission | PQL `request_id`, `client_correlation_id`, `idempotency_key`; NyxID-authenticated subject, route, authorization, request digest, transport correlation and audit refs | Request-body transport/audit claims |
-| Scheduler to worker | Current run/attempt, machine, worker, reservation, lease, generation, fence, task payload digest and hop authorization | Raw PQL-to-Talos transport envelope |
+| Scheduler to worker | Current run/attempt, machine, worker, reservation, lease, generation, fence, signed canonical task payload digest and hop authorization | Raw PQL-to-Talos transport envelope |
 | Worker to Local QA Runtime | Runtime audience, operation authorization, current claim, exact source/plan/package bindings | Authority reconstruction or mutation of original NyxID transport facts |
 
 InputSet remains deterministic and reusable. It excludes request, correlation, idempotency and
 NyxID transport/audit fields.
+
+The canonical task payload digest covers the task/attempt identity, lease-claim reference and
+expiry, frozen inputs, Runner identity, policy/budget refs, Runtime capability and deadline. It
+excludes the claim digest itself and the separately authority-verified authorization proof to avoid
+recursive authorities. The worker recomputes it before capability lookup, authorization resolution,
+or any Runtime call, and requires the recomputed value to match the Talos-signed current claim.
 
 ## Public Error Contract
 
@@ -137,7 +150,9 @@ not reflect an unbounded Zod issue list or caller-controlled paths in public err
 | Classification | Public code(s) | Retryable |
 | --- | --- | --- |
 | Invalid JSON/Schema | `invalid_json`, `validation_error` | No |
+| Authentication/route access | `unauthorized`, `forbidden`, `not_found`, `nyxid_transport_context_required` | No |
 | Digest/identity conflict | `request_digest_mismatch`, `run_identity_conflict`, `idempotency_conflict` | No |
+| Invalid/bounded idempotency or cursor input | `invalid_idempotency_scope`, `idempotency_ledger_full`, `invalid_cursor` | No |
 | Source/selection/plan/package verification rejected | `testing_placement_inputs_unverified` | No |
 | Unsupported or policy-denied capability | `testing_placement_denied` | No |
 | No currently eligible configured machine/package | `testing_placement_unavailable` | Yes |
@@ -149,6 +164,7 @@ not reflect an unbounded Zod issue list or caller-controlled paths in public err
 | Runtime admission fact rejected | `invalid_no_local_acceptance_fact` | No |
 | Terminal result invalid/conflicting | `invalid_terminal_projection`, `stale_terminal_binding`, `terminal_commit_conflict` | No |
 | Cleanup authority unavailable/rejected | `cleanup_verifier_unavailable` / `invalid_cleanup_receipt` | Yes / No |
+| External Schema authority unavailable/rejected | `external_schema_authority_unavailable` / `invalid_external_schema_reference` | Yes / No |
 | Event cursor expired | `cursor_expired` plus replacement Snapshot/cursor fields | Yes |
 | Optimistic concurrency race | `concurrent_update` | Yes |
 
@@ -168,3 +184,6 @@ cursor expiry, heartbeat loss, Talos restart, worker/Runtime restart, and confli
 
 All fixtures are deterministic, use opaque refs/digests only, carry no credentials, and declare
 `side_effects=false`. They do not start a machine, Runtime, browser, process, or network operation.
+Their external schema identities are consumer-contract examples accepted only by an explicit
+test-only authority; they are not published upstream manifests and cannot configure production
+terminal admission.

@@ -245,6 +245,7 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
         id: 'attempt-contract',
         claimId: 'claim-contract',
         operation: 'start' as const,
+        taskPayloadDigest: digest,
         generation: 1,
         status: 'claimed' as const,
         machineId: 'machine-contract',

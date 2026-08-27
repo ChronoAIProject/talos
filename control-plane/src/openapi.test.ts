@@ -144,8 +144,18 @@ describe('OpenAPI loader', () => {
     ]);
     expect(schema('PublicErrorDetail').required).toEqual(['code', 'message', 'retryable']);
     expect(schema('TaskError').required).toEqual(['code', 'message']);
-    const submitResponses = asObject(asObject(parsed.paths['/v1/tools/testing/runs/{run_id}']?.put).responses);
-    expect(Object.keys(submitResponses)).toEqual(expect.arrayContaining(['200', '201', '400', '401', '403', '409', '413', '503']));
+    const testingResponseCodes = (path: string, method: string): string[] =>
+      Object.keys(asObject(asObject(parsed.paths[path]?.[method]).responses));
+    expect(testingResponseCodes('/v1/tools/testing/capabilities', 'get'))
+      .toEqual(['200', '401', '500']);
+    expect(testingResponseCodes('/v1/tools/testing/runs/{run_id}', 'put'))
+      .toEqual(['200', '201', '400', '401', '403', '409', '413', '500', '503']);
+    expect(testingResponseCodes('/v1/tools/testing/runs/{run_id}', 'get'))
+      .toEqual(['200', '400', '401', '403', '404', '500']);
+    expect(testingResponseCodes('/v1/tools/testing/runs/{run_id}/events', 'get'))
+      .toEqual(['200', '400', '401', '403', '404', '409', '410', '500']);
+    expect(testingResponseCodes('/v1/tools/testing/runs/{run_id}:cancel', 'post'))
+      .toEqual(['200', '400', '401', '403', '404', '409', '413', '500']);
     const externalCapabilities = asObject(properties('TestingCapabilities').external_schema_capabilities);
     const externalPrefixItems = externalCapabilities.prefixItems as unknown[];
     expect(externalPrefixItems.map((item) => {
@@ -179,11 +189,22 @@ describe('OpenAPI loader', () => {
     ]));
     expect(schema('TestingTask').required).toContain('budgets_ref');
     expect(schema('TestingTask').required).toEqual(expect.arrayContaining([
-      'worker_id', 'lease_id', 'fence_token', 'admission_nonce', 'lease_claim'
+      'worker_id', 'lease_id', 'fence_token', 'admission_nonce', 'lease_claim', 'task_payload_digest'
     ]));
     expect(schema('TestingCurrentClaimIdentity').required).toEqual(expect.arrayContaining([
-      'operation', 'admission_nonce'
+      'operation', 'admission_nonce', 'task_payload_digest'
     ]));
+    expect(schema('TestingReconcileTask').required).toContain('task_payload_digest');
+    for (const referenceSchema of [
+      'TestingCaseResultSetReference',
+      'TestingEvidenceManifestReference',
+      'TestingCleanupReceiptReference'
+    ]) expect(schema(referenceSchema).required).toContain('schema_digest');
+    const snapshotConditions = schema('TestingRunSnapshot').allOf as unknown[];
+    const settledProperties = asObject(asObject(asObject(snapshotConditions[1]).then).properties);
+    expect(settledProperties.summary).toEqual({ $ref: '#/components/schemas/TestingRunSummary' });
+    expect(JSON.stringify(snapshotConditions[2])).toContain('"all_skipped":{"const":true}');
+    expect(JSON.stringify(snapshotConditions[3])).toContain('"all_skipped":{"const":false}');
     expect(schema('TestingCurrentClaimEnvelope').required).toEqual(expect.arrayContaining([
       'audience', 'request_nonce', 'lease_expires_at', 'valid_until', 'key_id'
     ]));

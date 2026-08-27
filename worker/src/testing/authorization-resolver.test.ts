@@ -77,6 +77,7 @@ const authorizationRequest = () => ({
     lease_id: 'lease-1',
     fence_token: 'testing-fence-token-1',
     admission_nonce: 'testing-admission-1',
+    task_payload_digest: `sha256:${'a'.repeat(64)}`,
     lease_claim: {
       schema: 'talos.testing-lease-claim/v1' as const,
       ref: 'talos://testing/claims/run-1/claim-1',

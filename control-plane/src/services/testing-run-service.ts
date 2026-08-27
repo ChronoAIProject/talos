@@ -37,6 +37,10 @@ import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { TestingPlacementPolicy } from './testing-placement-policy.js';
 import type { TestingPlacementInputVerifier } from './testing-placement-verifier.js';
+import {
+  resolveTestingExternalSchemaCapabilities,
+  type TestingExternalSchemaAuthority
+} from './testing-schema-authority.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
 export const TESTING_CURSOR_PAGE_RETENTION = 128;
@@ -72,14 +76,6 @@ const capabilityBase = {
   ],
   backends: ['browser'],
   browsers: ['chromium'],
-  external_schema_capabilities: [
-    externalSchemaUnavailable('action', 'testing-packages'),
-    externalSchemaUnavailable('observation', 'testing-packages'),
-    externalSchemaUnavailable('assertion', 'testing-packages'),
-    externalSchemaUnavailable('case_result_set', 'testing-packages'),
-    externalSchemaUnavailable('evidence_manifest', 'local-qa-runtime'),
-    externalSchemaUnavailable('cleanup_receipt', 'local-qa-runtime')
-  ],
   error_contract: {
     schema_version: 'talos.public-error/v1',
     catalog_version: 'talos.testing-error-catalog/v1'
@@ -103,6 +99,7 @@ export interface TestingRunServiceOptions {
   readonly clock?: () => number;
   readonly placementPolicy?: TestingPlacementPolicy;
   readonly placementInputVerifier?: TestingPlacementInputVerifier;
+  readonly externalSchemaAuthority?: TestingExternalSchemaAuthority;
 }
 
 export class TestingRunService {
@@ -119,6 +116,9 @@ export class TestingRunService {
   public async getCapabilities(userId: string, requesterGroups: readonly string[] = []): Promise<TestingCapabilities> {
     const observedAt = this.clock();
     const machines = await this.visibleTestingMachines(userId, requesterGroups);
+    const externalSchemaCapabilities = await resolveTestingExternalSchemaCapabilities(
+      this.options.externalSchemaAuthority
+    );
     const reservations = await this.repository.listTestingMachineReservations();
     const reservedMachineIds = new Set(reservations.map((reservation) => reservation.machineId));
     const packages = new Map<string, TestingCapabilities['runner_packages'][number]>();
@@ -170,6 +170,7 @@ export class TestingRunService {
       valid_until: new Date(observedAt + TESTING_CAPABILITY_TTL_MS).toISOString(),
       scope: 'resolved_identity_visible_pools',
       ...capabilityBase,
+      external_schema_capabilities: externalSchemaCapabilities,
       admission_availability: this.options.placementInputVerifier === undefined
         ? { status: 'unavailable', reason_code: 'testing_placement_verifier_unavailable' }
         : this.options.placementPolicy === undefined
@@ -740,20 +741,6 @@ const poolVisible = (
   if (pool.visibility === 'private') return false;
   return (pool.sharedWithGroups ?? []).some((group) => groups.includes(group));
 };
-
-function externalSchemaUnavailable(
-  contract: 'action' | 'observation' | 'assertion' | 'case_result_set' | 'evidence_manifest' | 'cleanup_receipt',
-  owner: 'testing-packages' | 'local-qa-runtime'
-) {
-  return {
-    contract,
-    owner,
-    source: 'upstream_manifest' as const,
-    status: 'unavailable' as const,
-    schemas: [],
-    reason_code: 'upstream_schema_manifest_unpublished'
-  };
-}
 
 const boundedCapabilityCount = (value: number): number => Math.min(1_000_000, value);
 

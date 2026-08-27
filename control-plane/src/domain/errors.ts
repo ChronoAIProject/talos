@@ -15,9 +15,17 @@ export class TalosError extends Error {
 export const TESTING_PUBLIC_ERROR_CATALOG = {
   validation_error: { classification: 'invalid_request', retryable: false },
   invalid_json: { classification: 'invalid_request', retryable: false },
+  payload_too_large: { classification: 'invalid_request', retryable: false },
+  unauthorized: { classification: 'authentication_required', retryable: false },
+  forbidden: { classification: 'authorization_denied', retryable: false },
+  not_found: { classification: 'not_found', retryable: false },
+  internal_error: { classification: 'internal_error', retryable: true },
+  nyxid_transport_context_required: { classification: 'authentication_required', retryable: false },
   request_digest_mismatch: { classification: 'digest_mismatch', retryable: false },
   run_identity_conflict: { classification: 'identity_conflict', retryable: false },
   idempotency_conflict: { classification: 'identity_conflict', retryable: false },
+  invalid_idempotency_scope: { classification: 'invalid_request', retryable: false },
+  idempotency_ledger_full: { classification: 'idempotency_capacity_exhausted', retryable: false },
   testing_placement_inputs_unverified: { classification: 'input_verification_rejected', retryable: false },
   testing_placement_denied: { classification: 'placement_denied', retryable: false },
   testing_placement_unavailable: { classification: 'no_eligible_machine', retryable: true },
@@ -43,6 +51,9 @@ export const TESTING_PUBLIC_ERROR_CATALOG = {
   invalid_terminal_projection: { classification: 'invalid_terminal_result', retryable: false },
   cleanup_verifier_unavailable: { classification: 'cleanup_verifier_unavailable', retryable: true },
   invalid_cleanup_receipt: { classification: 'cleanup_receipt_rejected', retryable: false },
+  external_schema_authority_unavailable: { classification: 'schema_authority_unavailable', retryable: true },
+  invalid_external_schema_reference: { classification: 'schema_identity_rejected', retryable: false },
+  invalid_cursor: { classification: 'invalid_request', retryable: false },
   cursor_expired: { classification: 'cursor_expired', retryable: true },
   concurrent_update: { classification: 'concurrent_update', retryable: true }
 } as const;

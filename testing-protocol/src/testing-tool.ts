@@ -788,6 +788,7 @@ export const testingCurrentClaimIdentitySchema = z.object({
   lease_id: identifierSchema,
   fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   admission_nonce: requestNonceSchema,
+  task_payload_digest: sha256DigestSchema,
   issued_at: timestampSchema,
   expires_at: timestampSchema
 }).strict();
@@ -955,7 +956,9 @@ export const testingLocalRequestAuthorizationReferenceSchema = z.object({
   expires_at: timestampSchema
 }).strict();
 
-export const testingTaskSchema = z.object({
+const testingLeaseClaimPayloadBindingSchema = testingLeaseClaimReferenceSchema.omit({ digest: true });
+
+const testingTaskPayloadCoreSchema = z.object({
   schema_version: z.literal('talos.testing-task/v1'),
   id: identifierSchema,
   kind: z.literal('testing'),
@@ -968,7 +971,7 @@ export const testingTaskSchema = z.object({
   lease_id: identifierSchema,
   fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   admission_nonce: requestNonceSchema,
-  lease_claim: testingLeaseClaimReferenceSchema,
+  lease_claim: testingLeaseClaimPayloadBindingSchema,
   inputs: testingInputReferencesSchema,
   runner: testingPackageReferenceSchema,
   policy_ref: z.object({
@@ -981,16 +984,46 @@ export const testingTaskSchema = z.object({
     ref: talosReferenceSchema,
     digest: sha256DigestSchema
   }).strict(),
-  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema,
   expected_runtime_capability: z.literal('local-qa-mvp/v1'),
   deadline: timestampSchema
-}).strict().superRefine((value, context) => {
+}).strict();
+
+const testingTaskObjectSchema = testingTaskPayloadCoreSchema.omit({ lease_claim: true }).extend({
+  lease_claim: testingLeaseClaimReferenceSchema,
+  task_payload_digest: sha256DigestSchema,
+  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema
+}).strict();
+
+type TestingTaskPayloadDigestInput =
+  | z.input<typeof testingTaskPayloadCoreSchema>
+  | Omit<z.input<typeof testingTaskObjectSchema>, 'task_payload_digest'>
+  | z.input<typeof testingTaskObjectSchema>;
+
+const testingTaskPayloadCore = (
+  input: TestingTaskPayloadDigestInput
+): z.input<typeof testingTaskPayloadCoreSchema> => {
+  const { lease_claim: leaseClaim, ...fields } = input;
+  const leaseClaimBinding = { ...leaseClaim } as Record<string, unknown>;
+  delete leaseClaimBinding.digest;
+  const objectFields = fields as Record<string, unknown>;
+  delete objectFields.task_payload_digest;
+  delete objectFields.local_request_authorization;
+  return testingTaskPayloadCoreSchema.parse({ ...objectFields, lease_claim: leaseClaimBinding });
+};
+
+export const computeTestingTaskPayloadDigest = (input: TestingTaskPayloadDigestInput): string =>
+  digestJson(testingTaskPayloadCore(input));
+
+export const testingTaskSchema = testingTaskObjectSchema.superRefine((value, context) => {
   if (JSON.stringify(value.runner) !== JSON.stringify(value.inputs.testing_package)) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'runner must match frozen testing package', path: ['runner'] });
   }
+  if (computeTestingTaskPayloadDigest(value) !== value.task_payload_digest) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'task_payload_digest does not match canonical task payload', path: ['task_payload_digest'] });
+  }
 });
 
-export const testingReconcileTaskSchema = z.object({
+const testingReconcileTaskPayloadCoreSchema = z.object({
   schema_version: z.literal('talos.testing-reconcile-task/v1'),
   operation: z.literal('reconcile'),
   qa_run_id: testingRunIdSchema,
@@ -1002,14 +1035,50 @@ export const testingReconcileTaskSchema = z.object({
   lease_id: identifierSchema,
   fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   admission_nonce: requestNonceSchema,
-  lease_claim: testingLeaseClaimReferenceSchema,
-  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema,
+  lease_claim: testingLeaseClaimPayloadBindingSchema,
   deadline: timestampSchema
 }).strict();
+
+const testingReconcileTaskObjectSchema = testingReconcileTaskPayloadCoreSchema.omit({ lease_claim: true }).extend({
+  lease_claim: testingLeaseClaimReferenceSchema,
+  task_payload_digest: sha256DigestSchema,
+  local_request_authorization: testingLocalRequestAuthorizationReferenceSchema
+}).strict();
+
+type TestingReconcileTaskPayloadDigestInput =
+  | z.input<typeof testingReconcileTaskPayloadCoreSchema>
+  | Omit<z.input<typeof testingReconcileTaskObjectSchema>, 'task_payload_digest'>
+  | z.input<typeof testingReconcileTaskObjectSchema>;
+
+const testingReconcileTaskPayloadCore = (
+  input: TestingReconcileTaskPayloadDigestInput
+): z.input<typeof testingReconcileTaskPayloadCoreSchema> => {
+  const { lease_claim: leaseClaim, ...fields } = input;
+  const leaseClaimBinding = { ...leaseClaim } as Record<string, unknown>;
+  delete leaseClaimBinding.digest;
+  const objectFields = fields as Record<string, unknown>;
+  delete objectFields.task_payload_digest;
+  delete objectFields.local_request_authorization;
+  return testingReconcileTaskPayloadCoreSchema.parse({ ...objectFields, lease_claim: leaseClaimBinding });
+};
+
+export const computeTestingReconcileTaskPayloadDigest = (input: TestingReconcileTaskPayloadDigestInput): string =>
+  digestJson(testingReconcileTaskPayloadCore(input));
+
+export const testingReconcileTaskSchema = testingReconcileTaskObjectSchema.superRefine((value, context) => {
+  if (computeTestingReconcileTaskPayloadDigest(value) !== value.task_payload_digest) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'task_payload_digest does not match canonical reconcile task payload',
+      path: ['task_payload_digest']
+    });
+  }
+});
 
 export type TestingToolRequest = z.infer<typeof testingToolRequestSchema>;
 export type TestingAuthenticatedTransportContext = z.infer<typeof testingAuthenticatedTransportContextSchema>;
 export type TestingCapabilities = z.infer<typeof testingCapabilitiesSchema>;
+export type TestingExternalSchemaCapability = z.infer<typeof testingExternalSchemaCapabilitySchema>;
 export type TestingRunAcceptance = z.infer<typeof testingRunAcceptanceSchema>;
 export type TestingControlStatus = z.infer<typeof testingControlStatusSchema>;
 export type TestingExecutionOutcome = z.infer<typeof testingExecutionOutcomeSchema>;

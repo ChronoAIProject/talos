@@ -19,6 +19,8 @@ import {
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
 import { submitTestingRun } from '../test-support/testing-transport.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import type { TestingExternalSchemaAuthority } from './testing-schema-authority.js';
 import { TestingRunService } from './testing-run-service.js';
 import {
   TESTING_MAX_ATTEMPTS,
@@ -165,6 +167,7 @@ const setup = async (options: {
   authorizationProvider?: TestingAuthorizationProvider;
   runtimeFactVerifier?: TestingRuntimeFactVerifier;
   cleanupReceiptVerifier?: TestingCleanupReceiptVerifier | false;
+  externalSchemaAuthority?: TestingExternalSchemaAuthority | false;
   time?: { value: number };
 } = {}) => {
   const time = options.time ?? { value: Date.parse('2026-08-22T00:00:00.000Z') };
@@ -177,7 +180,10 @@ const setup = async (options: {
     cursorSecret: 'testing-attempt-cursor-secret-1234',
     clock: () => time.value,
     placementPolicy: testTestingPlacementPolicy(),
-    placementInputVerifier: testTestingPlacementInputVerifier()
+    placementInputVerifier: testTestingPlacementInputVerifier(),
+    externalSchemaAuthority: options.externalSchemaAuthority === false
+      ? undefined
+      : options.externalSchemaAuthority ?? testTestingExternalSchemaAuthority()
   });
   const attempts = new TestingAttemptService(repository, {
     claimSigningKey: signingKey,
@@ -187,6 +193,9 @@ const setup = async (options: {
     cleanupReceiptVerifier: options.cleanupReceiptVerifier === false
       ? undefined
       : options.cleanupReceiptVerifier ?? cleanupReceiptVerifier,
+    externalSchemaAuthority: options.externalSchemaAuthority === false
+      ? undefined
+      : options.externalSchemaAuthority ?? testTestingExternalSchemaAuthority(),
     clock: () => time.value,
     leaseSeconds: options.leaseSeconds ?? 10
   });
@@ -249,18 +258,21 @@ const terminal = (
       binding: terminalBinding,
       case_result_set: {
         schema: 'testing-case-result-set.v2',
+        schema_digest: digest,
         ref: `artifact://testing/results/${terminalBinding.attempt_id}`,
         digest,
         binding: terminalBinding
       },
       evidence_manifest: {
         schema: 'testing-evidence-manifest.v1',
+        schema_digest: digest,
         ref: `artifact://testing/evidence/${terminalBinding.attempt_id}`,
         digest,
         binding: terminalBinding
       },
       cleanup_receipt: {
         schema: 'qa.local-cleanup-receipt/v2',
+        schema_digest: digest,
         ref: `artifact://testing/cleanup/${terminalBinding.attempt_id}`,
         digest,
         binding: terminalBinding
@@ -890,6 +902,26 @@ describe('TestingAttemptService', () => {
     }
   });
 
+  it('fails closed when owning-repo schema manifests are unavailable or reject a terminal reference', async () => {
+    const rejectingAuthority: TestingExternalSchemaAuthority = {
+      ...testTestingExternalSchemaAuthority(),
+      verifyTerminalReference: async () => undefined
+    };
+    for (const [runId, externalSchemaAuthority, expectedCode] of [
+      ['run-schema-unpublished', false, 'external_schema_authority_unavailable'],
+      ['run-schema-rejected', rejectingAuthority, 'invalid_external_schema_reference']
+    ] as const) {
+      const { repository, runs, attempts } = await setup({ externalSchemaAuthority });
+      await submitTestingRun(runs, runId, 'user-1', testingRequest(`submit-${runId}`));
+      const claim = await attempts.claim('worker-1', 'machine-1');
+      await attempts.acceptLocal(binding(claim));
+
+      await expect(attempts.commitTerminal(terminal(claim))).rejects.toMatchObject({ code: expectedCode });
+      expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+      expect(await repository.getTestingRun(runId)).toMatchObject({ controlStatus: 'local_accepted' });
+    }
+  });
+
   it('rejects unbounded cleanup verification records without persisting adapter fields', async () => {
     const unboundedVerifier: TestingCleanupReceiptVerifier = {
       verifyCleanupReceipt: async (receipt, context) => ({
@@ -966,6 +998,7 @@ describe('TestingAttemptService', () => {
       ...initialInput.results,
       evidence_manifest: {
         schema: 'testing-evidence-manifest.v1' as const,
+        schema_digest: digest,
         ref: 'artifact://testing/evidence/manifests-1',
         digest,
         binding: initialInput.results.binding
@@ -1104,6 +1137,7 @@ describe('TestingAttemptService', () => {
       ...initialInput.results,
       evidence_manifest: {
         schema: 'testing-evidence-manifest.v1' as const,
+        schema_digest: digest,
         ref: 'artifact://testing/evidence/reservation-lost-manifest-1',
         digest,
         binding: initialInput.results.binding

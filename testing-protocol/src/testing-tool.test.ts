@@ -3,6 +3,7 @@ import {
   computeTestingCurrentClaimDigest,
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
+  computeTestingTaskPayloadDigest,
   computeTestingToolRequestDigest,
   testingCapabilitiesSchema,
   testingAuthenticatedTransportContextSchema,
@@ -177,6 +178,7 @@ describe('Testing Tool contracts', () => {
       lease_id: 'lease-1',
       fence_token: 'fence-token-123456',
       admission_nonce: 'admission-nonce-123456',
+      task_payload_digest: digest,
       issued_at: timestamp,
       expires_at: '2026-08-22T00:10:00.000Z'
     };
@@ -288,18 +290,21 @@ describe('Testing Tool contracts', () => {
         binding,
         case_result_set: {
           schema: 'testing-case-result-set.v2' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/results/result-1',
           digest,
           binding
         },
         evidence_manifest: {
           schema: 'testing-evidence-manifest.v1' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/evidence/manifest-1',
           digest,
           binding
         },
         cleanup_receipt: {
           schema: 'qa.local-cleanup-receipt/v2' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/cleanup/receipt-1',
           digest,
           binding
@@ -355,18 +360,21 @@ describe('Testing Tool contracts', () => {
         binding,
         case_result_set: {
           schema: 'testing-case-result-set.v2' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/results/result-1',
           digest,
           binding
         },
         evidence_manifest: {
           schema: 'testing-evidence-manifest.v1' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/evidence/manifest-1',
           digest,
           binding
         },
         cleanup_receipt: {
           schema: 'qa.local-cleanup-receipt/v2' as const,
+          schema_digest: digest,
           ref: 'artifact://testing/cleanup/receipt-1',
           digest,
           binding
@@ -644,7 +652,7 @@ describe('Testing Tool contracts', () => {
       reason: 'lease_token_abc123'
     })).toThrow();
 
-    const task = {
+    const taskWithoutPayloadDigest = {
       schema_version: 'talos.testing-task/v1' as const,
       id: 'task-1',
       kind: 'testing' as const,
@@ -675,7 +683,21 @@ describe('Testing Tool contracts', () => {
       expected_runtime_capability: 'local-qa-mvp/v1' as const,
       deadline: timestamp
     };
+    const task = {
+      ...taskWithoutPayloadDigest,
+      task_payload_digest: computeTestingTaskPayloadDigest(taskWithoutPayloadDigest)
+    };
     expect(testingTaskSchema.parse(task)).toEqual(task);
+    expect(computeTestingTaskPayloadDigest({
+      ...task,
+      inputs: {
+        ...task.inputs,
+        structured_plan: { ...task.inputs.structured_plan, digest: `sha256:${'b'.repeat(64)}` }
+      }
+    })).not.toBe(task.task_payload_digest);
+    expect(() => testingTaskSchema.parse({ ...task, task_payload_digest: digest })).toThrow(
+      'task_payload_digest does not match canonical task payload'
+    );
     for (const forbiddenField of ['lease_token', 'worker_token', 'raw_plan', 'command']) {
       expect(() => testingTaskSchema.parse({ ...task, [forbiddenField]: 'forbidden' })).toThrow();
     }

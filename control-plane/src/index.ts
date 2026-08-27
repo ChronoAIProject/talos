@@ -29,6 +29,7 @@ import {
   StaticTestingPlacementInputVerifier,
   type TestingPlacementInputVerifier
 } from './services/testing-placement-verifier.js';
+import type { TestingExternalSchemaAuthority } from './services/testing-schema-authority.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -54,6 +55,7 @@ export const createControlPlane = (
     testingClaimKeyId?: string;
     testingPlacementPolicy?: TestingPlacementPolicy;
     testingPlacementInputVerifier?: TestingPlacementInputVerifier;
+    testingExternalSchemaAuthority?: TestingExternalSchemaAuthority;
   } = {}
 ): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
@@ -72,7 +74,8 @@ export const createControlPlane = (
     cursorSecret: webhookSecret,
     clock: Date.now,
     placementPolicy: options.testingPlacementPolicy,
-    placementInputVerifier: options.testingPlacementInputVerifier
+    placementInputVerifier: options.testingPlacementInputVerifier,
+    externalSchemaAuthority: options.testingExternalSchemaAuthority
   });
   const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
   if (testingClaimSigningKey === undefined) {
@@ -84,6 +87,7 @@ export const createControlPlane = (
     authorizationProvider: options.testingAuthorizationProvider,
     runtimeFactVerifier: options.testingRuntimeFactVerifier,
     cleanupReceiptVerifier: options.testingCleanupReceiptVerifier,
+    externalSchemaAuthority: options.testingExternalSchemaAuthority,
     clock: Date.now
   });
   const server = createApiServer(service, repository, {
@@ -168,6 +172,7 @@ export * from './services/testing-run-service.js';
 export * from './services/testing-attempt-service.js';
 export * from './services/testing-placement-policy.js';
 export * from './services/testing-placement-verifier.js';
+export * from './services/testing-schema-authority.js';
 export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';

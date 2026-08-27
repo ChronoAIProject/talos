@@ -128,13 +128,16 @@ const attemptBoundReferenceSchema = immutableReferenceSchema.extend({
 }).strict();
 
 const caseResultSetReferenceSchema = attemptBoundReferenceSchema.extend({
-  schema: z.literal('testing-case-result-set.v2')
+  schema: z.literal('testing-case-result-set.v2'),
+  schema_digest: sha256DigestSchema
 }).strict();
 const evidenceManifestReferenceSchema = attemptBoundReferenceSchema.extend({
-  schema: z.literal('testing-evidence-manifest.v1')
+  schema: z.literal('testing-evidence-manifest.v1'),
+  schema_digest: sha256DigestSchema
 }).strict();
 const cleanupReceiptReferenceSchema = attemptBoundReferenceSchema.extend({
-  schema: z.literal('qa.local-cleanup-receipt/v2')
+  schema: z.literal('qa.local-cleanup-receipt/v2'),
+  schema_digest: sha256DigestSchema
 }).strict();
 
 export const terminalReferenceProjectionSchema = z.object({

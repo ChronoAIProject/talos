@@ -250,6 +250,7 @@ describe('MongoRepository testing run persistence', () => {
       id: 'attempt-guarded',
       claimId: 'claim-guarded',
       operation: 'start' as const,
+      taskPayloadDigest: `sha256:${'a'.repeat(64)}`,
       generation: 1,
       status: 'claimed' as const,
       machineId: 'machine-guarded',

@@ -151,7 +151,8 @@
               "attempt_id": "attempt-passed",
               "generation": 1,
               "fence_token": "fence-passed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/passed",
@@ -163,7 +164,8 @@
               "attempt_id": "attempt-passed",
               "generation": 1,
               "fence_token": "fence-passed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/passed",
@@ -175,13 +177,14 @@
               "attempt_id": "attempt-passed",
               "generation": 1,
               "fence_token": "fence-passed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:0521f8e5eac9c841b4eb833fc89d0390ec85120331ea4880d61c616cbc45faaa",
+        "snapshot_digest": "sha256:41987e61e2f324c5109af5ffa39d59b8d988c326d775366b3feadd9e45c0a5a7",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -325,7 +328,8 @@
               "attempt_id": "attempt-product_assertion_failed",
               "generation": 1,
               "fence_token": "fence-product_assertion_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/product_assertion_failed",
@@ -337,7 +341,8 @@
               "attempt_id": "attempt-product_assertion_failed",
               "generation": 1,
               "fence_token": "fence-product_assertion_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/product_assertion_failed",
@@ -349,13 +354,14 @@
               "attempt_id": "attempt-product_assertion_failed",
               "generation": 1,
               "fence_token": "fence-product_assertion_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:7f7c7b9775f8104216fe3d05213f272231d6cca32f1ed2acaa1133d5e5bffa2c",
+        "snapshot_digest": "sha256:9a309c879ed2ae7d83a0d989debf6bcac4dbe7fd6c85d88d29a76ed3f255e69f",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -499,7 +505,8 @@
               "attempt_id": "attempt-runner_runtime_error",
               "generation": 1,
               "fence_token": "fence-runner_runtime_error-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/runner_runtime_error",
@@ -511,7 +518,8 @@
               "attempt_id": "attempt-runner_runtime_error",
               "generation": 1,
               "fence_token": "fence-runner_runtime_error-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/runner_runtime_error",
@@ -523,7 +531,8 @@
               "attempt_id": "attempt-runner_runtime_error",
               "generation": 1,
               "fence_token": "fence-runner_runtime_error-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": {
@@ -533,7 +542,7 @@
         },
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:a8d2337b926ffab32b3a71b6cf1c0bb1bb0f9eda51c6ca365407565a61880c56",
+        "snapshot_digest": "sha256:8e057bbf2a266d43a7d56f4f5e66e8f96c24271eb3b5931eeb839f66d4dbea6e",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -677,7 +686,8 @@
               "attempt_id": "attempt-all_skipped",
               "generation": 1,
               "fence_token": "fence-all_skipped-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/all_skipped",
@@ -689,7 +699,8 @@
               "attempt_id": "attempt-all_skipped",
               "generation": 1,
               "fence_token": "fence-all_skipped-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/all_skipped",
@@ -701,13 +712,14 @@
               "attempt_id": "attempt-all_skipped",
               "generation": 1,
               "fence_token": "fence-all_skipped-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:7a45982b7558c3ede96aa1066eadd43885074b95b5988e39e65206004c89bf33",
+        "snapshot_digest": "sha256:1e88ddef9febedb3e4a5b21946038b0459ea3d7ccaf60e894ba74597a87fcac3",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -851,7 +863,8 @@
               "attempt_id": "attempt-evidence_incomplete",
               "generation": 1,
               "fence_token": "fence-evidence_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/evidence_incomplete",
@@ -863,7 +876,8 @@
               "attempt_id": "attempt-evidence_incomplete",
               "generation": 1,
               "fence_token": "fence-evidence_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/evidence_incomplete",
@@ -875,13 +889,14 @@
               "attempt_id": "attempt-evidence_incomplete",
               "generation": 1,
               "fence_token": "fence-evidence_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:1acd8d0683f67b32e41dd25e3c02165abfa6889c83d97d84317a42f317b8944d",
+        "snapshot_digest": "sha256:4f149293e39e7baff9fb656ce1c560c9858e86af27a04aac9627c2863d410142",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -1025,7 +1040,8 @@
               "attempt_id": "attempt-evidence_unavailable",
               "generation": 1,
               "fence_token": "fence-evidence_unavailable-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/evidence_unavailable",
@@ -1037,13 +1053,14 @@
               "attempt_id": "attempt-evidence_unavailable",
               "generation": 1,
               "fence_token": "fence-evidence_unavailable-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:27d983ca7c10a6484c107e99392c118613855531cac4ce64842887789f40be0f",
+        "snapshot_digest": "sha256:816c9c404fdac4f7064d6ed09e7674ef58f55b3e6c758aee59d345d2f059facb",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -1187,7 +1204,8 @@
               "attempt_id": "attempt-cleanup_failed",
               "generation": 1,
               "fence_token": "fence-cleanup_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/cleanup_failed",
@@ -1199,7 +1217,8 @@
               "attempt_id": "attempt-cleanup_failed",
               "generation": 1,
               "fence_token": "fence-cleanup_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/cleanup_failed",
@@ -1211,13 +1230,14 @@
               "attempt_id": "attempt-cleanup_failed",
               "generation": 1,
               "fence_token": "fence-cleanup_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:26409f2632a4e04eaa847715b30eaca438ef28713211f328621f63c88f0fe16f",
+        "snapshot_digest": "sha256:a6c6266adf2351dde796d7b4a5ef972628302b6a1634371a6a44a5366c8fde0e",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -1361,7 +1381,8 @@
               "attempt_id": "attempt-cleanup_incomplete",
               "generation": 1,
               "fence_token": "fence-cleanup_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/cleanup_incomplete",
@@ -1373,7 +1394,8 @@
               "attempt_id": "attempt-cleanup_incomplete",
               "generation": 1,
               "fence_token": "fence-cleanup_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/cleanup_incomplete",
@@ -1385,13 +1407,14 @@
               "attempt_id": "attempt-cleanup_incomplete",
               "generation": 1,
               "fence_token": "fence-cleanup_incomplete-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:92455a4bd9213f45a09e42a6b480839cf64f0af8f67ddf2e3ae5a49b1a25e885",
+        "snapshot_digest": "sha256:f7b40861cecd77478870c1ca512de62470aae86753d492421b5e535befe16c9d",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -1657,7 +1680,8 @@
               "attempt_id": "attempt-execution_timeout",
               "generation": 1,
               "fence_token": "fence-execution_timeout-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/execution_timeout",
@@ -1669,13 +1693,14 @@
               "attempt_id": "attempt-execution_timeout",
               "generation": 1,
               "fence_token": "fence-execution_timeout-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:26173480aca8c70d2e64b2158ddf905f75c671fedfdc42fd977a44a3d65683d2",
+        "snapshot_digest": "sha256:ff6c900c535c358dab3f879b7f736ba73c956bf89a81a3b5d17465ce0b4dc84c",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -1949,7 +1974,8 @@
               "attempt_id": "attempt-terminal_blocked",
               "generation": 1,
               "fence_token": "fence-terminal_blocked-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/terminal_blocked",
@@ -1961,7 +1987,8 @@
               "attempt_id": "attempt-terminal_blocked",
               "generation": 1,
               "fence_token": "fence-terminal_blocked-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/terminal_blocked",
@@ -1973,13 +2000,14 @@
               "attempt_id": "attempt-terminal_blocked",
               "generation": 1,
               "fence_token": "fence-terminal_blocked-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:77351a929a192afbcf91fb2d20671ec1cb5f04ee59d06f8e1c2402c7a6e53011",
+        "snapshot_digest": "sha256:b5ad032928474d572b73d34105cb692f15a5e119df40167f403104b08e3dbcf9",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -2253,7 +2281,8 @@
               "attempt_id": "attempt-upload_failed",
               "generation": 1,
               "fence_token": "fence-upload_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/upload_failed",
@@ -2265,7 +2294,8 @@
               "attempt_id": "attempt-upload_failed",
               "generation": 1,
               "fence_token": "fence-upload_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/upload_failed",
@@ -2277,13 +2307,14 @@
               "attempt_id": "attempt-upload_failed",
               "generation": 1,
               "fence_token": "fence-upload_failed-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:e993151d62bcd2bb0b5717c9fc720d37397f11dea1cdb2940fcd4ac511c295e7",
+        "snapshot_digest": "sha256:129df6a96fb02d3463b206a18f0da710adab0835a87d0dbfb5afd56a460b47b0",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -2427,7 +2458,8 @@
               "attempt_id": "attempt-upload_expired",
               "generation": 1,
               "fence_token": "fence-upload_expired-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/upload_expired",
@@ -2439,7 +2471,8 @@
               "attempt_id": "attempt-upload_expired",
               "generation": 1,
               "fence_token": "fence-upload_expired-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/upload_expired",
@@ -2451,13 +2484,14 @@
               "attempt_id": "attempt-upload_expired",
               "generation": 1,
               "fence_token": "fence-upload_expired-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:128ab0fd14c695909267c7b89069f4f876877779a246bd98cfba1863eba601b4",
+        "snapshot_digest": "sha256:22dffb98068fb90603b31e518841f6d77b349b1877976cd69b88fbbb5cb8cf28",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -2598,7 +2632,8 @@
               "attempt_id": "attempt-upload_pending",
               "generation": 1,
               "fence_token": "fence-upload_pending-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "evidence_manifest": {
             "ref": "artifact://testing/evidence/upload_pending",
@@ -2610,7 +2645,8 @@
               "attempt_id": "attempt-upload_pending",
               "generation": 1,
               "fence_token": "fence-upload_pending-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "cleanup_receipt": {
             "ref": "artifact://testing/cleanup/upload_pending",
@@ -2622,13 +2658,14 @@
               "attempt_id": "attempt-upload_pending",
               "generation": 1,
               "fence_token": "fence-upload_pending-123456"
-            }
+            },
+            "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
         "safe_error": null,
         "created_at": "2026-08-22T00:00:00.000Z",
         "updated_at": "2026-08-22T00:00:00.000Z",
-        "snapshot_digest": "sha256:9247d92688256923158c3097f4edb616f6e1dea60a7dd8530d6985d6d671ec36",
+        "snapshot_digest": "sha256:ee8b2bdb6f5cdcb22091767067b582adcdcf32551c8df5b4f8f66312965699aa",
         "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
       }
     },
@@ -2824,7 +2861,7 @@
           "replacement_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters",
           "snapshot_ref": "talos://testing/runs/fixture-cursor_expiry/snapshots/3",
           "snapshot_version": 3,
-          "snapshot_digest": "sha256:17f5ed4cb1eed77734307f47d2432ea62c9deb00021af1b08b8b03ef3cff6550"
+          "snapshot_digest": "sha256:be5fd147fbfc79cad2ec6dd49cbc4445ad80688fe60325dc2c95c222ae707bb8"
         }
       }
     },
@@ -3793,7 +3830,8 @@
                 "attempt_id": "attempt-recovery_chain",
                 "generation": 1,
                 "fence_token": "fence-recovery_chain-123456"
-              }
+              },
+              "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "evidence_manifest": {
               "ref": "artifact://testing/evidence/recovery_chain",
@@ -3805,7 +3843,8 @@
                 "attempt_id": "attempt-recovery_chain",
                 "generation": 1,
                 "fence_token": "fence-recovery_chain-123456"
-              }
+              },
+              "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "cleanup_receipt": {
               "ref": "artifact://testing/cleanup/recovery_chain",
@@ -3817,13 +3856,14 @@
                 "attempt_id": "attempt-recovery_chain",
                 "generation": 1,
                 "fence_token": "fence-recovery_chain-123456"
-              }
+              },
+              "schema_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
           },
           "safe_error": null,
           "created_at": "2026-08-22T00:00:00.000Z",
           "updated_at": "2026-08-22T00:00:00.000Z",
-          "snapshot_digest": "sha256:b6ef137ae74a09a698143e163bf1924457bd1e5b81c7b71b7f60fd63901ed401",
+          "snapshot_digest": "sha256:f46f345a4aeb1a10d1da9be08b6ce0a2c036a4882aadac520454718fcee9dce1",
           "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
         },
         "rerun_product_cases": false

@@ -10,8 +10,10 @@ import {
 import {
   canonicalJson,
   computeTestingCurrentClaimDigest,
+  computeTestingReconcileTaskPayloadDigest,
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
+  computeTestingTaskPayloadDigest,
   identifierSchema,
   sha256DigestSchema,
   testingCurrentClaimEnvelopeCoreSchema,
@@ -58,6 +60,13 @@ import {
 import type { Machine, Pool } from '../domain/types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from '../storage/repository.js';
 import { newId } from '../util/id.js';
+import {
+  resolveTestingExternalSchemaCapabilities,
+  type TestingExternalSchemaAuthority,
+  type TestingExternalSchemaOwner,
+  type TestingExternalSchemaReferenceVerification,
+  type TestingTerminalSchemaContract
+} from './testing-schema-authority.js';
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
 const activeAttemptStatuses = new Set(['reserved', 'claimed', 'local_accepted', 'running', 'closing']);
@@ -78,6 +87,21 @@ const testingCleanupReceiptVerificationSchema = z.object({
     'cleanup_residual_retryable',
     'cleanup_residual_blocking'
   ]),
+  verifiedAt: z.string().datetime({ offset: true })
+}).strict();
+
+const testingExternalSchemaReferenceVerificationSchema = z.object({
+  schemaVersion: z.literal('talos.testing-external-schema-verification/v1'),
+  authorityId: identifierSchema,
+  verificationId: identifierSchema,
+  contract: z.enum(['case_result_set', 'evidence_manifest', 'cleanup_receipt']),
+  owner: z.enum(['testing-packages', 'local-qa-runtime']),
+  referenceSchema: z.string().min(1).max(255),
+  schemaId: identifierSchema,
+  version: identifierSchema,
+  schemaDigest: sha256DigestSchema,
+  artifactRef: z.string().min(1).max(2_048),
+  artifactDigest: sha256DigestSchema,
   verifiedAt: z.string().datetime({ offset: true })
 }).strict();
 
@@ -239,6 +263,7 @@ export interface TestingAttemptServiceOptions {
   readonly authorizationProvider?: TestingAuthorizationProvider;
   readonly runtimeFactVerifier?: TestingRuntimeFactVerifier;
   readonly cleanupReceiptVerifier?: TestingCleanupReceiptVerifier;
+  readonly externalSchemaAuthority?: TestingExternalSchemaAuthority;
   readonly clock?: () => number;
   readonly leaseSeconds?: number;
 }
@@ -416,9 +441,30 @@ export class TestingAttemptService {
       nowMs + this.leaseSeconds * 1_000,
       Date.parse(reconcileDeadline)
     )).toISOString();
+    const leaseClaimBinding = {
+      schema: 'talos.testing-lease-claim/v1' as const,
+      ref: `talos://testing/claims/${run.id}/${claimId}`,
+      expires_at: reconcileDeadline
+    };
+    const taskPayloadDigest = computeTestingReconcileTaskPayloadDigest({
+      schema_version: 'talos.testing-reconcile-task/v1',
+      operation: 'reconcile',
+      qa_run_id: run.id,
+      task_id: run.task.id,
+      dispatch_attempt_id: attempt.id,
+      generation: attempt.generation,
+      machine_id: machineId,
+      worker_id: workerId,
+      lease_id: leaseId,
+      fence_token: attempt.fenceToken,
+      admission_nonce: attempt.admissionNonce,
+      lease_claim: leaseClaimBinding,
+      deadline: reconcileDeadline
+    });
     const identity = this.claimIdentityFromValues(run, {
       claimId,
       operation: 'reconcile',
+      taskPayloadDigest,
       attemptId: attempt.id,
       machineId,
       workerId,
@@ -430,10 +476,8 @@ export class TestingAttemptService {
       expiresAt: reconcileDeadline
     });
     const leaseClaim = {
-      schema: 'talos.testing-lease-claim/v1' as const,
-      ref: `talos://testing/claims/${run.id}/${claimId}`,
+      ...leaseClaimBinding,
       digest: computeTestingCurrentClaimDigest(identity),
-      expires_at: reconcileDeadline
     };
     let authorization: TestingReconcileTask['local_request_authorization'];
     try {
@@ -461,6 +505,7 @@ export class TestingAttemptService {
       priorClaims: [...attempt.priorClaims, this.claimRecord(attempt)],
       claimId,
       operation: 'reconcile',
+      taskPayloadDigest,
       workerId,
       leaseId,
       leaseTokenHash: hashSecret(leaseToken),
@@ -499,6 +544,7 @@ export class TestingAttemptService {
       fence_token: attempt.fenceToken,
       admission_nonce: attempt.admissionNonce,
       lease_claim: leaseClaim,
+      task_payload_digest: taskPayloadDigest,
       local_request_authorization: authorization,
       deadline: reconcileDeadline
     });
@@ -701,6 +747,7 @@ export class TestingAttemptService {
       const results = input.results === undefined ? undefined : testingTerminalRefsSchema.parse(input.results);
       if (results !== undefined) this.assertTerminalBinding(run, attempt, results);
       this.assertTerminalOutcomes(input, results);
+      await this.verifyExternalSchemaProofs(results);
       const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
       const now = new Date(this.clock()).toISOString();
       const closing = makeEvent(
@@ -860,9 +907,36 @@ export class TestingAttemptService {
       await this.closeBeforeAcceptance(run, undefined, 'deadline_exceeded', 'failed');
       return undefined;
     }
+    const leaseClaimBinding = {
+      schema: 'talos.testing-lease-claim/v1' as const,
+      ref: `talos://testing/claims/${run.id}/${claimId}`,
+      expires_at: deadline
+    };
+    const taskPayloadDigest = computeTestingTaskPayloadDigest({
+      schema_version: 'talos.testing-task/v1',
+      id: run.task.id,
+      kind: 'testing',
+      interaction: 'managed',
+      qa_run_id: run.id,
+      dispatch_attempt_id: attemptId,
+      generation,
+      machine_id: machine.id,
+      worker_id: workerId,
+      lease_id: leaseId,
+      fence_token: fenceToken,
+      admission_nonce: admissionNonce,
+      lease_claim: leaseClaimBinding,
+      inputs: run.request.inputs,
+      runner: run.request.inputs.testing_package,
+      policy_ref: run.request.policy_binding.policy,
+      budgets_ref: run.request.policy_binding.budgets,
+      expected_runtime_capability: run.request.placement_requirements.testing_runtime,
+      deadline
+    });
     const identity = this.claimIdentityFromValues(run, {
       claimId,
       operation: 'start',
+      taskPayloadDigest,
       attemptId,
       machineId: machine.id,
       workerId,
@@ -874,15 +948,14 @@ export class TestingAttemptService {
       expiresAt: deadline
     });
     const leaseClaim = {
-      schema: 'talos.testing-lease-claim/v1' as const,
-      ref: `talos://testing/claims/${run.id}/${claimId}`,
+      ...leaseClaimBinding,
       digest: computeTestingCurrentClaimDigest(identity),
-      expires_at: deadline
     };
     const attempt: TestingAttemptRecord = {
       id: attemptId,
       claimId,
       operation: 'start',
+      taskPayloadDigest,
       generation,
       status: 'reserved',
       machineId: machine.id,
@@ -994,6 +1067,7 @@ export class TestingAttemptService {
       fence_token: fenceToken,
       admission_nonce: admissionNonce,
       lease_claim: leaseClaim,
+      task_payload_digest: taskPayloadDigest,
       inputs: run.request.inputs,
       runner: run.request.inputs.testing_package,
       policy_ref: run.request.policy_binding.policy,
@@ -1255,6 +1329,7 @@ export class TestingAttemptService {
     return this.claimIdentityFromValues(run, {
       claimId: claim.claimId,
       operation: claim.operation,
+      taskPayloadDigest: claim.taskPayloadDigest,
       attemptId: attempt.id,
       machineId: attempt.machineId,
       workerId: claim.workerId,
@@ -1272,6 +1347,7 @@ export class TestingAttemptService {
     values: {
       readonly claimId: string;
       readonly operation: 'start' | 'reconcile';
+      readonly taskPayloadDigest: string;
       readonly attemptId: string;
       readonly machineId: string;
       readonly workerId: string;
@@ -1296,6 +1372,7 @@ export class TestingAttemptService {
       lease_id: values.leaseId,
       fence_token: values.fenceToken,
       admission_nonce: values.admissionNonce,
+      task_payload_digest: values.taskPayloadDigest,
       issued_at: values.issuedAt,
       expires_at: values.expiresAt
     };
@@ -1597,6 +1674,7 @@ export class TestingAttemptService {
           );
         }
       }
+      await this.verifyExternalSchemaProofs(results);
       const cleanupVerification = await this.verifyCleanupProof(run, attempt, input.cleanupOutcome, results);
       const now = new Date(this.clock()).toISOString();
       const event = makeEvent(
@@ -1834,6 +1912,60 @@ export class TestingAttemptService {
     };
   }
 
+  private async verifyExternalSchemaProofs(results: TestingTerminalRefs | undefined): Promise<void> {
+    if (results === undefined) return;
+    const authority = this.options.externalSchemaAuthority;
+    const capabilities = await resolveTestingExternalSchemaCapabilities(authority);
+    const references = [
+      ['case_result_set', 'testing-packages', results.case_result_set],
+      ['evidence_manifest', 'local-qa-runtime', results.evidence_manifest],
+      ['cleanup_receipt', 'local-qa-runtime', results.cleanup_receipt]
+    ] as const;
+    for (const [contract, owner, reference] of references) {
+      if (reference === undefined) continue;
+      const capability = capabilities.find((candidate) => candidate.contract === contract && candidate.owner === owner);
+      if (authority === undefined || capability?.status !== 'available') {
+        throw new TalosError(
+          'external_schema_authority_unavailable',
+          'upstream schema authority is unavailable for terminal reference verification',
+          503
+        );
+      }
+      let verification: TestingExternalSchemaReferenceVerification | undefined;
+      try {
+        verification = await authority.verifyTerminalReference(
+          contract as TestingTerminalSchemaContract,
+          owner as TestingExternalSchemaOwner,
+          reference
+        );
+      } catch {
+        throw new TalosError(
+          'external_schema_authority_unavailable',
+          'upstream schema authority is unavailable for terminal reference verification',
+          503
+        );
+      }
+      const parsed = testingExternalSchemaReferenceVerificationSchema.safeParse(verification);
+      if (
+        !parsed.success ||
+        parsed.data.contract !== contract || parsed.data.owner !== owner ||
+        parsed.data.referenceSchema !== reference.schema ||
+        parsed.data.schemaDigest !== reference.schema_digest ||
+        parsed.data.artifactRef !== reference.ref || parsed.data.artifactDigest !== reference.digest ||
+        !capability.schemas.some((identity) =>
+          identity.schema_id === parsed.data.schemaId &&
+          identity.version === parsed.data.version &&
+          identity.digest === parsed.data.schemaDigest)
+      ) {
+        throw new TalosError(
+          'invalid_external_schema_reference',
+          'terminal reference schema identity was not verified by its owning authority',
+          401
+        );
+      }
+    }
+  }
+
   private hasReservationReleaseProof(run: TestingRunRecord, attempt: TestingAttemptRecord): boolean {
     if (!['complete', 'not_required'].includes(run.cleanupOutcome)) return false;
     if (attempt.reservationCancellationReceipt !== undefined) return true;
@@ -1899,6 +2031,7 @@ export class TestingAttemptService {
     return {
       claimId: attempt.claimId,
       operation: attempt.operation,
+      taskPayloadDigest: attempt.taskPayloadDigest,
       workerId: attempt.workerId,
       leaseId: attempt.leaseId,
       leaseTokenHash: attempt.leaseTokenHash,
