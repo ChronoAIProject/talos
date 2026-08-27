@@ -1,0 +1,3833 @@
+{
+  "schema_version": "talos.testing-contract-fixtures/v1",
+  "authority": "talos",
+  "canonical_terminal_authority": "talos.testing-run-snapshot/v1",
+  "operations": [
+    "get_capabilities",
+    "submit",
+    "get",
+    "events",
+    "cancel"
+  ],
+  "side_effects": false,
+  "fixtures": [
+    {
+      "id": "passed",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-passed",
+        "request_id": "request:fixture-passed",
+        "client_correlation_id": "client:fixture-passed",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-passed",
+          "verified_client_correlation_id": "client:fixture-passed",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-passed",
+            "digest": "sha256:ea528ca26c6bb68a28cf2898607d235d26d25a233f42e408e8cd8328766053b8",
+            "operation": "submit",
+            "run_id": "fixture-passed"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-passed",
+            "digest": "sha256:ea528ca26c6bb68a28cf2898607d235d26d25a233f42e408e8cd8328766053b8",
+            "operation": "submit",
+            "run_id": "fixture-passed",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-passed",
+              "digest": "sha256:ea528ca26c6bb68a28cf2898607d235d26d25a233f42e408e8cd8328766053b8"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-passed",
+            "digest": "sha256:ea528ca26c6bb68a28cf2898607d235d26d25a233f42e408e8cd8328766053b8"
+          },
+          "verified_request_digest": "sha256:89d0212fb89b63f74565fb6a6ccbd16180d7ec6dc62e3b6b9f31b2add46c8d7f",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-passed/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-passed",
+          "task_id": "task-passed",
+          "generation": 1,
+          "machine_id": "machine-passed",
+          "worker_id": "worker-passed",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-passed",
+            "task_id": "task-passed",
+            "attempt_id": "attempt-passed",
+            "generation": 1,
+            "fence_token": "fence-passed-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/passed",
+            "digest": "sha256:64b123788194612074e7dcb75b77083bd47d0f9dfaa90728f71cf60efd615cdb",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-passed",
+              "task_id": "task-passed",
+              "attempt_id": "attempt-passed",
+              "generation": 1,
+              "fence_token": "fence-passed-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/passed",
+            "digest": "sha256:99502679cae6834265de077125b9f82da332c6a257f08793439fb89aa93b0661",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-passed",
+              "task_id": "task-passed",
+              "attempt_id": "attempt-passed",
+              "generation": 1,
+              "fence_token": "fence-passed-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/passed",
+            "digest": "sha256:35abc9e146e46224c3cc5e0a11234768b4718048a08c8fe714f4a25f563c374c",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-passed",
+              "task_id": "task-passed",
+              "attempt_id": "attempt-passed",
+              "generation": 1,
+              "fence_token": "fence-passed-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:0521f8e5eac9c841b4eb833fc89d0390ec85120331ea4880d61c616cbc45faaa",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "product_assertion_failed",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-product_assertion_failed",
+        "request_id": "request:fixture-product_assertion_failed",
+        "client_correlation_id": "client:fixture-product_assertion_failed",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-product_assertion_failed",
+          "verified_client_correlation_id": "client:fixture-product_assertion_failed",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-product_assertion_failed",
+            "digest": "sha256:ac6d9fb8979bc6f8985311d008e72c58bca663eb5fd1eba4f394688e4e3162ac",
+            "operation": "submit",
+            "run_id": "fixture-product_assertion_failed"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-product_assertion_failed",
+            "digest": "sha256:ac6d9fb8979bc6f8985311d008e72c58bca663eb5fd1eba4f394688e4e3162ac",
+            "operation": "submit",
+            "run_id": "fixture-product_assertion_failed",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-product_assertion_failed",
+              "digest": "sha256:ac6d9fb8979bc6f8985311d008e72c58bca663eb5fd1eba4f394688e4e3162ac"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-product_assertion_failed",
+            "digest": "sha256:ac6d9fb8979bc6f8985311d008e72c58bca663eb5fd1eba4f394688e4e3162ac"
+          },
+          "verified_request_digest": "sha256:fc9f1454ae883538538485303b6f5a6f8d6da6b86501d7e4105be368378930d5",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-product_assertion_failed/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "failed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-product_assertion_failed",
+          "task_id": "task-product_assertion_failed",
+          "generation": 1,
+          "machine_id": "machine-product_assertion_failed",
+          "worker_id": "worker-product_assertion_failed",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-product_assertion_failed",
+            "task_id": "task-product_assertion_failed",
+            "attempt_id": "attempt-product_assertion_failed",
+            "generation": 1,
+            "fence_token": "fence-product_assertion_failed-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/product_assertion_failed",
+            "digest": "sha256:08fe931781334f6372424dda14d948043ccf04c4a19aa37872be2b4aa3d149de",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-product_assertion_failed",
+              "task_id": "task-product_assertion_failed",
+              "attempt_id": "attempt-product_assertion_failed",
+              "generation": 1,
+              "fence_token": "fence-product_assertion_failed-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/product_assertion_failed",
+            "digest": "sha256:4707de3e69706c733f401850286ce852500ae96a3f15d28320f471846d4bf5c0",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-product_assertion_failed",
+              "task_id": "task-product_assertion_failed",
+              "attempt_id": "attempt-product_assertion_failed",
+              "generation": 1,
+              "fence_token": "fence-product_assertion_failed-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/product_assertion_failed",
+            "digest": "sha256:563941fb47cbd3581a60e0f75d90cfb1625154836fd1652089338ed13420b4ce",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-product_assertion_failed",
+              "task_id": "task-product_assertion_failed",
+              "attempt_id": "attempt-product_assertion_failed",
+              "generation": 1,
+              "fence_token": "fence-product_assertion_failed-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:7f7c7b9775f8104216fe3d05213f272231d6cca32f1ed2acaa1133d5e5bffa2c",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "runner_runtime_error",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-runner_runtime_error",
+        "request_id": "request:fixture-runner_runtime_error",
+        "client_correlation_id": "client:fixture-runner_runtime_error",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-runner_runtime_error",
+          "verified_client_correlation_id": "client:fixture-runner_runtime_error",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-runner_runtime_error",
+            "digest": "sha256:682d1bafd0699585733de78d8c70f84c1ff075fb926d785ab3a3b1de0aec3242",
+            "operation": "submit",
+            "run_id": "fixture-runner_runtime_error"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-runner_runtime_error",
+            "digest": "sha256:682d1bafd0699585733de78d8c70f84c1ff075fb926d785ab3a3b1de0aec3242",
+            "operation": "submit",
+            "run_id": "fixture-runner_runtime_error",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-runner_runtime_error",
+              "digest": "sha256:682d1bafd0699585733de78d8c70f84c1ff075fb926d785ab3a3b1de0aec3242"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-runner_runtime_error",
+            "digest": "sha256:682d1bafd0699585733de78d8c70f84c1ff075fb926d785ab3a3b1de0aec3242"
+          },
+          "verified_request_digest": "sha256:963c7f5a429445479f7a5b3fd5ab0d614d266ca058b34397441cdd85ef018d8b",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-runner_runtime_error/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "error",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-runner_runtime_error",
+          "task_id": "task-runner_runtime_error",
+          "generation": 1,
+          "machine_id": "machine-runner_runtime_error",
+          "worker_id": "worker-runner_runtime_error",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 0,
+          "failed": 0,
+          "blocked": 0,
+          "error": 1,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-runner_runtime_error",
+            "task_id": "task-runner_runtime_error",
+            "attempt_id": "attempt-runner_runtime_error",
+            "generation": 1,
+            "fence_token": "fence-runner_runtime_error-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/runner_runtime_error",
+            "digest": "sha256:ac60831123029f52e0cda921f61d0de4d055e42f78aba0e2a998ab1e85bd0650",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-runner_runtime_error",
+              "task_id": "task-runner_runtime_error",
+              "attempt_id": "attempt-runner_runtime_error",
+              "generation": 1,
+              "fence_token": "fence-runner_runtime_error-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/runner_runtime_error",
+            "digest": "sha256:14da7a96da6ed9a5e0c068baa577e960646f9ac3c019de3ef920d1fef4256332",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-runner_runtime_error",
+              "task_id": "task-runner_runtime_error",
+              "attempt_id": "attempt-runner_runtime_error",
+              "generation": 1,
+              "fence_token": "fence-runner_runtime_error-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/runner_runtime_error",
+            "digest": "sha256:e5b2579dfa9b1d57ef44e81ba38321574d39b39728acfa663dd7b6eb63da9eed",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-runner_runtime_error",
+              "task_id": "task-runner_runtime_error",
+              "attempt_id": "attempt-runner_runtime_error",
+              "generation": 1,
+              "fence_token": "fence-runner_runtime_error-123456"
+            }
+          }
+        },
+        "safe_error": {
+          "code": "runner_error",
+          "message": "Runner returned a structured execution error",
+          "retryable": false
+        },
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:a8d2337b926ffab32b3a71b6cf1c0bb1bb0f9eda51c6ca365407565a61880c56",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "all_skipped",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-all_skipped",
+        "request_id": "request:fixture-all_skipped",
+        "client_correlation_id": "client:fixture-all_skipped",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-all_skipped",
+          "verified_client_correlation_id": "client:fixture-all_skipped",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-all_skipped",
+            "digest": "sha256:c2a1f43df0faa8abdb0911c1be1570760b5ea63321c7c9a80c9c8c2495b3b38f",
+            "operation": "submit",
+            "run_id": "fixture-all_skipped"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-all_skipped",
+            "digest": "sha256:c2a1f43df0faa8abdb0911c1be1570760b5ea63321c7c9a80c9c8c2495b3b38f",
+            "operation": "submit",
+            "run_id": "fixture-all_skipped",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-all_skipped",
+              "digest": "sha256:c2a1f43df0faa8abdb0911c1be1570760b5ea63321c7c9a80c9c8c2495b3b38f"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-all_skipped",
+            "digest": "sha256:c2a1f43df0faa8abdb0911c1be1570760b5ea63321c7c9a80c9c8c2495b3b38f"
+          },
+          "verified_request_digest": "sha256:6b180c2b626773167263f5d3a6ef896dd2ca4389eaa1e86b28e150836797670a",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-all_skipped/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "all_skipped",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_all_skipped",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-all_skipped",
+          "task_id": "task-all_skipped",
+          "generation": 1,
+          "machine_id": "machine-all_skipped",
+          "worker_id": "worker-all_skipped",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 2,
+          "passed": 0,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 2,
+          "all_skipped": true
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-all_skipped",
+            "task_id": "task-all_skipped",
+            "attempt_id": "attempt-all_skipped",
+            "generation": 1,
+            "fence_token": "fence-all_skipped-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/all_skipped",
+            "digest": "sha256:a10db6a9bd6c7e4378ab68207d66d58dcb03c487a306f8458e485bfcfd28cad7",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-all_skipped",
+              "task_id": "task-all_skipped",
+              "attempt_id": "attempt-all_skipped",
+              "generation": 1,
+              "fence_token": "fence-all_skipped-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/all_skipped",
+            "digest": "sha256:189b64f222a25dd9adfae154c110813a66661c8970a43668aabef8e0fab733ea",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-all_skipped",
+              "task_id": "task-all_skipped",
+              "attempt_id": "attempt-all_skipped",
+              "generation": 1,
+              "fence_token": "fence-all_skipped-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/all_skipped",
+            "digest": "sha256:2ae3381697b01293eb149b0889d45be67312cb9354bf796351177a354594bbcb",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-all_skipped",
+              "task_id": "task-all_skipped",
+              "attempt_id": "attempt-all_skipped",
+              "generation": 1,
+              "fence_token": "fence-all_skipped-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:7a45982b7558c3ede96aa1066eadd43885074b95b5988e39e65206004c89bf33",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "evidence_incomplete",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-evidence_incomplete",
+        "request_id": "request:fixture-evidence_incomplete",
+        "client_correlation_id": "client:fixture-evidence_incomplete",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-evidence_incomplete",
+          "verified_client_correlation_id": "client:fixture-evidence_incomplete",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-evidence_incomplete",
+            "digest": "sha256:d0aa08f2c6be91990651bcd0a9e4f5c06e14662da8e9f4f303cef9dd1fa5b9e0",
+            "operation": "submit",
+            "run_id": "fixture-evidence_incomplete"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-evidence_incomplete",
+            "digest": "sha256:d0aa08f2c6be91990651bcd0a9e4f5c06e14662da8e9f4f303cef9dd1fa5b9e0",
+            "operation": "submit",
+            "run_id": "fixture-evidence_incomplete",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-evidence_incomplete",
+              "digest": "sha256:d0aa08f2c6be91990651bcd0a9e4f5c06e14662da8e9f4f303cef9dd1fa5b9e0"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-evidence_incomplete",
+            "digest": "sha256:d0aa08f2c6be91990651bcd0a9e4f5c06e14662da8e9f4f303cef9dd1fa5b9e0"
+          },
+          "verified_request_digest": "sha256:ec6ffa23808345a205bb06a44fa1958bda3b1c1eb0f36ef7e8236f4952623bea",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-evidence_incomplete/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "partial",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-evidence_incomplete",
+          "task_id": "task-evidence_incomplete",
+          "generation": 1,
+          "machine_id": "machine-evidence_incomplete",
+          "worker_id": "worker-evidence_incomplete",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-evidence_incomplete",
+            "task_id": "task-evidence_incomplete",
+            "attempt_id": "attempt-evidence_incomplete",
+            "generation": 1,
+            "fence_token": "fence-evidence_incomplete-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/evidence_incomplete",
+            "digest": "sha256:ded7582dfb7a19394f96337e2c8f4f49e0a68f7cd3e2e7ee7ed11231eb20141a",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-evidence_incomplete",
+              "task_id": "task-evidence_incomplete",
+              "attempt_id": "attempt-evidence_incomplete",
+              "generation": 1,
+              "fence_token": "fence-evidence_incomplete-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/evidence_incomplete",
+            "digest": "sha256:0ab8f917209fe462b6c5212fc3fc8e505b0806fb6d61398ede1bdb068c7efbce",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-evidence_incomplete",
+              "task_id": "task-evidence_incomplete",
+              "attempt_id": "attempt-evidence_incomplete",
+              "generation": 1,
+              "fence_token": "fence-evidence_incomplete-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/evidence_incomplete",
+            "digest": "sha256:612d5023160ab1bf949514d9ed07289b29cede34aab45f620604fde250c2acde",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-evidence_incomplete",
+              "task_id": "task-evidence_incomplete",
+              "attempt_id": "attempt-evidence_incomplete",
+              "generation": 1,
+              "fence_token": "fence-evidence_incomplete-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:1acd8d0683f67b32e41dd25e3c02165abfa6889c83d97d84317a42f317b8944d",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "evidence_unavailable",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-evidence_unavailable",
+        "request_id": "request:fixture-evidence_unavailable",
+        "client_correlation_id": "client:fixture-evidence_unavailable",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-evidence_unavailable",
+          "verified_client_correlation_id": "client:fixture-evidence_unavailable",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-evidence_unavailable",
+            "digest": "sha256:d49dccf4ac18b99a3f6c0a23062feeb742b4a05180ea880eba692499e5adbfe3",
+            "operation": "submit",
+            "run_id": "fixture-evidence_unavailable"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-evidence_unavailable",
+            "digest": "sha256:d49dccf4ac18b99a3f6c0a23062feeb742b4a05180ea880eba692499e5adbfe3",
+            "operation": "submit",
+            "run_id": "fixture-evidence_unavailable",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-evidence_unavailable",
+              "digest": "sha256:d49dccf4ac18b99a3f6c0a23062feeb742b4a05180ea880eba692499e5adbfe3"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-evidence_unavailable",
+            "digest": "sha256:d49dccf4ac18b99a3f6c0a23062feeb742b4a05180ea880eba692499e5adbfe3"
+          },
+          "verified_request_digest": "sha256:3e574cb4ca7697c669db12dce711d89b79940a05ccdb8d548794195414506c50",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-evidence_unavailable/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "unavailable",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-evidence_unavailable",
+          "task_id": "task-evidence_unavailable",
+          "generation": 1,
+          "machine_id": "machine-evidence_unavailable",
+          "worker_id": "worker-evidence_unavailable",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-evidence_unavailable",
+            "task_id": "task-evidence_unavailable",
+            "attempt_id": "attempt-evidence_unavailable",
+            "generation": 1,
+            "fence_token": "fence-evidence_unavailable-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/evidence_unavailable",
+            "digest": "sha256:1a85e4e08441c09715a48d8dfc799308177283b923e52f20644e959efb1cc55a",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-evidence_unavailable",
+              "task_id": "task-evidence_unavailable",
+              "attempt_id": "attempt-evidence_unavailable",
+              "generation": 1,
+              "fence_token": "fence-evidence_unavailable-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/evidence_unavailable",
+            "digest": "sha256:6d0ab03d1de50ea73318f3363fa628f21606dc7c2bf3f70617a9ed2a071a2411",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-evidence_unavailable",
+              "task_id": "task-evidence_unavailable",
+              "attempt_id": "attempt-evidence_unavailable",
+              "generation": 1,
+              "fence_token": "fence-evidence_unavailable-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:27d983ca7c10a6484c107e99392c118613855531cac4ce64842887789f40be0f",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "cleanup_failed",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-cleanup_failed",
+        "request_id": "request:fixture-cleanup_failed",
+        "client_correlation_id": "client:fixture-cleanup_failed",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-cleanup_failed",
+          "verified_client_correlation_id": "client:fixture-cleanup_failed",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-cleanup_failed",
+            "digest": "sha256:e3243156fb626792c08aab3d9cdee7180715b44accbe573389cb1543dfd0209a",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_failed"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-cleanup_failed",
+            "digest": "sha256:e3243156fb626792c08aab3d9cdee7180715b44accbe573389cb1543dfd0209a",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_failed",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-cleanup_failed",
+              "digest": "sha256:e3243156fb626792c08aab3d9cdee7180715b44accbe573389cb1543dfd0209a"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-cleanup_failed",
+            "digest": "sha256:e3243156fb626792c08aab3d9cdee7180715b44accbe573389cb1543dfd0209a"
+          },
+          "verified_request_digest": "sha256:0df95d390164e3bf23d120b35f7d1735aa0a291c663b751ccbf43f24e28806d5",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-cleanup_failed/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "residual_blocking",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-cleanup_failed",
+          "task_id": "task-cleanup_failed",
+          "generation": 1,
+          "machine_id": "machine-cleanup_failed",
+          "worker_id": "worker-cleanup_failed",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-cleanup_failed",
+            "task_id": "task-cleanup_failed",
+            "attempt_id": "attempt-cleanup_failed",
+            "generation": 1,
+            "fence_token": "fence-cleanup_failed-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/cleanup_failed",
+            "digest": "sha256:06fdbb66d8913c176b0330fe75b93c73eac0cdca846e363486b1ea448adc7bed",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-cleanup_failed",
+              "task_id": "task-cleanup_failed",
+              "attempt_id": "attempt-cleanup_failed",
+              "generation": 1,
+              "fence_token": "fence-cleanup_failed-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/cleanup_failed",
+            "digest": "sha256:9f559c35756ade5cdc527f346bd62106ad036651bd75c94268f0d442f0dc9f77",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-cleanup_failed",
+              "task_id": "task-cleanup_failed",
+              "attempt_id": "attempt-cleanup_failed",
+              "generation": 1,
+              "fence_token": "fence-cleanup_failed-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/cleanup_failed",
+            "digest": "sha256:9b7c1be772b84a65a66906bab795e71f2e3fa94ce5d3354e01187deb44d433e6",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-cleanup_failed",
+              "task_id": "task-cleanup_failed",
+              "attempt_id": "attempt-cleanup_failed",
+              "generation": 1,
+              "fence_token": "fence-cleanup_failed-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:26409f2632a4e04eaa847715b30eaca438ef28713211f328621f63c88f0fe16f",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "cleanup_incomplete",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-cleanup_incomplete",
+        "request_id": "request:fixture-cleanup_incomplete",
+        "client_correlation_id": "client:fixture-cleanup_incomplete",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-cleanup_incomplete",
+          "verified_client_correlation_id": "client:fixture-cleanup_incomplete",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-cleanup_incomplete",
+            "digest": "sha256:c41ccc3cd21c8ca189f61e3fcbc3c1d8220be1bf73171887b616eae666deda26",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_incomplete"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-cleanup_incomplete",
+            "digest": "sha256:c41ccc3cd21c8ca189f61e3fcbc3c1d8220be1bf73171887b616eae666deda26",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_incomplete",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-cleanup_incomplete",
+              "digest": "sha256:c41ccc3cd21c8ca189f61e3fcbc3c1d8220be1bf73171887b616eae666deda26"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-cleanup_incomplete",
+            "digest": "sha256:c41ccc3cd21c8ca189f61e3fcbc3c1d8220be1bf73171887b616eae666deda26"
+          },
+          "verified_request_digest": "sha256:2f89d00c507a9bcc83eb8da0d356f4d049989a9d45b708af0424e47346eec7ca",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-cleanup_incomplete/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "residual_retryable",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-cleanup_incomplete",
+          "task_id": "task-cleanup_incomplete",
+          "generation": 1,
+          "machine_id": "machine-cleanup_incomplete",
+          "worker_id": "worker-cleanup_incomplete",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-cleanup_incomplete",
+            "task_id": "task-cleanup_incomplete",
+            "attempt_id": "attempt-cleanup_incomplete",
+            "generation": 1,
+            "fence_token": "fence-cleanup_incomplete-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/cleanup_incomplete",
+            "digest": "sha256:56e24c7122bb653877f90929f90deec91d635e3f10ff20116aa6565d789cd610",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-cleanup_incomplete",
+              "task_id": "task-cleanup_incomplete",
+              "attempt_id": "attempt-cleanup_incomplete",
+              "generation": 1,
+              "fence_token": "fence-cleanup_incomplete-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/cleanup_incomplete",
+            "digest": "sha256:9a18ae1d390d83686aa52dd823a8b1604d733a189d09c07fab821d0cb3394100",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-cleanup_incomplete",
+              "task_id": "task-cleanup_incomplete",
+              "attempt_id": "attempt-cleanup_incomplete",
+              "generation": 1,
+              "fence_token": "fence-cleanup_incomplete-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/cleanup_incomplete",
+            "digest": "sha256:d6e0d1291ac6908eba3b935724b9d634936954e87769bbe1eab6015c1c17228c",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-cleanup_incomplete",
+              "task_id": "task-cleanup_incomplete",
+              "attempt_id": "attempt-cleanup_incomplete",
+              "generation": 1,
+              "fence_token": "fence-cleanup_incomplete-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:92455a4bd9213f45a09e42a6b480839cf64f0af8f67ddf2e3ae5a49b1a25e885",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "cleanup_unknown",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-cleanup_unknown",
+        "request_id": "request:fixture-cleanup_unknown",
+        "client_correlation_id": "client:fixture-cleanup_unknown",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-cleanup_unknown",
+          "verified_client_correlation_id": "client:fixture-cleanup_unknown",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-cleanup_unknown",
+            "digest": "sha256:e269c04a15eb9a77b3dfc14e0cb6c96e2f6cf3fe6ba6d7a99986f2608d147905",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_unknown"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-cleanup_unknown",
+            "digest": "sha256:e269c04a15eb9a77b3dfc14e0cb6c96e2f6cf3fe6ba6d7a99986f2608d147905",
+            "operation": "submit",
+            "run_id": "fixture-cleanup_unknown",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-cleanup_unknown",
+              "digest": "sha256:e269c04a15eb9a77b3dfc14e0cb6c96e2f6cf3fe6ba6d7a99986f2608d147905"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-cleanup_unknown",
+            "digest": "sha256:e269c04a15eb9a77b3dfc14e0cb6c96e2f6cf3fe6ba6d7a99986f2608d147905"
+          },
+          "verified_request_digest": "sha256:188c6393987977df799bf81e9bf10bad8d756dc26cf2a05512f5422289c74f55",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-cleanup_unknown/snapshots/3",
+        "control_status": "abandoned",
+        "execution_outcome": "lost_or_inconclusive",
+        "evidence_outcome": "unavailable",
+        "upload_outcome": "upload_expired",
+        "cleanup_outcome": "unobserved",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "reconcile_deadline_exceeded",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-cleanup_unknown",
+          "task_id": "task-cleanup_unknown",
+          "generation": 1,
+          "machine_id": "machine-cleanup_unknown",
+          "worker_id": "worker-cleanup_unknown",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": null,
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-cleanup_unknown",
+            "task_id": "task-cleanup_unknown",
+            "attempt_id": "attempt-cleanup_unknown",
+            "generation": 1,
+            "fence_token": "fence-cleanup_unknown-123456"
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:111dc11d80ef796d5bbc4187e693cfb540c314821fc8bda5b58c3e4c7d1ab20f",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "execution_timeout",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-execution_timeout",
+        "request_id": "request:fixture-execution_timeout",
+        "client_correlation_id": "client:fixture-execution_timeout",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-execution_timeout",
+          "verified_client_correlation_id": "client:fixture-execution_timeout",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-execution_timeout",
+            "digest": "sha256:949446db5da444a8f4c7a35941fa867ce855896449aba8c2ca7053d2c33c483a",
+            "operation": "submit",
+            "run_id": "fixture-execution_timeout"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-execution_timeout",
+            "digest": "sha256:949446db5da444a8f4c7a35941fa867ce855896449aba8c2ca7053d2c33c483a",
+            "operation": "submit",
+            "run_id": "fixture-execution_timeout",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-execution_timeout",
+              "digest": "sha256:949446db5da444a8f4c7a35941fa867ce855896449aba8c2ca7053d2c33c483a"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-execution_timeout",
+            "digest": "sha256:949446db5da444a8f4c7a35941fa867ce855896449aba8c2ca7053d2c33c483a"
+          },
+          "verified_request_digest": "sha256:36be9b13d7c6af2e98329cafebf88f990a363d100506863ca72d0a2466a760bc",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-execution_timeout/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "timed_out",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_timed_out",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-execution_timeout",
+          "task_id": "task-execution_timeout",
+          "generation": 1,
+          "machine_id": "machine-execution_timeout",
+          "worker_id": "worker-execution_timeout",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": null,
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-execution_timeout",
+            "task_id": "task-execution_timeout",
+            "attempt_id": "attempt-execution_timeout",
+            "generation": 1,
+            "fence_token": "fence-execution_timeout-123456"
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/execution_timeout",
+            "digest": "sha256:4393558dc65f6f915178b11b0699657d246ff5058217f46500d72b099137ec79",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-execution_timeout",
+              "task_id": "task-execution_timeout",
+              "attempt_id": "attempt-execution_timeout",
+              "generation": 1,
+              "fence_token": "fence-execution_timeout-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/execution_timeout",
+            "digest": "sha256:2eab437381974924952361310585ec565741f7b7631f703d4b15d1d2e7a31dbe",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-execution_timeout",
+              "task_id": "task-execution_timeout",
+              "attempt_id": "attempt-execution_timeout",
+              "generation": 1,
+              "fence_token": "fence-execution_timeout-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:26173480aca8c70d2e64b2158ddf905f75c671fedfdc42fd977a44a3d65683d2",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "cancelled",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-cancelled",
+        "request_id": "request:fixture-cancelled",
+        "client_correlation_id": "client:fixture-cancelled",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-cancelled",
+          "verified_client_correlation_id": "client:fixture-cancelled",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-cancelled",
+            "digest": "sha256:77e0aa9c89da26cc330a354d68adcc9aab801a94d5b7a1b28ddd0eb732b92067",
+            "operation": "submit",
+            "run_id": "fixture-cancelled"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-cancelled",
+            "digest": "sha256:77e0aa9c89da26cc330a354d68adcc9aab801a94d5b7a1b28ddd0eb732b92067",
+            "operation": "submit",
+            "run_id": "fixture-cancelled",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-cancelled",
+              "digest": "sha256:77e0aa9c89da26cc330a354d68adcc9aab801a94d5b7a1b28ddd0eb732b92067"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-cancelled",
+            "digest": "sha256:77e0aa9c89da26cc330a354d68adcc9aab801a94d5b7a1b28ddd0eb732b92067"
+          },
+          "verified_request_digest": "sha256:57106e11fda17292f368880bce7d14ea7ffa3e8b866fbd2d7db26f61c0df9819",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-cancelled/snapshots/3",
+        "control_status": "cancelled",
+        "execution_outcome": "cancelled",
+        "evidence_outcome": "unavailable",
+        "upload_outcome": "not_required",
+        "cleanup_outcome": "unobserved",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "cancelled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-cancelled",
+          "task_id": "task-cancelled",
+          "generation": 1,
+          "machine_id": "machine-cancelled",
+          "worker_id": "worker-cancelled",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": null,
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-cancelled",
+            "task_id": "task-cancelled",
+            "attempt_id": "attempt-cancelled",
+            "generation": 1,
+            "fence_token": "fence-cancelled-123456"
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:502777fe2aa1f8178af6fac5009efc8d2985a4cd3883c3bbec4227ab0cdc5a88",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "terminal_blocked",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-terminal_blocked",
+        "request_id": "request:fixture-terminal_blocked",
+        "client_correlation_id": "client:fixture-terminal_blocked",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-terminal_blocked",
+          "verified_client_correlation_id": "client:fixture-terminal_blocked",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-terminal_blocked",
+            "digest": "sha256:fb153a44fcbcfb7c4ba77c946d809b972790be4e93d5085fd510203fc97cd5f1",
+            "operation": "submit",
+            "run_id": "fixture-terminal_blocked"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-terminal_blocked",
+            "digest": "sha256:fb153a44fcbcfb7c4ba77c946d809b972790be4e93d5085fd510203fc97cd5f1",
+            "operation": "submit",
+            "run_id": "fixture-terminal_blocked",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-terminal_blocked",
+              "digest": "sha256:fb153a44fcbcfb7c4ba77c946d809b972790be4e93d5085fd510203fc97cd5f1"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-terminal_blocked",
+            "digest": "sha256:fb153a44fcbcfb7c4ba77c946d809b972790be4e93d5085fd510203fc97cd5f1"
+          },
+          "verified_request_digest": "sha256:e4e631e21c8def32f0475ffc9906a865ba64df32fe1d1841c0b7976c967a100a",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-terminal_blocked/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "blocked",
+        "evidence_outcome": "complete",
+        "upload_outcome": "uploaded",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "terminal_blocked",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-terminal_blocked",
+          "task_id": "task-terminal_blocked",
+          "generation": 1,
+          "machine_id": "machine-terminal_blocked",
+          "worker_id": "worker-terminal_blocked",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 0,
+          "failed": 0,
+          "blocked": 1,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-terminal_blocked",
+            "task_id": "task-terminal_blocked",
+            "attempt_id": "attempt-terminal_blocked",
+            "generation": 1,
+            "fence_token": "fence-terminal_blocked-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/terminal_blocked",
+            "digest": "sha256:235e3d635b91bc92c5eff563ea0004f70045a664be8da042eec689b54e773a27",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-terminal_blocked",
+              "task_id": "task-terminal_blocked",
+              "attempt_id": "attempt-terminal_blocked",
+              "generation": 1,
+              "fence_token": "fence-terminal_blocked-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/terminal_blocked",
+            "digest": "sha256:bedbc74c0ef16153f84e76585dc5550cf1785a0d62ef710db558157ef7bc2127",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-terminal_blocked",
+              "task_id": "task-terminal_blocked",
+              "attempt_id": "attempt-terminal_blocked",
+              "generation": 1,
+              "fence_token": "fence-terminal_blocked-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/terminal_blocked",
+            "digest": "sha256:3a319eb01d9236b4ffbe88ed199ea431f31d8932e4b806a4f56cf7a1465ed3dc",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-terminal_blocked",
+              "task_id": "task-terminal_blocked",
+              "attempt_id": "attempt-terminal_blocked",
+              "generation": 1,
+              "fence_token": "fence-terminal_blocked-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:77351a929a192afbcf91fb2d20671ec1cb5f04ee59d06f8e1c2402c7a6e53011",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "abandoned",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-abandoned",
+        "request_id": "request:fixture-abandoned",
+        "client_correlation_id": "client:fixture-abandoned",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-abandoned",
+          "verified_client_correlation_id": "client:fixture-abandoned",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-abandoned",
+            "digest": "sha256:7c86f0988eedf25d824485ab54ddfa0753257a68505f596dc6d19513db823f48",
+            "operation": "submit",
+            "run_id": "fixture-abandoned"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-abandoned",
+            "digest": "sha256:7c86f0988eedf25d824485ab54ddfa0753257a68505f596dc6d19513db823f48",
+            "operation": "submit",
+            "run_id": "fixture-abandoned",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-abandoned",
+              "digest": "sha256:7c86f0988eedf25d824485ab54ddfa0753257a68505f596dc6d19513db823f48"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-abandoned",
+            "digest": "sha256:7c86f0988eedf25d824485ab54ddfa0753257a68505f596dc6d19513db823f48"
+          },
+          "verified_request_digest": "sha256:120cd22c3b65df8f30857a3f835f1109fb8d2d3b6c55ba2949aff0bfba12a853",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-abandoned/snapshots/3",
+        "control_status": "abandoned",
+        "execution_outcome": "lost_or_inconclusive",
+        "evidence_outcome": "unavailable",
+        "upload_outcome": "upload_expired",
+        "cleanup_outcome": "unobserved",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "reconcile_deadline_exceeded",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-abandoned",
+          "task_id": "task-abandoned",
+          "generation": 1,
+          "machine_id": "machine-abandoned",
+          "worker_id": "worker-abandoned",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": null,
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-abandoned",
+            "task_id": "task-abandoned",
+            "attempt_id": "attempt-abandoned",
+            "generation": 1,
+            "fence_token": "fence-abandoned-123456"
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:3ac7499a826bb11354dd70660c52e38445f52927cb1169b1e0d174b22e41a8db",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "upload_failed",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-upload_failed",
+        "request_id": "request:fixture-upload_failed",
+        "client_correlation_id": "client:fixture-upload_failed",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-upload_failed",
+          "verified_client_correlation_id": "client:fixture-upload_failed",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-upload_failed",
+            "digest": "sha256:df09892e6b5215aa949bc54d1b5de1f95f90843142dbbb3db77ee9a16bc08fce",
+            "operation": "submit",
+            "run_id": "fixture-upload_failed"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-upload_failed",
+            "digest": "sha256:df09892e6b5215aa949bc54d1b5de1f95f90843142dbbb3db77ee9a16bc08fce",
+            "operation": "submit",
+            "run_id": "fixture-upload_failed",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-upload_failed",
+              "digest": "sha256:df09892e6b5215aa949bc54d1b5de1f95f90843142dbbb3db77ee9a16bc08fce"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-upload_failed",
+            "digest": "sha256:df09892e6b5215aa949bc54d1b5de1f95f90843142dbbb3db77ee9a16bc08fce"
+          },
+          "verified_request_digest": "sha256:445821f8e4a8033a230b853e4d9db15ba5eb6c15f943c08d911d75c6d53a53c6",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-upload_failed/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "failed",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-upload_failed",
+          "task_id": "task-upload_failed",
+          "generation": 1,
+          "machine_id": "machine-upload_failed",
+          "worker_id": "worker-upload_failed",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-upload_failed",
+            "task_id": "task-upload_failed",
+            "attempt_id": "attempt-upload_failed",
+            "generation": 1,
+            "fence_token": "fence-upload_failed-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/upload_failed",
+            "digest": "sha256:7f2a26de9b9de15183a949c76eebd20b7dc5e0237edf8e977d57f28a800076d3",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-upload_failed",
+              "task_id": "task-upload_failed",
+              "attempt_id": "attempt-upload_failed",
+              "generation": 1,
+              "fence_token": "fence-upload_failed-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/upload_failed",
+            "digest": "sha256:6b537d682cef9e16fc78ed1b3bc71ddb2a44a81cf5ec6fd2996513f342a8446a",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-upload_failed",
+              "task_id": "task-upload_failed",
+              "attempt_id": "attempt-upload_failed",
+              "generation": 1,
+              "fence_token": "fence-upload_failed-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/upload_failed",
+            "digest": "sha256:59e2e2bd0a05bcc10da0e62094c20cb559a0a935f0f73d9b546285db9ef5111a",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-upload_failed",
+              "task_id": "task-upload_failed",
+              "attempt_id": "attempt-upload_failed",
+              "generation": 1,
+              "fence_token": "fence-upload_failed-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:e993151d62bcd2bb0b5717c9fc720d37397f11dea1cdb2940fcd4ac511c295e7",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "upload_expired",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-upload_expired",
+        "request_id": "request:fixture-upload_expired",
+        "client_correlation_id": "client:fixture-upload_expired",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-upload_expired",
+          "verified_client_correlation_id": "client:fixture-upload_expired",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-upload_expired",
+            "digest": "sha256:740cb558b7c787434f60be8b3040cca12e2fde9b11f48060e86941eb09f5bd8a",
+            "operation": "submit",
+            "run_id": "fixture-upload_expired"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-upload_expired",
+            "digest": "sha256:740cb558b7c787434f60be8b3040cca12e2fde9b11f48060e86941eb09f5bd8a",
+            "operation": "submit",
+            "run_id": "fixture-upload_expired",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-upload_expired",
+              "digest": "sha256:740cb558b7c787434f60be8b3040cca12e2fde9b11f48060e86941eb09f5bd8a"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-upload_expired",
+            "digest": "sha256:740cb558b7c787434f60be8b3040cca12e2fde9b11f48060e86941eb09f5bd8a"
+          },
+          "verified_request_digest": "sha256:2a49457015677a01f7a40448576fcd722853bb2b0617cd99b463474ba56028bf",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-upload_expired/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "upload_expired",
+        "cleanup_outcome": "complete",
+        "terminal": true,
+        "terminal_reason": {
+          "code": "execution_settled",
+          "at": "2026-08-22T00:00:00.000Z"
+        },
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-upload_expired",
+          "task_id": "task-upload_expired",
+          "generation": 1,
+          "machine_id": "machine-upload_expired",
+          "worker_id": "worker-upload_expired",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-upload_expired",
+            "task_id": "task-upload_expired",
+            "attempt_id": "attempt-upload_expired",
+            "generation": 1,
+            "fence_token": "fence-upload_expired-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/upload_expired",
+            "digest": "sha256:ad800d9d279818092387bdda21b611b07ab6fd365774eb354d1faeaf68de38b9",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-upload_expired",
+              "task_id": "task-upload_expired",
+              "attempt_id": "attempt-upload_expired",
+              "generation": 1,
+              "fence_token": "fence-upload_expired-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/upload_expired",
+            "digest": "sha256:352c3f2ff183360044c560221071c7b12227704ffbc92e1b617b8f9b113c800d",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-upload_expired",
+              "task_id": "task-upload_expired",
+              "attempt_id": "attempt-upload_expired",
+              "generation": 1,
+              "fence_token": "fence-upload_expired-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/upload_expired",
+            "digest": "sha256:2496ab94b460d4eb02356cda3e87b4cdae31bbfe484cca5196e37929bf1af061",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-upload_expired",
+              "task_id": "task-upload_expired",
+              "attempt_id": "attempt-upload_expired",
+              "generation": 1,
+              "fence_token": "fence-upload_expired-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:128ab0fd14c695909267c7b89069f4f876877779a246bd98cfba1863eba601b4",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "upload_pending",
+      "kind": "snapshot",
+      "side_effects": false,
+      "response": {
+        "schema_version": "talos.testing-run-snapshot/v1",
+        "run_id": "fixture-upload_pending",
+        "request_id": "request:fixture-upload_pending",
+        "client_correlation_id": "client:fixture-upload_pending",
+        "authenticated_transport": {
+          "schema_version": "talos.testing-authenticated-transport-context/v1",
+          "transport_correlation_id": "transport:fixture-upload_pending",
+          "verified_client_correlation_id": "client:fixture-upload_pending",
+          "subject": "pql-fixture-user",
+          "delegated_actor": null,
+          "source": "pql",
+          "destination": "talos-testing-tool",
+          "route": {
+            "ref": "nyxid://routes/testing/fixture-upload_pending",
+            "digest": "sha256:adbbc7e6f937d17d756347f46188b5df5fcb4d8ada709b50ce68283f60928110",
+            "operation": "submit",
+            "run_id": "fixture-upload_pending"
+          },
+          "authorization": {
+            "ref": "authorization://nyxid/testing/fixture-upload_pending",
+            "digest": "sha256:adbbc7e6f937d17d756347f46188b5df5fcb4d8ada709b50ce68283f60928110",
+            "operation": "submit",
+            "run_id": "fixture-upload_pending",
+            "valid_until": "2026-08-22T00:10:00.000Z"
+          },
+          "audit_refs": [
+            {
+              "ref": "nyxid://audit/events/fixture-upload_pending",
+              "digest": "sha256:adbbc7e6f937d17d756347f46188b5df5fcb4d8ada709b50ce68283f60928110"
+            }
+          ],
+          "transport_acknowledgement": {
+            "ref": "nyxid://transport-acks/testing/fixture-upload_pending",
+            "digest": "sha256:adbbc7e6f937d17d756347f46188b5df5fcb4d8ada709b50ce68283f60928110"
+          },
+          "verified_request_digest": "sha256:417a3b825e554948a0d18f6bc230bea8b5f41902520aa1c9ddc776046ca2f025",
+          "verified_at": "2026-08-22T00:00:00.000Z"
+        },
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "snapshot_version": 3,
+        "snapshot_ref": "talos://testing/runs/fixture-upload_pending/snapshots/3",
+        "control_status": "completed",
+        "execution_outcome": "passed",
+        "evidence_outcome": "complete",
+        "upload_outcome": "pending",
+        "cleanup_outcome": "complete",
+        "terminal": false,
+        "terminal_reason": null,
+        "blocking": null,
+        "attempt": {
+          "attempt_id": "attempt-upload_pending",
+          "task_id": "task-upload_pending",
+          "generation": 1,
+          "machine_id": "machine-upload_pending",
+          "worker_id": "worker-upload_pending",
+          "runtime": {
+            "capability": "local-qa-mvp/v1",
+            "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+            "event_sequence": 4
+          }
+        },
+        "progress": {
+          "phase": "closing",
+          "completed_cases": 1,
+          "total_cases": 1,
+          "last_event_sequence": 4
+        },
+        "summary": {
+          "total": 1,
+          "passed": 1,
+          "failed": 0,
+          "blocked": 0,
+          "error": 0,
+          "skipped": 0,
+          "all_skipped": false
+        },
+        "results": {
+          "schema_version": "talos.testing-terminal-refs/v1",
+          "binding": {
+            "run_id": "fixture-upload_pending",
+            "task_id": "task-upload_pending",
+            "attempt_id": "attempt-upload_pending",
+            "generation": 1,
+            "fence_token": "fence-upload_pending-123456"
+          },
+          "case_result_set": {
+            "ref": "artifact://testing/results/upload_pending",
+            "digest": "sha256:a8a3298fe2486c19264d65bac869cc7c1d38ee6d0e0779dd6fa49387c727ee2e",
+            "schema": "testing-case-result-set.v2",
+            "binding": {
+              "run_id": "fixture-upload_pending",
+              "task_id": "task-upload_pending",
+              "attempt_id": "attempt-upload_pending",
+              "generation": 1,
+              "fence_token": "fence-upload_pending-123456"
+            }
+          },
+          "evidence_manifest": {
+            "ref": "artifact://testing/evidence/upload_pending",
+            "digest": "sha256:2db7b12ac5fb979e4798c6f87ea16b335811f3106eff072088b9fede9cbd8151",
+            "schema": "testing-evidence-manifest.v1",
+            "binding": {
+              "run_id": "fixture-upload_pending",
+              "task_id": "task-upload_pending",
+              "attempt_id": "attempt-upload_pending",
+              "generation": 1,
+              "fence_token": "fence-upload_pending-123456"
+            }
+          },
+          "cleanup_receipt": {
+            "ref": "artifact://testing/cleanup/upload_pending",
+            "digest": "sha256:e3853317926f4a7f3156126f28e8ccc76cf6bafe5d00a4db22ca328c1849c2b1",
+            "schema": "qa.local-cleanup-receipt/v2",
+            "binding": {
+              "run_id": "fixture-upload_pending",
+              "task_id": "task-upload_pending",
+              "attempt_id": "attempt-upload_pending",
+              "generation": 1,
+              "fence_token": "fence-upload_pending-123456"
+            }
+          }
+        },
+        "safe_error": null,
+        "created_at": "2026-08-22T00:00:00.000Z",
+        "updated_at": "2026-08-22T00:00:00.000Z",
+        "snapshot_digest": "sha256:9247d92688256923158c3097f4edb616f6e1dea60a7dd8530d6985d6d671ec36",
+        "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+      }
+    },
+    {
+      "id": "authorization_denied",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "nyxid_authorization_mismatch",
+          "message": "authorization_denied fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "authorization_expired",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "nyxid_authorization_expired",
+          "message": "authorization_expired fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "no_eligible_machine",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_unavailable",
+          "message": "no_eligible_machine fixture",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "id": "wrong_machine",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "stale_testing_machine",
+          "message": "wrong_machine fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "wrong_worker",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "stale_testing_worker",
+          "message": "wrong_worker fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "lease_expired",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_lease_expired",
+          "message": "lease_expired fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "stale_fence",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "stale_testing_fence",
+          "message": "stale_fence fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "stale_generation",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "stale_testing_generation",
+          "message": "stale_generation fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "runtime_admission_rejected",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "invalid_no_local_acceptance_fact",
+          "message": "runtime_admission_rejected fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "runner_package_unavailable",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_unavailable",
+          "message": "runner_package_unavailable fixture",
+          "retryable": true
+        }
+      }
+    },
+    {
+      "id": "runner_package_mismatch",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_inputs_unverified",
+          "message": "runner_package_mismatch fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "exact_commit_mismatch",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_inputs_unverified",
+          "message": "exact_commit_mismatch fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "plan_digest_mismatch",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_inputs_unverified",
+          "message": "plan_digest_mismatch fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "unsupported_capability",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "testing_placement_denied",
+          "message": "unsupported_capability fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "conflicting_terminal_result",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "terminal_commit_conflict",
+          "message": "conflicting_terminal_result fixture",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "id": "cursor_expiry",
+      "kind": "error",
+      "side_effects": false,
+      "response": {
+        "error": {
+          "code": "cursor_expired",
+          "message": "cursor_expiry fixture",
+          "retryable": true,
+          "replacement_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters",
+          "snapshot_ref": "talos://testing/runs/fixture-cursor_expiry/snapshots/3",
+          "snapshot_version": 3,
+          "snapshot_digest": "sha256:17f5ed4cb1eed77734307f47d2432ea62c9deb00021af1b08b8b03ef3cff6550"
+        }
+      }
+    },
+    {
+      "id": "duplicate_submit",
+      "kind": "protocol",
+      "side_effects": false,
+      "input": {
+        "schema_version": "talos.testing-tool-request/v1",
+        "request_id": "request:fixture-run",
+        "client_correlation_id": "client:fixture-run",
+        "idempotency_key": "fixture-submit-key",
+        "display_goal": "Validate a side-effect-free PQL consumer fixture",
+        "inputs": {
+          "schema_version": "talos.testing-input-references/v1",
+          "project_pack_snapshot": {
+            "ref": "artifact://pql/project-pack-snapshot/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.project-pack-snapshot/v1"
+          },
+          "test_selection": {
+            "ref": "artifact://pql/test-selection/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.test-selection/v1"
+          },
+          "testing_design_input_set": {
+            "ref": "artifact://pql/testing-design-input-set/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "pql.testing-design-input-set.v1"
+          },
+          "source_revision": {
+            "repository_id": "repo-fixture",
+            "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+            "ref": "artifact://source/revisions/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "structured_plan": {
+            "ref": "artifact://testing/plans/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema": "testing-structured-plan.v2"
+          },
+          "environment_profile": {
+            "ref": "artifact://testing/environments/fixture",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "testing_package": {
+            "package_id": "testing-browser-runner",
+            "version": "1.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "execution_profile": "local_qa_agent_mvp",
+        "placement_requirements": {
+          "testing_runtime": "local-qa-mvp/v1"
+        },
+        "policy_binding": {
+          "policy": {
+            "schema": "talos.testing-execution-policy/v1",
+            "ref": "talos://policies/testing/fixture",
+            "digest": "sha256:de0c0c5459c2db4f9e40996f3cb059eabbda146b1ba4d98c4176aa48ae8fe7bc"
+          },
+          "budgets": {
+            "schema": "talos.testing-budgets/v1",
+            "ref": "talos://policies/testing/fixture-budgets",
+            "digest": "sha256:02401c48ca7494b981837aecedbaf3968a4d8990f3123a4167ac5a193bf1b291"
+          }
+        },
+        "policy": {
+          "network_scope": "environment_owned_loopback_exact_origins",
+          "environment_port_handle_policy": {
+            "source": "current_run_owned_handles",
+            "allow_unowned_loopback": false
+          },
+          "allowed_actions": [
+            "navigate"
+          ],
+          "allowed_evidence_media": [
+            "image/png"
+          ],
+          "secret_refs": [],
+          "budgets": {
+            "wall_time_ms": 600000,
+            "max_cases": 20,
+            "max_actions": 200,
+            "max_events": 2000,
+            "max_screenshots": 20,
+            "max_screenshot_bytes": 5242880,
+            "max_json_evidence_bytes": 1048576,
+            "max_total_artifact_bytes": 52428800
+          }
+        }
+      },
+      "expected": {
+        "first": {
+          "schema_version": "talos.testing-run-acceptance/v1",
+          "run_id": "fixture-run",
+          "request_id": "request:fixture-run",
+          "client_correlation_id": "client:fixture-run",
+          "accepted": true,
+          "replayed": false,
+          "control_status": "submitted",
+          "request_digest": "sha256:0f3cbd66ee14f643f6c97f1a0ea37ff6c78b730c08df7f0c1bdb6cd73382d7cd",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-run",
+            "verified_client_correlation_id": "client:fixture-run",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3",
+              "operation": "submit",
+              "run_id": "fixture-run"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3",
+              "operation": "submit",
+              "run_id": "fixture-run",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-run",
+                "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3"
+            },
+            "verified_request_digest": "sha256:0f3cbd66ee14f643f6c97f1a0ea37ff6c78b730c08df7f0c1bdb6cd73382d7cd",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "created_at": "2026-08-22T00:00:00.000Z"
+        },
+        "replay": {
+          "schema_version": "talos.testing-run-acceptance/v1",
+          "run_id": "fixture-run",
+          "request_id": "request:fixture-run",
+          "client_correlation_id": "client:fixture-run",
+          "accepted": true,
+          "replayed": true,
+          "control_status": "submitted",
+          "request_digest": "sha256:0f3cbd66ee14f643f6c97f1a0ea37ff6c78b730c08df7f0c1bdb6cd73382d7cd",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-run",
+            "verified_client_correlation_id": "client:fixture-run",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3",
+              "operation": "submit",
+              "run_id": "fixture-run"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3",
+              "operation": "submit",
+              "run_id": "fixture-run",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-run",
+                "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-run",
+              "digest": "sha256:79c26ae2a2ded8cefc6f120797a690f79cc175e9005ff431f46fcd98ffcdcda3"
+            },
+            "verified_request_digest": "sha256:0f3cbd66ee14f643f6c97f1a0ea37ff6c78b730c08df7f0c1bdb6cd73382d7cd",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "created_at": "2026-08-22T00:00:00.000Z"
+        },
+        "logical_run_count": 1
+      }
+    },
+    {
+      "id": "duplicate_out_of_order_events",
+      "kind": "protocol",
+      "side_effects": false,
+      "input": {
+        "events": [
+          {
+            "sequence": 2,
+            "time": "2026-08-22T00:00:00.000Z",
+            "type": "run.started",
+            "data": {
+              "attempt_id": "attempt-recovery_chain",
+              "generation": 1
+            },
+            "event_digest": "sha256:4fde94583d44cc17def64931fbfb673770f4ab4bb41c5875c20652d95e8b699a"
+          },
+          {
+            "sequence": 1,
+            "time": "2026-08-22T00:00:00.000Z",
+            "type": "run.reserved",
+            "data": {
+              "task_id": "task-recovery_chain"
+            },
+            "event_digest": "sha256:239ca7daaa54087da611d3af7285f899eafd98b22d653a42905342610866cef5"
+          },
+          {
+            "sequence": 1,
+            "time": "2026-08-22T00:00:00.000Z",
+            "type": "run.reserved",
+            "data": {
+              "task_id": "task-recovery_chain"
+            },
+            "event_digest": "sha256:239ca7daaa54087da611d3af7285f899eafd98b22d653a42905342610866cef5"
+          }
+        ]
+      },
+      "expected": {
+        "accepted_sequences": [
+          1,
+          2
+        ],
+        "dedupe_key": "event_digest",
+        "ordering_key": "sequence"
+      }
+    },
+    {
+      "id": "worker_heartbeat_lost",
+      "kind": "protocol",
+      "side_effects": false,
+      "input": {
+        "last_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 1,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/1",
+          "control_status": "running",
+          "execution_outcome": "executing",
+          "evidence_outcome": "staging",
+          "upload_outcome": "pending",
+          "cleanup_outcome": "pending",
+          "terminal": false,
+          "terminal_reason": null,
+          "blocking": null,
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "running",
+            "completed_cases": 0,
+            "total_cases": 1,
+            "last_event_sequence": 3
+          },
+          "summary": null,
+          "results": null,
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:00.000Z",
+          "snapshot_digest": "sha256:32a5aff2c54844e6cdd50c68a123462c4f52e64ef8125108e8c6b786950522aa",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        }
+      },
+      "expected": {
+        "next_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 2,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/2",
+          "control_status": "reconcile_required",
+          "execution_outcome": "executing",
+          "evidence_outcome": "staging",
+          "upload_outcome": "pending",
+          "cleanup_outcome": "pending",
+          "terminal": false,
+          "terminal_reason": null,
+          "blocking": {
+            "reason_code": "worker_heartbeat_lost",
+            "retry_at": "2026-08-22T00:00:05.000Z",
+            "deadline_at": "2026-08-22T00:10:00.000Z",
+            "next_action": "reconcile"
+          },
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "reconcile_required",
+            "completed_cases": 0,
+            "total_cases": 1,
+            "last_event_sequence": 4
+          },
+          "summary": null,
+          "results": null,
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:05.000Z",
+          "snapshot_digest": "sha256:3fe5b9396a931c7082a0bfc57c738cf57c6fdc1aefbfde20be49b52603df7b25",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        },
+        "next_action": "same_machine_reconcile"
+      }
+    },
+    {
+      "id": "talos_restart_recovery",
+      "kind": "protocol",
+      "side_effects": false,
+      "input": {
+        "persisted_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 1,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/1",
+          "control_status": "running",
+          "execution_outcome": "executing",
+          "evidence_outcome": "staging",
+          "upload_outcome": "pending",
+          "cleanup_outcome": "pending",
+          "terminal": false,
+          "terminal_reason": null,
+          "blocking": null,
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "running",
+            "completed_cases": 0,
+            "total_cases": 1,
+            "last_event_sequence": 3
+          },
+          "summary": null,
+          "results": null,
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:00.000Z",
+          "snapshot_digest": "sha256:32a5aff2c54844e6cdd50c68a123462c4f52e64ef8125108e8c6b786950522aa",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        }
+      },
+      "expected": {
+        "recovered_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 1,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/1",
+          "control_status": "running",
+          "execution_outcome": "executing",
+          "evidence_outcome": "staging",
+          "upload_outcome": "pending",
+          "cleanup_outcome": "pending",
+          "terminal": false,
+          "terminal_reason": null,
+          "blocking": null,
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "running",
+            "completed_cases": 0,
+            "total_cases": 1,
+            "last_event_sequence": 3
+          },
+          "summary": null,
+          "results": null,
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:00.000Z",
+          "snapshot_digest": "sha256:32a5aff2c54844e6cdd50c68a123462c4f52e64ef8125108e8c6b786950522aa",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        }
+      }
+    },
+    {
+      "id": "worker_runtime_restart_recovery",
+      "kind": "protocol",
+      "side_effects": false,
+      "input": {
+        "persisted_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 2,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/2",
+          "control_status": "reconcile_required",
+          "execution_outcome": "executing",
+          "evidence_outcome": "staging",
+          "upload_outcome": "pending",
+          "cleanup_outcome": "pending",
+          "terminal": false,
+          "terminal_reason": null,
+          "blocking": {
+            "reason_code": "worker_heartbeat_lost",
+            "retry_at": "2026-08-22T00:00:05.000Z",
+            "deadline_at": "2026-08-22T00:10:00.000Z",
+            "next_action": "reconcile"
+          },
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "reconcile_required",
+            "completed_cases": 0,
+            "total_cases": 1,
+            "last_event_sequence": 4
+          },
+          "summary": null,
+          "results": null,
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:05.000Z",
+          "snapshot_digest": "sha256:3fe5b9396a931c7082a0bfc57c738cf57c6fdc1aefbfde20be49b52603df7b25",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        }
+      },
+      "expected": {
+        "recovered_terminal_snapshot": {
+          "schema_version": "talos.testing-run-snapshot/v1",
+          "run_id": "fixture-recovery_chain",
+          "request_id": "request:fixture-recovery_chain",
+          "client_correlation_id": "client:fixture-recovery_chain",
+          "authenticated_transport": {
+            "schema_version": "talos.testing-authenticated-transport-context/v1",
+            "transport_correlation_id": "transport:fixture-recovery_chain",
+            "verified_client_correlation_id": "client:fixture-recovery_chain",
+            "subject": "pql-fixture-user",
+            "delegated_actor": null,
+            "source": "pql",
+            "destination": "talos-testing-tool",
+            "route": {
+              "ref": "nyxid://routes/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain"
+            },
+            "authorization": {
+              "ref": "authorization://nyxid/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e",
+              "operation": "submit",
+              "run_id": "fixture-recovery_chain",
+              "valid_until": "2026-08-22T00:10:00.000Z"
+            },
+            "audit_refs": [
+              {
+                "ref": "nyxid://audit/events/fixture-recovery_chain",
+                "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+              }
+            ],
+            "transport_acknowledgement": {
+              "ref": "nyxid://transport-acks/testing/fixture-recovery_chain",
+              "digest": "sha256:f61d7eb67d48a28bc9ef63f2882487351a50d674099345ca8f0d6b27e46c0c4e"
+            },
+            "verified_request_digest": "sha256:414c740a8d611129a88daab11b86bb8f53d9f8be4e5c168a80ddb5650c4e65ef",
+            "verified_at": "2026-08-22T00:00:00.000Z"
+          },
+          "inputs": {
+            "schema_version": "talos.testing-input-references/v1",
+            "project_pack_snapshot": {
+              "ref": "artifact://pql/project-pack-snapshot/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.project-pack-snapshot/v1"
+            },
+            "test_selection": {
+              "ref": "artifact://pql/test-selection/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.test-selection/v1"
+            },
+            "testing_design_input_set": {
+              "ref": "artifact://pql/testing-design-input-set/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "pql.testing-design-input-set.v1"
+            },
+            "source_revision": {
+              "repository_id": "repo-fixture",
+              "exact_revision": "0123456789abcdef0123456789abcdef01234567",
+              "ref": "artifact://source/revisions/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "structured_plan": {
+              "ref": "artifact://testing/plans/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "testing-structured-plan.v2"
+            },
+            "environment_profile": {
+              "ref": "artifact://testing/environments/fixture",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "testing_package": {
+              "package_id": "testing-browser-runner",
+              "version": "1.0",
+              "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "snapshot_version": 3,
+          "snapshot_ref": "talos://testing/runs/fixture-recovery_chain/snapshots/3",
+          "control_status": "completed",
+          "execution_outcome": "passed",
+          "evidence_outcome": "complete",
+          "upload_outcome": "uploaded",
+          "cleanup_outcome": "complete",
+          "terminal": true,
+          "terminal_reason": {
+            "code": "execution_settled",
+            "at": "2026-08-22T00:00:00.000Z"
+          },
+          "blocking": null,
+          "attempt": {
+            "attempt_id": "attempt-recovery_chain",
+            "task_id": "task-recovery_chain",
+            "generation": 1,
+            "machine_id": "machine-recovery_chain",
+            "worker_id": "worker-recovery_chain",
+            "runtime": {
+              "capability": "local-qa-mvp/v1",
+              "locally_accepted_at": "2026-08-22T00:00:00.000Z",
+              "event_sequence": 4
+            }
+          },
+          "progress": {
+            "phase": "closing",
+            "completed_cases": 1,
+            "total_cases": 1,
+            "last_event_sequence": 4
+          },
+          "summary": {
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "blocked": 0,
+            "error": 0,
+            "skipped": 0,
+            "all_skipped": false
+          },
+          "results": {
+            "schema_version": "talos.testing-terminal-refs/v1",
+            "binding": {
+              "run_id": "fixture-recovery_chain",
+              "task_id": "task-recovery_chain",
+              "attempt_id": "attempt-recovery_chain",
+              "generation": 1,
+              "fence_token": "fence-recovery_chain-123456"
+            },
+            "case_result_set": {
+              "ref": "artifact://testing/results/recovery_chain",
+              "digest": "sha256:df7d8dc53157135b9cb12c103cf5428d7a2e07117f936f8a3f9423a2498ccc97",
+              "schema": "testing-case-result-set.v2",
+              "binding": {
+                "run_id": "fixture-recovery_chain",
+                "task_id": "task-recovery_chain",
+                "attempt_id": "attempt-recovery_chain",
+                "generation": 1,
+                "fence_token": "fence-recovery_chain-123456"
+              }
+            },
+            "evidence_manifest": {
+              "ref": "artifact://testing/evidence/recovery_chain",
+              "digest": "sha256:0c17f65558dbfafaa388068fb404ce57c8f3386a36e5739f29d7343287ffe800",
+              "schema": "testing-evidence-manifest.v1",
+              "binding": {
+                "run_id": "fixture-recovery_chain",
+                "task_id": "task-recovery_chain",
+                "attempt_id": "attempt-recovery_chain",
+                "generation": 1,
+                "fence_token": "fence-recovery_chain-123456"
+              }
+            },
+            "cleanup_receipt": {
+              "ref": "artifact://testing/cleanup/recovery_chain",
+              "digest": "sha256:6a3bcae0e7fdb806ee5c2b206cda6f9e5b0bd28db01b39cfe8956b9430b24cff",
+              "schema": "qa.local-cleanup-receipt/v2",
+              "binding": {
+                "run_id": "fixture-recovery_chain",
+                "task_id": "task-recovery_chain",
+                "attempt_id": "attempt-recovery_chain",
+                "generation": 1,
+                "fence_token": "fence-recovery_chain-123456"
+              }
+            }
+          },
+          "safe_error": null,
+          "created_at": "2026-08-22T00:00:00.000Z",
+          "updated_at": "2026-08-22T00:00:00.000Z",
+          "snapshot_digest": "sha256:b6ef137ae74a09a698143e163bf1924457bd1e5b81c7b71b7f60fd63901ed401",
+          "resume_cursor": "fixture-cursor-that-is-longer-than-thirty-two-characters"
+        },
+        "rerun_product_cases": false
+      }
+    }
+  ]
+}

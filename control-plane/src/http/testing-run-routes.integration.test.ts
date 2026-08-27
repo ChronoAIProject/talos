@@ -96,12 +96,27 @@ describe('Testing Tool HTTP routes', () => {
     };
 
     try {
-      expect((await fetch(`${base}/v1/tools/testing/capabilities`)).status).toBe(401);
+      const unauthenticatedCapabilities = await fetch(`${base}/v1/tools/testing/capabilities`);
+      expect(unauthenticatedCapabilities.status).toBe(401);
+      expect(await unauthenticatedCapabilities.json()).toMatchObject({
+        error: { code: 'unauthorized', retryable: false }
+      });
       const capabilities = await fetch(`${base}/v1/tools/testing/capabilities`, { headers });
       expect(capabilities.status).toBe(200);
       expect(await capabilities.json()).toMatchObject({
         schema_version: 'talos.testing-capabilities/v1',
-        task_contracts: ['talos.testing-task/v1']
+        operations: ['get_capabilities', 'submit', 'get', 'events', 'cancel'],
+        scope: 'resolved_identity_visible_pools',
+        admission_availability: { status: 'available', reason_code: null },
+        task_contracts: ['talos.testing-task/v1'],
+        backend_availability: { availability: 'offline', configured_machine_count: 1 },
+        runner_packages: [{ package_id: 'testing-browser-runner', version: '1.0', digest }],
+        runner_packages_total_count: 1,
+        runner_packages_truncated: false,
+        external_schema_capabilities: expect.arrayContaining([
+          expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'unavailable' })
+        ]),
+        error_contract: { catalog_version: 'talos.testing-error-catalog/v1' }
       });
 
       const submitUrl = `${base}/v1/tools/testing/runs/run-1`;
@@ -112,7 +127,9 @@ describe('Testing Tool HTTP routes', () => {
         body: JSON.stringify(runOneRequest)
       });
       expect(missingTransport.status).toBe(401);
-      expect(await missingTransport.json()).toMatchObject({ error: { code: 'nyxid_transport_context_required' } });
+      expect(await missingTransport.json()).toMatchObject({
+        error: { code: 'nyxid_transport_context_required', retryable: false }
+      });
 
       const runOneHeaders = submitHeaders('submit:run-1', 'run-1', runOneRequest);
       const submitted = await fetch(submitUrl, {
@@ -179,6 +196,11 @@ describe('Testing Tool HTTP routes', () => {
         body: JSON.stringify({ ...submitRequest('run-unsafe', 'unsafe'), pool_id: 'caller-pool' })
       });
       expect(unsafe.status).toBe(400);
+      const unsafeError = await unsafe.json();
+      expect(unsafeError).toEqual({
+        error: { code: 'validation_error', message: 'request failed schema validation', retryable: false }
+      });
+      expect(JSON.stringify(unsafeError).length).toBeLessThan(256);
       expect(await repository.getTestingRun('run-unsafe')).toBeUndefined();
 
       const forgedAuditRequest = submitRequest('run-forged-audit', 'forged-audit');
@@ -205,7 +227,9 @@ describe('Testing Tool HTTP routes', () => {
         body: JSON.stringify(correlationRequest)
       });
       expect(correlationMismatch.status).toBe(401);
-      expect(await correlationMismatch.json()).toMatchObject({ error: { code: 'nyxid_client_correlation_mismatch' } });
+      expect(await correlationMismatch.json()).toMatchObject({
+        error: { code: 'nyxid_client_correlation_mismatch', retryable: false }
+      });
 
       const digestRequest = submitRequest('run-digest-mismatch', 'digest-mismatch');
       const digestMismatch = await fetch(`${base}/v1/tools/testing/runs/run-digest-mismatch`, {

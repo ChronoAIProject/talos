@@ -35,8 +35,10 @@ paths:
         '201': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/TestingRunAcceptance' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     get:
       operationId: getTestingRun
       responses:
@@ -657,6 +659,7 @@ components:
     Conflict: { description: State conflict, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Forbidden: { description: Identity-scoped resource belongs to another user, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    ServiceUnavailable: { description: A required placement, authorization, verifier, or backend dependency is unavailable; inspect the stable error code and retryable classification., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotImplemented:
       description: Phase 2/3 machinery is not implemented in Phase 1.
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
@@ -867,20 +870,114 @@ components:
     TestingCapabilities:
       type: object
       additionalProperties: false
-      required: [schema_version, planning_contracts, tool_contracts, task_contracts, execution_profiles, runtime_capabilities, result_contracts, backends, browsers, secret_refs_supported, max_concurrency_per_machine, limits]
+      description: Identity-scoped, short-lived bounded projection. Pool and machine identifiers are intentionally omitted. External schema entries are unavailable until their owning repositories publish exact manifest identities and digests.
+      required: [schema_version, operations, observed_at, valid_until, scope, planning_contracts, tool_contracts, task_contracts, execution_profiles, runtime_capabilities, result_contracts, backends, browsers, admission_availability, backend_availability, runner_packages, runner_packages_total_count, runner_packages_truncated, external_schema_capabilities, error_contract, secret_refs_supported, max_concurrency_per_machine, limits]
       properties:
         schema_version: { const: talos.testing-capabilities/v1 }
+        operations:
+          type: array
+          minItems: 5
+          maxItems: 5
+          prefixItems: [{ const: get_capabilities }, { const: submit }, { const: get }, { const: events }, { const: cancel }]
+        observed_at: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        scope: { const: resolved_identity_visible_pools }
         planning_contracts: { type: array, minItems: 3, maxItems: 3, prefixItems: [{ const: pql.project-pack-snapshot/v1 }, { const: pql.test-selection/v1 }, { const: pql.testing-design-input-set.v1 }] }
         tool_contracts: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: talos.testing-tool-request/v1 }] }
         task_contracts: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: talos.testing-task/v1 }] }
         execution_profiles: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: local_qa_agent_mvp }] }
         runtime_capabilities: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: local-qa-mvp/v1 }] }
-        result_contracts: { type: array, minItems: 3, maxItems: 3, prefixItems: [{ const: testing-case-result-set.v2 }, { const: testing-evidence-manifest.v1 }, { const: qa.local-cleanup-receipt/v2 }] }
+        result_contracts: { type: array, minItems: 3, maxItems: 3, description: Talos adapter slot identities; external Schema authority remains with Testing Packages and Local QA Runtime and requires the upstream manifest projection below., prefixItems: [{ const: testing-case-result-set.v2 }, { const: testing-evidence-manifest.v1 }, { const: qa.local-cleanup-receipt/v2 }] }
         backends: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: browser }] }
         browsers: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: chromium }] }
+        admission_availability: { $ref: '#/components/schemas/TestingAdmissionAvailability' }
+        backend_availability: { $ref: '#/components/schemas/TestingBackendAvailability' }
+        runner_packages: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/TestingRunnerPackageCapability' } }
+        runner_packages_total_count: { type: integer, minimum: 0, maximum: 1000000 }
+        runner_packages_truncated: { type: boolean }
+        external_schema_capabilities:
+          type: array
+          minItems: 6
+          maxItems: 6
+          prefixItems:
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: action }, owner: { const: testing-packages } } }]
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: observation }, owner: { const: testing-packages } } }]
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: assertion }, owner: { const: testing-packages } } }]
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: case_result_set }, owner: { const: testing-packages } } }]
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: evidence_manifest }, owner: { const: local-qa-runtime } } }]
+            - allOf: [{ $ref: '#/components/schemas/TestingExternalSchemaCapability' }, { properties: { contract: { const: cleanup_receipt }, owner: { const: local-qa-runtime } } }]
+        error_contract:
+          type: object
+          additionalProperties: false
+          required: [schema_version, catalog_version]
+          properties:
+            schema_version: { const: talos.public-error/v1 }
+            catalog_version: { const: talos.testing-error-catalog/v1 }
         secret_refs_supported: { const: false }
         max_concurrency_per_machine: { const: 1 }
         limits: { $ref: '#/components/schemas/TestingBudgets' }
+    TestingCapabilityAvailability:
+      type: string
+      enum: [available, busy, offline, unavailable]
+    TestingAdmissionAvailability:
+      type: object
+      additionalProperties: false
+      required: [status, reason_code]
+      properties:
+        status: { type: string, enum: [available, unavailable] }
+        reason_code: { oneOf: [{ $ref: '#/components/schemas/Identifier' }, { type: 'null' }] }
+      allOf:
+        - if: { properties: { status: { const: available } }, required: [status] }
+          then: { properties: { reason_code: { type: 'null' } } }
+          else: { properties: { reason_code: { $ref: '#/components/schemas/Identifier' } } }
+    TestingBackendAvailability:
+      type: object
+      additionalProperties: false
+      required: [backend, browser, availability, visible_pool_count, configured_machine_count, online_machine_count, available_capacity]
+      properties:
+        backend: { const: browser }
+        browser: { const: chromium }
+        availability: { $ref: '#/components/schemas/TestingCapabilityAvailability' }
+        visible_pool_count: { type: integer, minimum: 0, maximum: 1000000 }
+        configured_machine_count: { type: integer, minimum: 0, maximum: 1000000 }
+        online_machine_count: { type: integer, minimum: 0, maximum: 1000000 }
+        available_capacity: { type: integer, minimum: 0, maximum: 1000000 }
+    TestingRunnerPackageCapability:
+      type: object
+      additionalProperties: false
+      required: [package_id, version, digest, availability, visible_pool_count, configured_machine_count, online_machine_count, available_capacity]
+      properties:
+        package_id: { $ref: '#/components/schemas/Identifier' }
+        version: { type: string, minLength: 1, maxLength: 128, pattern: '^\d+\.\d+(\.\d+)?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+        availability: { type: string, enum: [available, busy, offline] }
+        visible_pool_count: { type: integer, minimum: 0, maximum: 1000000 }
+        configured_machine_count: { type: integer, minimum: 0, maximum: 1000000 }
+        online_machine_count: { type: integer, minimum: 0, maximum: 1000000 }
+        available_capacity: { type: integer, minimum: 0, maximum: 1000000 }
+    TestingExternalSchemaIdentity:
+      type: object
+      additionalProperties: false
+      required: [schema_id, version, digest]
+      properties:
+        schema_id: { $ref: '#/components/schemas/Identifier' }
+        version: { $ref: '#/components/schemas/Identifier' }
+        digest: { $ref: '#/components/schemas/Sha256Digest' }
+    TestingExternalSchemaCapability:
+      type: object
+      additionalProperties: false
+      required: [contract, owner, source, status, schemas, reason_code]
+      properties:
+        contract: { type: string, enum: [action, observation, assertion, case_result_set, evidence_manifest, cleanup_receipt] }
+        owner: { type: string, enum: [testing-packages, local-qa-runtime] }
+        source: { const: upstream_manifest }
+        status: { type: string, enum: [available, unavailable] }
+        schemas: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/TestingExternalSchemaIdentity' } }
+        reason_code: { oneOf: [{ $ref: '#/components/schemas/Identifier' }, { type: 'null' }] }
+      allOf:
+        - if: { properties: { status: { const: available } }, required: [status] }
+          then: { properties: { schemas: { minItems: 1 }, reason_code: { type: 'null' } } }
+          else: { properties: { schemas: { maxItems: 0 }, reason_code: { $ref: '#/components/schemas/Identifier' } } }
     TestingRunAcceptance:
       type: object
       additionalProperties: false
@@ -1773,8 +1870,16 @@ components:
         rotated: { type: boolean }
     Error:
       type: object
+      additionalProperties: false
       required: [error]
-      properties: { error: { $ref: '#/components/schemas/TaskError' } }
+      properties: { error: { $ref: '#/components/schemas/PublicErrorDetail' } }
+    PublicErrorDetail:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code: { type: string }
+        message: { type: string, minLength: 1, maxLength: 4096 }
+        retryable: { type: boolean }
     TestingCursorExpiredError:
       type: object
       additionalProperties: false
@@ -1786,7 +1891,7 @@ components:
           required: [code, message, retryable, replacement_cursor, snapshot_ref, snapshot_version, snapshot_digest]
           properties:
             code: { const: cursor_expired }
-            message: { type: string, minLength: 1 }
+            message: { type: string, minLength: 1, maxLength: 4096 }
             retryable: { const: true }
             replacement_cursor: { type: string, minLength: 32, maxLength: 4096 }
             snapshot_ref: { $ref: '#/components/schemas/TalosReference' }

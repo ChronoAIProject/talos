@@ -97,11 +97,16 @@ describe('control-plane HTTP API', () => {
     const base = `http://127.0.0.1:${address.port}`;
     const malformed = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: '{' });
     expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({
+      error: { code: 'invalid_json', message: 'request body must be valid JSON', retryable: false }
+    });
     const invalid = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'bad' }) });
     expect(invalid.status).toBe(400);
-    const invalidBody = await invalid.json() as { error: { message: string } };
-    expect(invalidBody.error.message).toContain('kind:');
-    expect(invalidBody.error.message).not.toContain('\n');
+    const invalidBody = await invalid.json() as { error: { code: string; message: string; retryable: boolean } };
+    expect(invalidBody).toEqual({
+      error: { code: 'validation_error', message: 'request failed schema validation', retryable: false }
+    });
+    expect(invalidBody.error.message.length).toBeLessThanOrEqual(4_096);
     const oversized = await fetch(`${base}/v1/tasks`, { method: 'POST', headers: { 'x-nyxid-identity-token': 'user:u', 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'browse', goal: 'x'.repeat(200) }) });
     expect(oversized.status).toBe(413);
     const unauthorizedMachine = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'other', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'w', machine_id: 'other' }) });

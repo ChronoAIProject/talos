@@ -36,7 +36,16 @@ import {
   workerInputPollSchema,
   workerNeedsInputSchema
 } from '../domain/schemas.js';
-import { TalosError, conflict, forbidden, notFound, notImplemented, payloadTooLarge, unauthorized } from '../domain/errors.js';
+import {
+  TalosError,
+  conflict,
+  forbidden,
+  notFound,
+  notImplemented,
+  payloadTooLarge,
+  publicErrorRetryable,
+  unauthorized
+} from '../domain/errors.js';
 import type { TaskService } from '../services/task-service.js';
 import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
@@ -104,7 +113,7 @@ export const createApiServer = (
       const validation = error instanceof z.ZodError
         ? {
             code: 'validation_error',
-            message: error.issues.map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; '),
+            message: 'request failed schema validation',
             status: 400
           }
         : undefined;
@@ -112,11 +121,19 @@ export const createApiServer = (
         ? { code: 'invalid_json', message: 'request body must be valid JSON', status: 400 }
         : undefined;
       const mapped = talos ?? validation ?? invalidJson;
-      send(response, mapped?.status ?? 500, {
+      const status = mapped?.status ?? 500;
+      const code = mapped?.code ?? 'internal_error';
+      const message = boundedPublicErrorMessage(mapped?.message ?? 'internal server error');
+      const details: Record<string, unknown> = { ...(talos?.details ?? {}) };
+      delete details.code;
+      delete details.message;
+      delete details.retryable;
+      send(response, status, {
         error: {
-          code: mapped?.code ?? 'internal_error',
-          message: mapped?.message ?? 'internal server error',
-          ...(talos?.details ?? {})
+          ...details,
+          code,
+          message,
+          retryable: publicErrorRetryable(code, status)
         }
       });
     }
@@ -138,7 +155,7 @@ const route = async (
   const url = new URL(request.url ?? '/', 'http://talos.local');
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (parts[0] !== 'v1') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (parts[0] !== 'v1') return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
   if (
     method === 'POST' &&
     parts[1] === 'testing' &&
@@ -246,7 +263,7 @@ const route = async (
     if (profile.userId !== userId) throw unauthorized('profile belongs to another user');
     throw notImplemented('profile login links are planned for Phase 2');
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const assertPoolOwner = async (repository: Repository, poolId: string, userId: string): Promise<NonNullable<Awaited<ReturnType<Repository['getPool']>>>> => {
@@ -338,7 +355,7 @@ const fleetPoolRoute = async (
       return send(response, 200, machines.map(publicMachine));
     }
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const adminRoute = async (
@@ -349,7 +366,7 @@ const adminRoute = async (
   options: ServerOptions
 ): Promise<void> => {
   requireAdmin(request, options.adminToken);
-  if (request.method !== 'POST') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (request.method !== 'POST') return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
   if (parts[2] === 'pools') {
     const input = adminPoolSchema.parse(await readBody(request, options.maxBodyBytes));
     if (await repository.getPool(input.id) !== undefined) throw conflict('pool already exists');
@@ -378,7 +395,7 @@ const adminRoute = async (
     await repository.saveProfile({ id: input.id, userId: input.user_id, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
     return send(response, 201, { id: input.id });
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const workerRoute = async (
@@ -406,7 +423,9 @@ const workerRoute = async (
     const claimed = await service.claim(input.worker_id, input.machine_id);
     return send(response, 200, { task: service.toPublicTask(claimed.task), lease: claimed.lease, leaseToken: claimed.leaseToken });
   }
-  if (parts[2] !== 'tasks' || parts[3] === undefined) return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (parts[2] !== 'tasks' || parts[3] === undefined) {
+    return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
+  }
   const taskId = parts[3];
   const task = await repository.getTask(taskId);
   if (task?.machineId !== workerIdentity.machineId) throw unauthorized('task is assigned to another machine');
@@ -446,7 +465,7 @@ const workerRoute = async (
     const artifact = { id: newId('artifact'), name: input.name, contentType: input.content_type, size: input.size, uri: input.uri, createdAt: new Date(options.clock?.() ?? Date.now()).toISOString() };
     return send(response, 201, service.toPublicTask(await service.addArtifact(taskId, worker, input.lease_token, artifact)));
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const testingWorkerRoute = async (
@@ -475,7 +494,7 @@ const testingWorkerRoute = async (
     return send(response, 200, claim);
   }
   if (method !== 'POST' || parts[3] !== 'runs' || parts[4] === undefined || parts[5] === undefined || parts.length !== 6) {
-    return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+    return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
   }
   const runId = parts[4];
   const action = parts[5];
@@ -545,7 +564,7 @@ const testingWorkerRoute = async (
       run.snapshotVersion
     ));
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const testingBinding = (
@@ -676,4 +695,12 @@ const sendSerialized = (response: ServerResponse, status: number, payload: strin
   response.end(payload);
 };
 
-export const parseError = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
+const publicErrorEnvelope = (code: string, message: string, status: number): unknown => ({
+  error: { code, message: boundedPublicErrorMessage(message), retryable: publicErrorRetryable(code, status) }
+});
+
+const boundedPublicErrorMessage = (message: string): string => message.slice(0, 4_096) || 'request failed';
+
+export const parseError = z.object({
+  error: z.object({ code: z.string(), message: z.string(), retryable: z.boolean() }).passthrough()
+});

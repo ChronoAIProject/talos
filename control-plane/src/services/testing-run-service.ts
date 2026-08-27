@@ -15,6 +15,7 @@ import {
   testingRunEventSchema,
   testingRunIdSchema,
   testingRunSnapshotSchema,
+  testingPackageReferenceSchema,
   testingToolRequestSchema,
   testingAuthenticatedTransportContextSchema,
   type TestingCancelAck,
@@ -40,6 +41,7 @@ import type { TestingPlacementInputVerifier } from './testing-placement-verifier
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'abandoned']);
 export const TESTING_CURSOR_PAGE_RETENTION = 128;
 export const TESTING_CANCEL_RECORD_RETENTION = 32;
+export const TESTING_CAPABILITY_TTL_MS = 30_000;
 const cursorPayloadSchema = z.object({
   version: z.literal(1),
   cursor_id: z.string().regex(/^sha256:[a-f0-9]{64}$/),
@@ -53,8 +55,7 @@ const cursorPayloadSchema = z.object({
 
 type CursorPayload = z.infer<typeof cursorPayloadSchema>;
 
-const capabilities: TestingCapabilities = testingCapabilitiesSchema.parse({
-  schema_version: 'talos.testing-capabilities/v1',
+const capabilityBase = {
   planning_contracts: [
     'pql.project-pack-snapshot/v1',
     'pql.test-selection/v1',
@@ -71,6 +72,18 @@ const capabilities: TestingCapabilities = testingCapabilitiesSchema.parse({
   ],
   backends: ['browser'],
   browsers: ['chromium'],
+  external_schema_capabilities: [
+    externalSchemaUnavailable('action', 'testing-packages'),
+    externalSchemaUnavailable('observation', 'testing-packages'),
+    externalSchemaUnavailable('assertion', 'testing-packages'),
+    externalSchemaUnavailable('case_result_set', 'testing-packages'),
+    externalSchemaUnavailable('evidence_manifest', 'local-qa-runtime'),
+    externalSchemaUnavailable('cleanup_receipt', 'local-qa-runtime')
+  ],
+  error_contract: {
+    schema_version: 'talos.public-error/v1',
+    catalog_version: 'talos.testing-error-catalog/v1'
+  },
   secret_refs_supported: false,
   max_concurrency_per_machine: 1,
   limits: {
@@ -83,7 +96,7 @@ const capabilities: TestingCapabilities = testingCapabilitiesSchema.parse({
     max_json_evidence_bytes: 1_048_576,
     max_total_artifact_bytes: 52_428_800
   }
-});
+} as const;
 
 export interface TestingRunServiceOptions {
   readonly cursorSecret: string;
@@ -103,8 +116,104 @@ export class TestingRunService {
     this.clock = options.clock ?? Date.now;
   }
 
-  public getCapabilities(): TestingCapabilities {
-    return capabilities;
+  public async getCapabilities(userId: string, requesterGroups: readonly string[] = []): Promise<TestingCapabilities> {
+    const observedAt = this.clock();
+    const machines = await this.visibleTestingMachines(userId, requesterGroups);
+    const reservations = await this.repository.listTestingMachineReservations();
+    const reservedMachineIds = new Set(reservations.map((reservation) => reservation.machineId));
+    const packages = new Map<string, TestingCapabilities['runner_packages'][number]>();
+    const packagePoolIds = new Map<string, Set<string>>();
+    for (const machine of machines) {
+      const runner = testingPackageReferenceSchema.safeParse({
+        package_id: machine.tags.runner_package_id,
+        version: machine.tags.runner_package_version,
+        digest: machine.tags.runner_package_digest
+      });
+      if (!runner.success) continue;
+      const key = `${runner.data.package_id}\u0000${runner.data.version}\u0000${runner.data.digest}`;
+      const current = packages.get(key);
+      const testingReservations = reservedMachineIds.has(machine.id) ? 1 : 0;
+      const availableCapacity = machine.online
+        ? Math.max(0, machine.capacity - machine.activeLeases - testingReservations)
+        : 0;
+      const poolIds = new Set(packagePoolIds.get(key));
+      poolIds.add(machine.poolId);
+      packagePoolIds.set(key, poolIds);
+      const configuredMachineCount = (current?.configured_machine_count ?? 0) + 1;
+      const onlineMachineCount = (current?.online_machine_count ?? 0) + (machine.online ? 1 : 0);
+      const totalCapacity = (current?.available_capacity ?? 0) + availableCapacity;
+      packages.set(key, {
+        ...runner.data,
+        availability: configuredCapabilityAvailability(onlineMachineCount, totalCapacity),
+        visible_pool_count: boundedCapabilityCount(poolIds.size),
+        configured_machine_count: boundedCapabilityCount(configuredMachineCount),
+        online_machine_count: boundedCapabilityCount(onlineMachineCount),
+        available_capacity: boundedCapabilityCount(totalCapacity)
+      });
+    }
+    const allRunnerPackages = [...packages.values()]
+      .sort((left, right) => `${left.package_id}\u0000${left.version}\u0000${left.digest}`
+        .localeCompare(`${right.package_id}\u0000${right.version}\u0000${right.digest}`));
+    const runnerPackages = allRunnerPackages.slice(0, 64);
+    const visiblePoolCount = new Set(machines.map((machine) => machine.poolId)).size;
+    const onlineMachineCount = machines.filter((machine) => machine.online).length;
+    const availableCapacity = machines.reduce(
+      (total, machine) => total + (machine.online
+        ? Math.max(0, machine.capacity - machine.activeLeases - (reservedMachineIds.has(machine.id) ? 1 : 0))
+        : 0),
+      0
+    );
+    return testingCapabilitiesSchema.parse({
+      schema_version: 'talos.testing-capabilities/v1',
+      operations: ['get_capabilities', 'submit', 'get', 'events', 'cancel'],
+      observed_at: new Date(observedAt).toISOString(),
+      valid_until: new Date(observedAt + TESTING_CAPABILITY_TTL_MS).toISOString(),
+      scope: 'resolved_identity_visible_pools',
+      ...capabilityBase,
+      admission_availability: this.options.placementInputVerifier === undefined
+        ? { status: 'unavailable', reason_code: 'testing_placement_verifier_unavailable' }
+        : this.options.placementPolicy === undefined
+          ? { status: 'unavailable', reason_code: 'testing_placement_policy_unavailable' }
+          : { status: 'available', reason_code: null },
+      backend_availability: {
+        backend: 'browser',
+        browser: 'chromium',
+        availability: capabilityAvailability(machines.length, onlineMachineCount, availableCapacity),
+        visible_pool_count: boundedCapabilityCount(visiblePoolCount),
+        configured_machine_count: boundedCapabilityCount(machines.length),
+        online_machine_count: boundedCapabilityCount(onlineMachineCount),
+        available_capacity: boundedCapabilityCount(availableCapacity)
+      },
+      runner_packages: runnerPackages,
+      runner_packages_total_count: boundedCapabilityCount(allRunnerPackages.length),
+      runner_packages_truncated: allRunnerPackages.length > runnerPackages.length
+    });
+  }
+
+  private async visibleTestingMachines(
+    userId: string,
+    requesterGroups: readonly string[]
+  ): Promise<readonly Awaited<ReturnType<Repository['listMachines']>>[number][]> {
+    const machines = await this.repository.listMachines();
+    const pools = new Map(await Promise.all([...new Set(machines.map((machine) => machine.poolId))].map(async (poolId) =>
+      [poolId, await this.repository.getPool(poolId)] as const)));
+    return machines.filter((machine) => {
+      const pool = pools.get(machine.poolId);
+      return pool !== undefined && poolVisible(pool, userId, requesterGroups) &&
+        machine.tags.testing_runtime === 'local-qa-mvp/v1' &&
+        machine.tags.testing_task_contract === 'talos.testing-task/v1' &&
+        machine.tags.testing_backend === 'browser' &&
+        machine.tags.browser === 'chromium' &&
+        machine.tags.os === 'darwin' &&
+        machine.tags.arch === 'arm64' &&
+        machine.tags.headed_display === true &&
+        machine.capacity === 1 &&
+        testingPackageReferenceSchema.safeParse({
+          package_id: machine.tags.runner_package_id,
+          version: machine.tags.runner_package_version,
+          digest: machine.tags.runner_package_digest
+        }).success;
+    });
   }
 
   public async submit(
@@ -630,6 +739,42 @@ const poolVisible = (
   if (pool.visibility === 'platform' || pool.ownerUserId === userId) return true;
   if (pool.visibility === 'private') return false;
   return (pool.sharedWithGroups ?? []).some((group) => groups.includes(group));
+};
+
+function externalSchemaUnavailable(
+  contract: 'action' | 'observation' | 'assertion' | 'case_result_set' | 'evidence_manifest' | 'cleanup_receipt',
+  owner: 'testing-packages' | 'local-qa-runtime'
+) {
+  return {
+    contract,
+    owner,
+    source: 'upstream_manifest' as const,
+    status: 'unavailable' as const,
+    schemas: [],
+    reason_code: 'upstream_schema_manifest_unpublished'
+  };
+}
+
+const boundedCapabilityCount = (value: number): number => Math.min(1_000_000, value);
+
+const capabilityAvailability = (
+  configuredMachineCount: number,
+  onlineMachineCount: number,
+  availableCapacity: number
+): 'available' | 'busy' | 'offline' | 'unavailable' => {
+  if (availableCapacity > 0) return 'available';
+  if (onlineMachineCount > 0) return 'busy';
+  if (configuredMachineCount > 0) return 'offline';
+  return 'unavailable';
+};
+
+const configuredCapabilityAvailability = (
+  onlineMachineCount: number,
+  availableCapacity: number
+): 'available' | 'busy' | 'offline' => {
+  if (availableCapacity > 0) return 'available';
+  if (onlineMachineCount > 0) return 'busy';
+  return 'offline';
 };
 
 const machineMatchesPlacement = (

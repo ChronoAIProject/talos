@@ -4,6 +4,7 @@ import {
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
   computeTestingToolRequestDigest,
+  testingCapabilitiesSchema,
   testingAuthenticatedTransportContextSchema,
   testingCancelRequestSchema,
   testingCurrentClaimEnvelopeSchema,
@@ -99,6 +100,69 @@ const request = testingToolRequestSchema.parse({
 });
 
 describe('Testing Tool contracts', () => {
+  it('requires the five-operation capability contract and fail-closed upstream schema publication state', () => {
+    const unavailableSchema = (contract: string, owner: string) => ({
+      contract,
+      owner,
+      source: 'upstream_manifest',
+      status: 'unavailable',
+      schemas: [],
+      reason_code: 'upstream_schema_manifest_unpublished'
+    });
+    const capability = {
+      schema_version: 'talos.testing-capabilities/v1',
+      operations: ['get_capabilities', 'submit', 'get', 'events', 'cancel'],
+      observed_at: timestamp,
+      valid_until: '2026-08-22T00:00:30.000Z',
+      scope: 'resolved_identity_visible_pools',
+      planning_contracts: ['pql.project-pack-snapshot/v1', 'pql.test-selection/v1', 'pql.testing-design-input-set.v1'],
+      tool_contracts: ['talos.testing-tool-request/v1'],
+      task_contracts: ['talos.testing-task/v1'],
+      execution_profiles: ['local_qa_agent_mvp'],
+      runtime_capabilities: ['local-qa-mvp/v1'],
+      result_contracts: ['testing-case-result-set.v2', 'testing-evidence-manifest.v1', 'qa.local-cleanup-receipt/v2'],
+      backends: ['browser'],
+      browsers: ['chromium'],
+      admission_availability: { status: 'unavailable', reason_code: 'testing_placement_policy_unavailable' },
+      backend_availability: {
+        backend: 'browser', browser: 'chromium', availability: 'unavailable', visible_pool_count: 0,
+        configured_machine_count: 0, online_machine_count: 0, available_capacity: 0
+      },
+      runner_packages: [],
+      runner_packages_total_count: 0,
+      runner_packages_truncated: false,
+      external_schema_capabilities: [
+        unavailableSchema('action', 'testing-packages'),
+        unavailableSchema('observation', 'testing-packages'),
+        unavailableSchema('assertion', 'testing-packages'),
+        unavailableSchema('case_result_set', 'testing-packages'),
+        unavailableSchema('evidence_manifest', 'local-qa-runtime'),
+        unavailableSchema('cleanup_receipt', 'local-qa-runtime')
+      ],
+      error_contract: {
+        schema_version: 'talos.public-error/v1',
+        catalog_version: 'talos.testing-error-catalog/v1'
+      },
+      secret_refs_supported: false,
+      max_concurrency_per_machine: 1,
+      limits: policy.budgets
+    };
+
+    expect(testingCapabilitiesSchema.parse(capability).operations).toHaveLength(5);
+    expect(() => testingCapabilitiesSchema.parse({
+      ...capability,
+      operations: [...capability.operations, 'result']
+    })).toThrow();
+    expect(() => testingCapabilitiesSchema.parse({
+      ...capability,
+      external_schema_capabilities: capability.external_schema_capabilities.map((entry, index) =>
+        index === 0 ? { ...entry, status: 'available', reason_code: null } : entry)
+    })).toThrow('available external schemas require identities');
+    expect(() => testingCapabilitiesSchema.parse({ ...capability, valid_until: timestamp })).toThrow(
+      'valid_until must be later than observed_at'
+    );
+  });
+
   it('strictly binds signed current-claim envelopes without carrying raw lease tokens', () => {
     const claim = {
       schema_version: 'talos.testing-claim-identity/v1' as const,

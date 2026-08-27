@@ -23,7 +23,7 @@ export const routeTestingRunRequest = async (
   const { method, parts, searchParams, body, identity, service } = request;
   if (parts[0] !== 'v1' || parts[1] !== 'tools' || parts[2] !== 'testing') return undefined;
   if (method === 'GET' && parts.length === 4 && parts[3] === 'capabilities') {
-    return { status: 200, body: service.getCapabilities() };
+    return { status: 200, body: await service.getCapabilities(identity.userId, identity.groups) };
   }
   if (parts[3] !== 'runs' || parts[4] === undefined) return undefined;
 

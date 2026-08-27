@@ -176,8 +176,102 @@ export const testingAuthenticatedTransportContextSchema = z.object({
   verified_at: timestampSchema
 }).strict();
 
+export const testingToolOperationSchema = z.enum([
+  'get_capabilities',
+  'submit',
+  'get',
+  'events',
+  'cancel'
+]);
+
+export const testingCapabilityAvailabilitySchema = z.enum([
+  'available',
+  'busy',
+  'offline',
+  'unavailable'
+]);
+
+const boundedCapabilityCountSchema = z.number().int().nonnegative().max(1_000_000);
+
+export const testingRunnerPackageCapabilitySchema = testingPackageReferenceSchema.extend({
+  availability: testingCapabilityAvailabilitySchema.exclude(['unavailable']),
+  visible_pool_count: boundedCapabilityCountSchema,
+  configured_machine_count: boundedCapabilityCountSchema,
+  online_machine_count: boundedCapabilityCountSchema,
+  available_capacity: boundedCapabilityCountSchema
+}).strict();
+
+const testingExternalSchemaIdentitySchema = z.object({
+  schema_id: identifierSchema,
+  version: identifierSchema,
+  digest: sha256DigestSchema
+}).strict();
+
+const testingExternalSchemaCapabilityObjectSchema = z.object({
+  contract: z.enum([
+    'action',
+    'observation',
+    'assertion',
+    'case_result_set',
+    'evidence_manifest',
+    'cleanup_receipt'
+  ]),
+  owner: z.enum(['testing-packages', 'local-qa-runtime']),
+  source: z.literal('upstream_manifest'),
+  status: z.enum(['available', 'unavailable']),
+  schemas: z.array(testingExternalSchemaIdentitySchema).max(32),
+  reason_code: identifierSchema.nullable()
+}).strict();
+
+const validateExternalSchemaCapability = (
+  value: z.infer<typeof testingExternalSchemaCapabilityObjectSchema>,
+  context: z.RefinementCtx
+): void => {
+  if (value.status === 'available' && (value.schemas.length === 0 || value.reason_code !== null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'available external schemas require identities and no unavailable reason',
+      path: ['status']
+    });
+  }
+  if (value.status === 'unavailable' && (value.schemas.length !== 0 || value.reason_code === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'unavailable external schemas require an empty identity set and stable reason code',
+      path: ['status']
+    });
+  }
+};
+
+export const testingExternalSchemaCapabilitySchema = testingExternalSchemaCapabilityObjectSchema.superRefine(
+  validateExternalSchemaCapability
+);
+
+export const testingAdmissionAvailabilitySchema = z.object({
+  status: z.enum(['available', 'unavailable']),
+  reason_code: identifierSchema.nullable()
+}).strict().superRefine((value, context) => {
+  if ((value.status === 'available') !== (value.reason_code === null)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'admission availability requires a reason exactly when unavailable',
+      path: ['reason_code']
+    });
+  }
+});
+
 export const testingCapabilitiesSchema = z.object({
   schema_version: z.literal('talos.testing-capabilities/v1'),
+  operations: z.tuple([
+    z.literal('get_capabilities'),
+    z.literal('submit'),
+    z.literal('get'),
+    z.literal('events'),
+    z.literal('cancel')
+  ]),
+  observed_at: timestampSchema,
+  valid_until: timestampSchema,
+  scope: z.literal('resolved_identity_visible_pools'),
   planning_contracts: z.tuple([
     z.literal('pql.project-pack-snapshot/v1'),
     z.literal('pql.test-selection/v1'),
@@ -194,10 +288,54 @@ export const testingCapabilitiesSchema = z.object({
   ]),
   backends: z.tuple([z.literal('browser')]),
   browsers: z.tuple([z.literal('chromium')]),
+  admission_availability: testingAdmissionAvailabilitySchema,
+  backend_availability: z.object({
+    backend: z.literal('browser'),
+    browser: z.literal('chromium'),
+    availability: testingCapabilityAvailabilitySchema,
+    visible_pool_count: boundedCapabilityCountSchema,
+    configured_machine_count: boundedCapabilityCountSchema,
+    online_machine_count: boundedCapabilityCountSchema,
+    available_capacity: boundedCapabilityCountSchema
+  }).strict(),
+  runner_packages: z.array(testingRunnerPackageCapabilitySchema).max(64),
+  runner_packages_total_count: boundedCapabilityCountSchema,
+  runner_packages_truncated: z.boolean(),
+  external_schema_capabilities: z.array(testingExternalSchemaCapabilitySchema).length(6).superRefine((value, context) => {
+    const expected = [
+      ['action', 'testing-packages'],
+      ['observation', 'testing-packages'],
+      ['assertion', 'testing-packages'],
+      ['case_result_set', 'testing-packages'],
+      ['evidence_manifest', 'local-qa-runtime'],
+      ['cleanup_receipt', 'local-qa-runtime']
+    ] as const;
+    expected.forEach(([contract, owner], index) => {
+      if (value[index]?.contract !== contract || value[index]?.owner !== owner) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'external schema capabilities must use the canonical contract and owner order',
+          path: [index]
+        });
+      }
+    });
+  }),
+  error_contract: z.object({
+    schema_version: z.literal('talos.public-error/v1'),
+    catalog_version: z.literal('talos.testing-error-catalog/v1')
+  }).strict(),
   secret_refs_supported: z.literal(false),
   max_concurrency_per_machine: z.literal(1),
   limits: testingBudgetsSchema
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (Date.parse(value.valid_until) <= Date.parse(value.observed_at)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'valid_until must be later than observed_at',
+      path: ['valid_until']
+    });
+  }
+});
 
 export const testingRunAcceptanceSchema = z.object({
   schema_version: z.literal('talos.testing-run-acceptance/v1'),

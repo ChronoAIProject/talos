@@ -17,6 +17,7 @@ import {
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
 import type { TestingPlacementPolicy } from './testing-placement-policy.js';
+import type { TestingMachineReservationRecord } from '../domain/testing-types.js';
 import { submitTestingRun, testAuthenticatedTransportContext } from '../test-support/testing-transport.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
@@ -112,6 +113,151 @@ const serviceFor = async (
 };
 
 describe('TestingRunService', () => {
+  it('projects short-lived identity-scoped backend and exact Runner package availability', async () => {
+    const repository = new MemoryRepository();
+    const now = Date.parse('2026-08-22T00:00:00.000Z');
+    const service = await serviceFor(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      clock: () => now
+    });
+    const machine = await repository.getMachine('testing-pool-configured-canary');
+    if (machine === undefined) throw new Error('testing capability machine fixture missing');
+    await repository.savePool({
+      id: 'private-testing-pool',
+      visibility: 'private',
+      ownerUserId: 'user-2',
+      tags: {}
+    });
+    await repository.saveMachine({
+      ...machine,
+      id: 'private-testing-machine',
+      poolId: 'private-testing-pool',
+      online: true
+    });
+
+    const offline = await service.getCapabilities('user-1', ['eng']);
+    expect(offline).toMatchObject({
+      operations: ['get_capabilities', 'submit', 'get', 'events', 'cancel'],
+      observed_at: '2026-08-22T00:00:00.000Z',
+      valid_until: '2026-08-22T00:00:30.000Z',
+      scope: 'resolved_identity_visible_pools',
+      admission_availability: { status: 'available', reason_code: null },
+      backend_availability: {
+        availability: 'offline',
+        visible_pool_count: 1,
+        configured_machine_count: 1,
+        online_machine_count: 0,
+        available_capacity: 0
+      },
+      runner_packages: [{
+        package_id: 'testing-browser-runner',
+        version: '1.0',
+        digest,
+        availability: 'offline'
+      }]
+    });
+    expect(offline.external_schema_capabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'unavailable' }),
+      expect.objectContaining({ contract: 'cleanup_receipt', owner: 'local-qa-runtime', status: 'unavailable' })
+    ]));
+
+    await repository.saveMachine({ ...machine, online: true });
+    const available = await service.getCapabilities('user-1', ['eng']);
+    expect(available.backend_availability).toMatchObject({
+      availability: 'available', online_machine_count: 1, available_capacity: 1
+    });
+    expect(available.runner_packages[0]).toMatchObject({ availability: 'available', available_capacity: 1 });
+
+    let reservation: TestingMachineReservationRecord = {
+      machineId: machine.id,
+      runId: 'run-capability-reservation',
+      taskId: 'task-capability-reservation',
+      attemptId: 'attempt-capability-reservation',
+      generation: 1,
+      fenceToken: 'capability-reservation-fence',
+      status: 'reserved' as const,
+      expiresAt: '2026-08-22T00:05:00.000Z',
+      recordVersion: 1
+    };
+    expect(await repository.createTestingMachineReservation(reservation)).toBe(true);
+    expect((await service.getCapabilities('user-1', ['eng'])).backend_availability).toMatchObject({
+      availability: 'busy', available_capacity: 0
+    });
+    for (const status of ['claimed', 'local_accepted', 'reconcile_required'] as const) {
+      const next = { ...reservation, status, recordVersion: reservation.recordVersion + 1 };
+      expect(await repository.replaceTestingMachineReservation(next, reservation.recordVersion)).toBe(true);
+      reservation = next;
+      expect((await service.getCapabilities('user-1', ['eng'])).backend_availability.availability).toBe('busy');
+    }
+    const residual = {
+      ...reservation,
+      status: 'residual_blocking' as const,
+      expiresAt: '2026-08-21T23:59:59.000Z',
+      recordVersion: reservation.recordVersion + 1
+    };
+    expect(await repository.replaceTestingMachineReservation(residual, reservation.recordVersion)).toBe(true);
+    expect((await service.getCapabilities('user-1', ['eng'])).backend_availability.availability).toBe('busy');
+    expect(await repository.releaseTestingMachineReservation(machine.id, residual.attemptId)).toBe(true);
+    expect((await service.getCapabilities('user-1', ['eng'])).backend_availability.availability).toBe('available');
+
+    for (const status of ['reserved', 'claimed', 'local_accepted', 'reconcile_required'] as const) {
+      const expired: TestingMachineReservationRecord = {
+        ...reservation,
+        attemptId: `attempt-capability-expired-${status}`,
+        status,
+        expiresAt: '2026-08-21T23:59:59.000Z',
+        recordVersion: 1
+      };
+      expect(await repository.createTestingMachineReservation(expired)).toBe(true);
+      expect((await service.getCapabilities('user-1', ['eng'])).backend_availability).toMatchObject({
+        availability: 'busy', available_capacity: 0
+      });
+      expect(await repository.releaseTestingMachineReservation(machine.id, expired.attemptId)).toBe(true);
+      expect((await service.getCapabilities('user-1', ['eng'])).backend_availability).toMatchObject({
+        availability: 'available', available_capacity: 1
+      });
+    }
+  });
+
+  it('separates hardware availability from missing admission dependencies', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const machine = await repository.getMachine('testing-pool-configured-canary');
+    if (machine === undefined) throw new Error('testing capability machine fixture missing');
+    await repository.saveMachine({ ...machine, online: true });
+    const service = new TestingRunService(repository, { cursorSecret: 'testing-cursor-secret-123456' });
+
+    const capability = await service.getCapabilities('user-1');
+    expect(capability.backend_availability.availability).toBe('available');
+    expect(capability.admission_availability).toEqual({
+      status: 'unavailable',
+      reason_code: 'testing_placement_verifier_unavailable'
+    });
+  });
+
+  it('reports bounded Runner package projection truncation instead of silently omitting identities', async () => {
+    const repository = new MemoryRepository();
+    const service = await serviceFor(repository, { cursorSecret: 'testing-cursor-secret-123456' });
+    const machine = await repository.getMachine('testing-pool-configured-canary');
+    if (machine === undefined) throw new Error('testing capability machine fixture missing');
+    for (let index = 0; index < 65; index += 1) {
+      await repository.saveMachine({
+        ...machine,
+        id: `testing-package-machine-${index}`,
+        tags: {
+          ...machine.tags,
+          runner_package_id: `testing-runner-${index}`,
+          runner_package_digest: `sha256:${index.toString(16).padStart(64, '0')}`
+        }
+      });
+    }
+
+    const capability = await service.getCapabilities('user-1');
+    expect(capability.runner_packages).toHaveLength(64);
+    expect(capability.runner_packages_total_count).toBe(66);
+    expect(capability.runner_packages_truncated).toBe(true);
+  });
+
   it('fails closed when the authenticated transport is not bound to caller, correlation, and request digest', async () => {
     const repository = new MemoryRepository();
     const service = await serviceFor(repository, {

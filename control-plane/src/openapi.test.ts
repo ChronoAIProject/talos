@@ -72,6 +72,12 @@ describe('OpenAPI loader', () => {
     const properties = (name: string): Record<string, unknown> => asObject(schema(name).properties);
     for (const strictSchema of [
       'TestingToolRequest',
+      'TestingCapabilities',
+      'TestingAdmissionAvailability',
+      'TestingBackendAvailability',
+      'TestingRunnerPackageCapability',
+      'TestingExternalSchemaIdentity',
+      'TestingExternalSchemaCapability',
       'TestingAuthenticatedTransportContext',
       'NyxIdPointer',
       'NyxIdRoutePointer',
@@ -124,6 +130,37 @@ describe('OpenAPI loader', () => {
     expect(schema('TestingToolRequest').required).toEqual(expect.arrayContaining([
       'request_id', 'client_correlation_id', 'idempotency_key', 'policy_binding'
     ]));
+    expect(schema('TestingCapabilities').required).toEqual(expect.arrayContaining([
+      'operations', 'observed_at', 'valid_until', 'scope', 'admission_availability', 'backend_availability',
+      'runner_packages', 'runner_packages_total_count', 'runner_packages_truncated',
+      'external_schema_capabilities', 'error_contract'
+    ]));
+    expect(asObject(properties('TestingCapabilities').operations).prefixItems).toEqual([
+      { const: 'get_capabilities' },
+      { const: 'submit' },
+      { const: 'get' },
+      { const: 'events' },
+      { const: 'cancel' }
+    ]);
+    expect(schema('PublicErrorDetail').required).toEqual(['code', 'message', 'retryable']);
+    expect(schema('TaskError').required).toEqual(['code', 'message']);
+    const submitResponses = asObject(asObject(parsed.paths['/v1/tools/testing/runs/{run_id}']?.put).responses);
+    expect(Object.keys(submitResponses)).toEqual(expect.arrayContaining(['200', '201', '400', '401', '403', '409', '413', '503']));
+    const externalCapabilities = asObject(properties('TestingCapabilities').external_schema_capabilities);
+    const externalPrefixItems = externalCapabilities.prefixItems as unknown[];
+    expect(externalPrefixItems.map((item) => {
+      const allOf = asObject(item).allOf as unknown[];
+      const specialized = asObject(allOf[1]);
+      const specializedProperties = asObject(specialized.properties);
+      return [asObject(specializedProperties.contract).const, asObject(specializedProperties.owner).const];
+    })).toEqual([
+      ['action', 'testing-packages'],
+      ['observation', 'testing-packages'],
+      ['assertion', 'testing-packages'],
+      ['case_result_set', 'testing-packages'],
+      ['evidence_manifest', 'local-qa-runtime'],
+      ['cleanup_receipt', 'local-qa-runtime']
+    ]);
     expect(schema('TestingRunAcceptance').required).toEqual(expect.arrayContaining([
       'request_id', 'client_correlation_id', 'authenticated_transport'
     ]));
