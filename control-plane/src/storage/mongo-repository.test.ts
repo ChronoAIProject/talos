@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MongoClient } from 'mongodb';
 import { digestJson } from '@talos/testing-protocol';
 import { TestingRunService } from '../services/testing-run-service.js';
+import { submitTestingRun } from '../test-support/testing-transport.js';
 import type { TestingRunRecord } from '../domain/testing-types.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
@@ -161,8 +162,10 @@ const makeTestingRun = async (): Promise<TestingRunRecord> => {
     placementPolicy: testTestingPlacementPolicy(),
     placementInputVerifier: testTestingPlacementInputVerifier()
   });
-  await service.submit('run-mongo', 'user-1', {
+  await submitTestingRun(service, 'run-mongo', 'user-1', {
     schema_version: 'talos.testing-tool-request/v1',
+    request_id: 'request:run-mongo',
+    client_correlation_id: 'client:run-mongo',
     idempotency_key: 'mongo-submit-key',
     display_goal: 'Mongo repository double',
     inputs: {

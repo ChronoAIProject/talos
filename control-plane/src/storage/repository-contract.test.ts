@@ -6,6 +6,7 @@ import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
 import type { BrowserTask, WebhookEvent } from '../domain/types.js';
 import { TestingRunService } from '../services/testing-run-service.js';
+import { submitTestingRun } from '../test-support/testing-transport.js';
 import { digestJson } from '@talos/testing-protocol';
 import {
   provisionTestingPool,
@@ -207,6 +208,8 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
       };
       const request = {
         schema_version: 'talos.testing-tool-request/v1' as const,
+        request_id: 'request:run-contract',
+        client_correlation_id: 'client:run-contract',
         idempotency_key: 'testing-submit-1',
         display_goal: 'Repository contract',
         inputs: {
@@ -227,8 +230,8 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
         },
         policy
       };
-      expect((await service.submit('run-contract', 'user-1', request)).created).toBe(true);
-      expect((await service.submit('run-contract', 'user-1', request)).created).toBe(false);
+      expect((await submitTestingRun(service, 'run-contract', 'user-1', request)).created).toBe(true);
+      expect((await submitTestingRun(service, 'run-contract', 'user-1', request)).created).toBe(false);
       const run = await repository.getTestingRun('run-contract');
       expect(run).toMatchObject({ recordVersion: 1, snapshotVersion: 1, controlStatus: 'submitted' });
       expect(await repository.getTestingRunByIdempotencyKey('user-1', 'testing-submit-1')).toMatchObject({ id: 'run-contract' });

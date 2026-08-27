@@ -13,6 +13,7 @@ import {
   testTestingPlacementInputVerifier,
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
+import { testResolvedIdentity } from '../test-support/testing-transport.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -36,6 +37,8 @@ const policy = {
 
 const submitRequest = (key: string) => ({
   schema_version: 'talos.testing-tool-request/v1',
+  request_id: `request:${key}`,
+  client_correlation_id: `client:${key}`,
   idempotency_key: key,
   display_goal: 'Exercise worker attempt routes',
   inputs: {
@@ -157,6 +160,14 @@ describe('Testing worker HTTP routes', () => {
     const server = createApiServer(tasks, repository, {
       testingRunService: runs,
       testingAttemptService: attempts,
+      identityResolver: {
+        resolve: (token) => {
+          const match = /^submit:([^:]+):(.+)$/.exec(token);
+          if (match !== null) return testResolvedIdentity(match[1]!, submitRequest(match[2]!));
+          if (token === 'user:user-1') return { userId: 'user-1', groups: [], permissions: [] };
+          return undefined;
+        }
+      },
       clock: () => now
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -186,7 +197,7 @@ describe('Testing worker HTTP routes', () => {
     const submit = async (runId: string, key: string): Promise<void> => {
       const response = await fetch(`${base}/v1/tools/testing/runs/${runId}`, {
         method: 'PUT',
-        headers: userHeaders,
+        headers: { ...userHeaders, 'x-nyxid-identity-token': `submit:${runId}:${key}` },
         body: JSON.stringify(submitRequest(key))
       });
       expect(response.status).toBe(201);

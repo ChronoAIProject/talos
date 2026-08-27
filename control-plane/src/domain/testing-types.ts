@@ -1,5 +1,6 @@
 import type {
   TestingCancelAck,
+  TestingAuthenticatedTransportContext,
   TestingCleanupOutcome,
   TestingControlStatus,
   TestingEvidenceOutcome,
@@ -189,6 +190,7 @@ export interface TestingRunRecord {
   readonly idempotencyKey: string;
   readonly requestDigest: string;
   readonly request: TestingToolRequest;
+  readonly authenticatedTransport: TestingAuthenticatedTransportContext;
   readonly requesterGroups: readonly string[];
   readonly placement: TestingPlacementRecord;
   readonly acceptance: TestingRunAcceptance;

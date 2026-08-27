@@ -17,6 +17,7 @@ import {
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
 import type { TestingPlacementPolicy } from './testing-placement-policy.js';
+import { submitTestingRun, testAuthenticatedTransportContext } from '../test-support/testing-transport.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -44,6 +45,8 @@ const request = (key = 'submit-key') => {
   };
   return {
     schema_version: 'talos.testing-tool-request/v1' as const,
+    request_id: `request:${key}`,
+    client_correlation_id: `client:${key}`,
     idempotency_key: key,
     display_goal: 'Verify login redirect',
     inputs: {
@@ -109,6 +112,70 @@ const serviceFor = async (
 };
 
 describe('TestingRunService', () => {
+  it('fails closed when the authenticated transport is not bound to caller, correlation, and request digest', async () => {
+    const repository = new MemoryRepository();
+    const service = await serviceFor(repository, {
+      cursorSecret: 'testing-cursor-secret-123456'
+    });
+    const input = request('transport-binding-key');
+    const context = testAuthenticatedTransportContext('run-transport-binding', input);
+
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      subject: 'user-2'
+    })).rejects.toMatchObject({ code: 'nyxid_subject_mismatch', status: 401 });
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      route: { ...context.route, run_id: 'run-other' }
+    })).rejects.toMatchObject({ code: 'nyxid_route_mismatch', status: 401 });
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      authorization: { ...context.authorization, run_id: 'run-other' }
+    })).rejects.toMatchObject({ code: 'nyxid_authorization_mismatch', status: 401 });
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      authorization: { ...context.authorization, valid_until: '2026-08-21T23:59:59.000Z' }
+    })).rejects.toMatchObject({ code: 'nyxid_authorization_expired', status: 401 });
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      verified_client_correlation_id: 'client:other'
+    })).rejects.toMatchObject({ code: 'nyxid_client_correlation_mismatch', status: 401 });
+    await expect(service.submit('run-transport-binding', 'user-1', input, {
+      ...context,
+      verified_request_digest: `sha256:${'c'.repeat(64)}`
+    })).rejects.toMatchObject({ code: 'nyxid_request_digest_mismatch', status: 401 });
+    expect(await repository.getTestingRun('run-transport-binding')).toBeUndefined();
+  });
+
+  it('keeps the first verified admission lineage canonical across a valid idempotent transport retry', async () => {
+    const repository = new MemoryRepository();
+    const service = await serviceFor(repository, {
+      cursorSecret: 'testing-cursor-secret-123456'
+    });
+    const input = request('transport-retry-key');
+    const firstContext = testAuthenticatedTransportContext('run-transport-retry', input);
+    const first = await service.submit('run-transport-retry', 'user-1', input, firstContext);
+    const replay = await service.submit('run-transport-retry', 'user-1', input, {
+      ...firstContext,
+      transport_correlation_id: 'transport:run-transport-retry:second',
+      transport_acknowledgement: {
+        ...firstContext.transport_acknowledgement,
+        ref: 'nyxid://transport-acks/testing/run-transport-retry-second'
+      }
+    });
+
+    expect(first.created).toBe(true);
+    expect(replay).toMatchObject({
+      created: false,
+      acceptance: {
+        replayed: true,
+        authenticated_transport: { transport_correlation_id: firstContext.transport_correlation_id }
+      }
+    });
+    expect((await repository.getTestingRun('run-transport-retry'))?.authenticatedTransport)
+      .toEqual(firstContext);
+  });
+
   it('atomically replays concurrent submit and rejects run/key identity conflicts before side effects', async () => {
     const repository = new MemoryRepository();
     const service = await serviceFor(repository, {
@@ -116,7 +183,7 @@ describe('TestingRunService', () => {
       clock: () => Date.parse('2026-08-22T00:00:00.000Z')
     });
 
-    const submissions = await Promise.all(Array.from({ length: 20 }, () => service.submit('run-1', 'user-1', request())));
+    const submissions = await Promise.all(Array.from({ length: 20 }, () => submitTestingRun(service, 'run-1', 'user-1', request())));
     expect(submissions.filter((item) => item.created)).toHaveLength(1);
     expect(new Set(submissions.map((item) => item.acceptance.request_digest))).toHaveLength(1);
     expect(submissions.filter((item) => item.acceptance.replayed)).toHaveLength(19);
@@ -157,11 +224,11 @@ describe('TestingRunService', () => {
     });
     expect(await repository.listQueuedTasks()).toEqual([]);
 
-    await expect(service.submit('run-1', 'user-1', { ...request(), display_goal: 'Changed' }))
+    await expect(submitTestingRun(service, 'run-1', 'user-1', { ...request(), display_goal: 'Changed' }))
       .rejects.toMatchObject({ code: 'run_identity_conflict' });
-    await expect(service.submit('run-2', 'user-1', request()))
+    await expect(submitTestingRun(service, 'run-2', 'user-1', request()))
       .rejects.toMatchObject({ code: 'idempotency_conflict' });
-    await expect(service.submit('run:unsafe', 'user-1', request('unsafe-key'))).rejects.toBeDefined();
+    await expect(submitTestingRun(service, 'run:unsafe', 'user-1', request('unsafe-key'))).rejects.toBeDefined();
     expect(await repository.getTestingRun('run-2')).toBeUndefined();
     expect(await repository.getTestingRun('run:unsafe')).toBeUndefined();
   });
@@ -190,8 +257,8 @@ describe('TestingRunService', () => {
       placementInputVerifier: testTestingPlacementInputVerifier()
     });
 
-    const winner = service.submit('run-policy-race', 'user-1', request('policy-race-key'));
-    const loser = service.submit('run-policy-race', 'user-1', request('policy-race-key'));
+    const winner = submitTestingRun(service, 'run-policy-race', 'user-1', request('policy-race-key'));
+    const loser = submitTestingRun(service, 'run-policy-race', 'user-1', request('policy-race-key'));
     await denyEntered;
     await expect(winner).resolves.toMatchObject({ created: true });
     releaseDeny?.();
@@ -208,7 +275,7 @@ describe('TestingRunService', () => {
       placementInputVerifier: testTestingPlacementInputVerifier()
     });
 
-    await expect(service.submit('run-no-capability', 'user-1', request('no-capability-key')))
+    await expect(submitTestingRun(service, 'run-no-capability', 'user-1', request('no-capability-key')))
       .rejects.toMatchObject({ code: 'testing_placement_unavailable', status: 503 });
     expect(await repository.getTestingRun('run-no-capability')).toBeUndefined();
   });
@@ -227,22 +294,22 @@ describe('TestingRunService', () => {
       placementInputVerifier: testTestingPlacementInputVerifier()
     });
 
-    await expect(service.submit('run-denied', 'user-denied', request('denied-key')))
+    await expect(submitTestingRun(service, 'run-denied', 'user-denied', request('denied-key')))
       .rejects.toMatchObject({ code: 'testing_placement_inputs_unverified', status: 403 });
     expect(await repository.getTestingRun('run-denied')).toBeUndefined();
 
-    expect((await service.submit('run-replay-policy', 'user-1', request('replay-policy-key'))).created).toBe(true);
+    expect((await submitTestingRun(service, 'run-replay-policy', 'user-1', request('replay-policy-key'))).created).toBe(true);
     enabled = false;
-    await expect(service.submit('run-replay-policy', 'user-1', request('replay-policy-key')))
+    await expect(submitTestingRun(service, 'run-replay-policy', 'user-1', request('replay-policy-key')))
       .resolves.toMatchObject({ created: false, acceptance: { replayed: true } });
-    await expect(service.submit('run-no-policy', 'user-1', request('new-policy-key')))
+    await expect(submitTestingRun(service, 'run-no-policy', 'user-1', request('new-policy-key')))
       .rejects.toMatchObject({ code: 'testing_placement_denied' });
 
     const unavailable = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       placementInputVerifier: testTestingPlacementInputVerifier()
     });
-    await expect(unavailable.submit('run-unavailable', 'user-1', request('unavailable-key')))
+    await expect(submitTestingRun(unavailable, 'run-unavailable', 'user-1', request('unavailable-key')))
       .rejects.toMatchObject({ code: 'testing_placement_policy_unavailable', status: 503 });
   });
 
@@ -253,7 +320,7 @@ describe('TestingRunService', () => {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now
     });
-    await service.submit('run-1', 'user-1', request());
+    await submitTestingRun(service, 'run-1', 'user-1', request());
 
     const snapshot = await service.get('run-1', 'user-1');
     expect(await service.get('run-1', 'user-1')).toEqual(snapshot);
@@ -274,7 +341,7 @@ describe('TestingRunService', () => {
       control_status: 'cancel_requested',
       already_terminal: false
     });
-    expect((await service.submit('run-1', 'user-1', request())).acceptance).toMatchObject({
+    expect((await submitTestingRun(service, 'run-1', 'user-1', request())).acceptance).toMatchObject({
       replayed: true,
       control_status: 'submitted'
     });
@@ -293,14 +360,14 @@ describe('TestingRunService', () => {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now
     });
-    await service.submit('run-limit', 'user-1', request('limit-key'));
+    await submitTestingRun(service, 'run-limit', 'user-1', request('limit-key'));
     now += 1_000;
     await service.cancel('run-limit', 'user-1', cancelRequest('run-limit', 'cancel-limit'));
 
     expect((await service.events('run-limit', 'user-1', undefined, 100)).events).toHaveLength(2);
     expect((await service.events('run-limit', 'user-1', undefined, 1)).events).toHaveLength(1);
 
-    await service.submit('run-pages', 'user-1', request('pages-key'));
+    await submitTestingRun(service, 'run-pages', 'user-1', request('pages-key'));
     let cursor = (await service.get('run-pages', 'user-1')).resume_cursor;
     for (let index = Object.keys((await repository.getTestingRun('run-pages'))?.cursorPages ?? {}).length;
       index < TESTING_CURSOR_PAGE_RETENTION;
@@ -331,7 +398,7 @@ describe('TestingRunService', () => {
     const service = await serviceFor(repository, {
       cursorSecret: 'testing-cursor-secret-123456'
     });
-    await service.submit('run-cancel-ledger', 'user-1', request('cancel-ledger-key'));
+    await submitTestingRun(service, 'run-cancel-ledger', 'user-1', request('cancel-ledger-key'));
     for (let index = 0; index < TESTING_CANCEL_RECORD_RETENTION; index += 1) {
       await service.cancel('run-cancel-ledger', 'user-1', cancelRequest('run-cancel-ledger', `cancel-${index}`));
     }
@@ -348,7 +415,7 @@ describe('TestingRunService', () => {
     const service = await serviceFor(new MemoryRepository(), {
       cursorSecret: 'testing-cursor-secret-123456'
     });
-    await service.submit('run-1', 'user-1', request());
+    await submitTestingRun(service, 'run-1', 'user-1', request());
     const cancel = cancelRequest('run-1', 'cancel-1');
     await service.cancel('run-1', 'user-1', cancel);
     expect(await service.cancel('run-1', 'user-1', cancel)).toMatchObject({ replayed: true });

@@ -16,12 +16,14 @@ import {
   testingRunIdSchema,
   testingRunSnapshotSchema,
   testingToolRequestSchema,
+  testingAuthenticatedTransportContextSchema,
   type TestingCancelAck,
   type TestingCapabilities,
   type TestingEventPage,
   type TestingRunAcceptance,
   type TestingRunEvent,
-  type TestingRunSnapshot
+  type TestingRunSnapshot,
+  type TestingAuthenticatedTransportContext
 } from '@talos/testing-protocol';
 import { TalosError, forbidden, notFound } from '../domain/errors.js';
 import type { TestingCursorPageRecord, TestingRunRecord } from '../domain/testing-types.js';
@@ -104,11 +106,19 @@ export class TestingRunService {
     runIdInput: string,
     userId: string,
     input: unknown,
+    authenticatedTransportInput: unknown,
     requesterGroups: readonly string[] = []
   ): Promise<{ acceptance: TestingRunAcceptance; created: boolean }> {
     const runId = testingRunIdSchema.parse(runIdInput);
     const request = testingToolRequestSchema.parse(input);
     const requestDigest = computeTestingToolRequestDigest(runId, request);
+    const authenticatedTransport = this.assertAuthenticatedTransport(
+      runId,
+      userId,
+      request.client_correlation_id,
+      requestDigest,
+      authenticatedTransportInput
+    );
     const replay = await this.resolveExistingSubmit(
       runId,
       userId,
@@ -140,14 +150,22 @@ export class TestingRunService {
       }
       throw error;
     }
-    const event = makeEvent(1, 'run.submitted', now, { request_digest: requestDigest });
+    const event = makeEvent(1, 'run.submitted', now, {
+      request_id: request.request_id,
+      client_correlation_id: request.client_correlation_id,
+      request_digest: requestDigest,
+      authenticated_transport: authenticatedTransport
+    });
     const acceptance = testingRunAcceptanceSchema.parse({
       schema_version: 'talos.testing-run-acceptance/v1',
       run_id: runId,
+      request_id: request.request_id,
+      client_correlation_id: request.client_correlation_id,
       accepted: true,
       replayed: false,
       control_status: 'submitted',
       request_digest: requestDigest,
+      authenticated_transport: authenticatedTransport,
       created_at: now
     });
     const taskId = newId('testing-task');
@@ -157,6 +175,7 @@ export class TestingRunService {
       idempotencyKey: request.idempotency_key,
       requestDigest,
       request,
+      authenticatedTransport,
       requesterGroups: [...requesterGroups],
       placement,
       acceptance,
@@ -427,10 +446,46 @@ export class TestingRunService {
     return { ...decision, selectedAt };
   }
 
+  private assertAuthenticatedTransport(
+    runId: string,
+    userId: string,
+    clientCorrelationId: string,
+    requestDigest: string,
+    input: unknown
+  ): TestingAuthenticatedTransportContext {
+    const context = testingAuthenticatedTransportContextSchema.parse(input);
+    if (context.subject !== userId) {
+      throw new TalosError('nyxid_subject_mismatch', 'NyxID transport subject does not match the resolved caller', 401);
+    }
+    if (context.route.run_id !== runId) {
+      throw new TalosError('nyxid_route_mismatch', 'NyxID transport route is bound to another run', 401);
+    }
+    if (context.authorization.run_id !== runId) {
+      throw new TalosError('nyxid_authorization_mismatch', 'NyxID authorization is bound to another run', 401);
+    }
+    if (Date.parse(context.authorization.valid_until) <= this.clock()) {
+      throw new TalosError('nyxid_authorization_expired', 'NyxID authorization is expired', 401);
+    }
+    if (context.verified_client_correlation_id !== clientCorrelationId) {
+      throw new TalosError(
+        'nyxid_client_correlation_mismatch',
+        'NyxID transport context is bound to another client correlation',
+        401
+      );
+    }
+    if (context.verified_request_digest !== requestDigest) {
+      throw new TalosError('nyxid_request_digest_mismatch', 'NyxID transport context is bound to another request', 401);
+    }
+    return context;
+  }
+
   private snapshot(run: TestingRunRecord): TestingRunSnapshot {
     const core = {
       schema_version: 'talos.testing-run-snapshot/v1' as const,
       run_id: run.id,
+      request_id: run.request.request_id,
+      client_correlation_id: run.request.client_correlation_id,
+      authenticated_transport: run.authenticatedTransport,
       snapshot_version: run.snapshotVersion,
       snapshot_ref: `talos://testing/runs/${run.id}/snapshots/${run.snapshotVersion}`,
       control_status: run.controlStatus,

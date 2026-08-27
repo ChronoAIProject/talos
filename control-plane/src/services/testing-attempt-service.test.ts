@@ -17,6 +17,7 @@ import {
   testTestingPlacementInputVerifier,
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
+import { submitTestingRun } from '../test-support/testing-transport.js';
 import { TestingRunService } from './testing-run-service.js';
 import {
   TESTING_MAX_ATTEMPTS,
@@ -58,6 +59,8 @@ const testingRequest = (key: string) => {
   };
   return {
     schema_version: 'talos.testing-tool-request/v1' as const,
+    request_id: `request:${key}`,
+    client_correlation_id: `client:${key}`,
     idempotency_key: key,
     display_goal: 'Exercise attempt fencing',
     inputs: {
@@ -406,7 +409,7 @@ class ReservationReleaseBarrierRepository extends MemoryRepository {
 describe('TestingAttemptService', () => {
   it('fails closed without authorization and requires exact machine capabilities', async () => {
     const { repository, runs, attempts, advance } = await setup();
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const withoutAuthorization = new TestingAttemptService(repository, {
       claimSigningKey: signingKey
     });
@@ -433,7 +436,7 @@ describe('TestingAttemptService', () => {
 
   it('atomically permits one claim across competing machines and one run per machine', async () => {
     const { repository, runs, attempts } = await setup({ machines: ['machine-1', 'machine-2'] });
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const competing = await Promise.allSettled([
       attempts.claim('worker-1', 'machine-1'),
       attempts.claim('worker-2', 'machine-2')
@@ -445,7 +448,7 @@ describe('TestingAttemptService', () => {
 
     const occupiedMachine = run?.attempts[0]?.machineId;
     if (occupiedMachine === undefined) throw new Error('claimed attempt fixture missing');
-    await runs.submit('run-2', 'user-1', testingRequest('submit-2'));
+    await submitTestingRun(runs, 'run-2', 'user-1', testingRequest('submit-2'));
     await expect(attempts.claim('worker-next', occupiedMachine)).rejects.toMatchObject({ code: 'not_found' });
     expect((await repository.getTestingRun('run-2'))?.attempts).toHaveLength(0);
   });
@@ -459,16 +462,16 @@ describe('TestingAttemptService', () => {
       sharedWithGroups: ['qa-team'],
       tags: {}
     });
-    await expect(runs.submit('run-hidden', 'user-1', testingRequest('submit-hidden')))
+    await expect(submitTestingRun(runs, 'run-hidden', 'user-1', testingRequest('submit-hidden')))
       .rejects.toMatchObject({ code: 'testing_placement_denied' });
     expect(await repository.getTestingRun('run-hidden')).toBeUndefined();
-    await runs.submit('run-visible', 'user-1', testingRequest('submit-visible'), ['qa-team']);
+    await submitTestingRun(runs, 'run-visible', 'user-1', testingRequest('submit-visible'), ['qa-team']);
     expect((await attempts.claim('worker-1', 'machine-1')).task.qa_run_id).toBe('run-visible');
   });
 
   it('rejects stale lease, generation, and fence writers', async () => {
     const { runs, attempts, advance } = await setup();
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     const exact = binding(claim);
     await expect(attempts.heartbeat({ ...exact, generation: exact.generation + 1 }, 10))
@@ -495,7 +498,7 @@ describe('TestingAttemptService', () => {
     const current = await repository.getMachine('machine-1');
     if (current === undefined) throw new Error('machine fixture missing');
     await repository.saveMachine({ ...current, activeLeases: current.capacity });
-    await runs.submit('run-capacity', 'user-1', testingRequest('submit-capacity'));
+    await submitTestingRun(runs, 'run-capacity', 'user-1', testingRequest('submit-capacity'));
 
     await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
     expect((await repository.getTestingRun('run-capacity'))?.attempts).toHaveLength(0);
@@ -505,7 +508,7 @@ describe('TestingAttemptService', () => {
     const { repository, runs, attempts } = await setup();
     await repository.savePool({ id: 'other-visible-pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ ...machine('machine-other'), poolId: 'other-visible-pool' });
-    await runs.submit('run-policy-pool', 'user-1', testingRequest('submit-policy-pool'));
+    await submitTestingRun(runs, 'run-policy-pool', 'user-1', testingRequest('submit-policy-pool'));
 
     await expect(attempts.claim('worker-other', 'machine-other')).rejects.toMatchObject({ code: 'not_found' });
     await expect(attempts.claim('worker-selected', 'machine-1')).resolves.toMatchObject({
@@ -516,7 +519,7 @@ describe('TestingAttemptService', () => {
 
   it('projects bounded Runtime progress monotonically without replacing the Talos event cursor', async () => {
     const { repository, runs, attempts } = await setup();
-    await runs.submit('run-progress', 'user-1', testingRequest('submit-progress'));
+    await submitTestingRun(runs, 'run-progress', 'user-1', testingRequest('submit-progress'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     const before = await repository.getTestingRun('run-progress');
     await attempts.heartbeat(binding(claim), 30, {
@@ -543,7 +546,7 @@ describe('TestingAttemptService', () => {
 
   it('binds Runtime current-claim observations to nonce, audience, validity, and a dedicated Ed25519 key', async () => {
     const { runs, attempts } = await setup();
-    await runs.submit('run-claim', 'user-1', testingRequest('submit-claim'));
+    await submitTestingRun(runs, 'run-claim', 'user-1', testingRequest('submit-claim'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     const first = await attempts.resolveRuntimeCurrentClaim(
       'run-claim',
@@ -589,7 +592,7 @@ describe('TestingAttemptService', () => {
     const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
     const repository = new DeadlineBarrierRepository(() => time.value);
     const { runs, attempts } = await setup({ repository, time });
-    await runs.submit('run-cancel-race', 'user-1', testingRequest('submit-cancel-race'));
+    await submitTestingRun(runs, 'run-cancel-race', 'user-1', testingRequest('submit-cancel-race'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     repository.armDeadlineWrite();
@@ -617,7 +620,7 @@ describe('TestingAttemptService', () => {
     const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
     const repository = new DeadlineBarrierRepository(() => time.value);
     const { runs, attempts, advance } = await setup({ repository, time });
-    await runs.submit('run-deadline-race', 'user-1', testingRequest('submit-deadline-race'));
+    await submitTestingRun(runs, 'run-deadline-race', 'user-1', testingRequest('submit-deadline-race'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     repository.armDeadlineWrite();
@@ -635,7 +638,7 @@ describe('TestingAttemptService', () => {
     const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
     const repository = new DeadlineBarrierRepository(() => time.value);
     const { runs, attempts, advance } = await setup({ repository, time, leaseSeconds: 1 });
-    await runs.submit('run-lease-race', 'user-1', testingRequest('submit-lease-race'));
+    await submitTestingRun(runs, 'run-lease-race', 'user-1', testingRequest('submit-lease-race'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     repository.armDeadlineWrite();
@@ -665,7 +668,7 @@ describe('TestingAttemptService', () => {
       time,
       authorizationProvider: expiringAuthorization
     });
-    await runs.submit('run-auth-race', 'user-1', testingRequest('submit-auth-race'));
+    await submitTestingRun(runs, 'run-auth-race', 'user-1', testingRequest('submit-auth-race'));
     repository.armDispatchWrite();
 
     const claim = attempts.claim('worker-1', 'machine-1');
@@ -681,7 +684,7 @@ describe('TestingAttemptService', () => {
     const time = { value: Date.parse('2026-08-22T00:00:00.000Z') };
     const repository = new DeadlineBarrierRepository(() => time.value);
     const { runs, attempts, advance } = await setup({ repository, time, leaseSeconds: 1 });
-    await runs.submit('run-dispatch-lease-race', 'user-1', testingRequest('submit-dispatch-lease-race'));
+    await submitTestingRun(runs, 'run-dispatch-lease-race', 'user-1', testingRequest('submit-dispatch-lease-race'));
     repository.armDispatchWrite();
 
     const claim = attempts.claim('worker-1', 'machine-1');
@@ -705,7 +708,7 @@ describe('TestingAttemptService', () => {
       })
     };
     const { runs, attempts, advance } = await setup({ repository, time, authorizationProvider: expiringAuthorization });
-    await runs.submit('run-admitted-auth', 'user-1', testingRequest('submit-admitted-auth'));
+    await submitTestingRun(runs, 'run-admitted-auth', 'user-1', testingRequest('submit-admitted-auth'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     repository.armDeadlineWrite();
 
@@ -735,7 +738,7 @@ describe('TestingAttemptService', () => {
       leaseSeconds: 10,
       authorizationProvider: expiringReconcileAuthorization
     });
-    await runs.submit('run-reconcile-auth-race', 'user-1', testingRequest('submit-reconcile-auth-race'));
+    await submitTestingRun(runs, 'run-reconcile-auth-race', 'user-1', testingRequest('submit-reconcile-auth-race'));
     const start = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(start));
     advance(10_001);
@@ -767,7 +770,7 @@ describe('TestingAttemptService', () => {
       leaseSeconds: 10,
       authorizationProvider: expiringReconcileAuthorization
     });
-    await runs.submit('run-reconcile-admitted', 'user-1', testingRequest('submit-reconcile-admitted'));
+    await submitTestingRun(runs, 'run-reconcile-admitted', 'user-1', testingRequest('submit-reconcile-admitted'));
     const start = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(start));
     advance(10_001);
@@ -784,7 +787,7 @@ describe('TestingAttemptService', () => {
 
   it('requires exact cleanup proof before releasing a locally accepted machine slot', async () => {
     const { repository, runs, attempts } = await setup();
-    await runs.submit('run-cleanup', 'user-1', testingRequest('submit-cleanup'));
+    await submitTestingRun(runs, 'run-cleanup', 'user-1', testingRequest('submit-cleanup'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     const withoutCleanup = terminal(claim);
@@ -804,7 +807,7 @@ describe('TestingAttemptService', () => {
   it('converges concurrent exact terminal commits after one request releases the reservation', async () => {
     const repository = new ReservationReleaseBarrierRepository();
     const { runs, attempts } = await setup({ repository });
-    await runs.submit('run-concurrent-terminal', 'user-1', testingRequest('submit-concurrent-terminal'));
+    await submitTestingRun(runs, 'run-concurrent-terminal', 'user-1', testingRequest('submit-concurrent-terminal'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     const input = terminal(claim);
@@ -829,7 +832,7 @@ describe('TestingAttemptService', () => {
       ['run-cleanup-rejected', { verifyCleanupReceipt: async () => undefined }]
     ] as const) {
       const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier });
-      await runs.submit(runId, 'user-1', testingRequest(`submit-${runId}`));
+      await submitTestingRun(runs, runId, 'user-1', testingRequest(`submit-${runId}`));
       const claim = await attempts.claim('worker-1', 'machine-1');
       await attempts.acceptLocal(binding(claim));
       await expect(attempts.commitTerminal(terminal(claim))).rejects.toMatchObject({
@@ -854,7 +857,7 @@ describe('TestingAttemptService', () => {
       })
     };
     const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier: unboundedVerifier });
-    await runs.submit('run-cleanup-unbounded', 'user-1', testingRequest('submit-cleanup-unbounded'));
+    await submitTestingRun(runs, 'run-cleanup-unbounded', 'user-1', testingRequest('submit-cleanup-unbounded'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     await expect(attempts.commitTerminal(terminal(claim)))
@@ -882,7 +885,7 @@ describe('TestingAttemptService', () => {
       }
     };
     const { repository, runs, attempts } = await setup({ cleanupReceiptVerifier: verifierWithCount });
-    await runs.submit('run-terminal-advance', 'user-1', testingRequest('submit-terminal-advance'));
+    await submitTestingRun(runs, 'run-terminal-advance', 'user-1', testingRequest('submit-terminal-advance'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     const initialInput = terminal(claim, {
@@ -954,7 +957,7 @@ describe('TestingAttemptService', () => {
 
   it('rejects terminal commits that still execute, stage evidence, or have pending cleanup', async () => {
     const { runs, attempts } = await setup();
-    await runs.submit('run-unsettled-terminal', 'user-1', testingRequest('submit-unsettled-terminal'));
+    await submitTestingRun(runs, 'run-unsettled-terminal', 'user-1', testingRequest('submit-unsettled-terminal'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     for (const projection of [
@@ -969,7 +972,7 @@ describe('TestingAttemptService', () => {
 
   it('does not advance a blocking terminal projection after its machine reservation is lost', async () => {
     const { repository, runs, attempts } = await setup();
-    await runs.submit('run-terminal-reservation-lost', 'user-1', testingRequest('submit-terminal-reservation-lost'));
+    await submitTestingRun(runs, 'run-terminal-reservation-lost', 'user-1', testingRequest('submit-terminal-reservation-lost'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     const initialInput = terminal(claim, {
@@ -1004,7 +1007,7 @@ describe('TestingAttemptService', () => {
     for (const [index, cleanupOutcome] of ['residual_blocking', 'residual_retryable'].entries()) {
       const machineId = `machine-${index + 1}`;
       const runId = `run-residual-${index + 1}`;
-      await runs.submit(runId, 'user-1', testingRequest(`submit-residual-${index + 1}`));
+      await submitTestingRun(runs, runId, 'user-1', testingRequest(`submit-residual-${index + 1}`));
       const claim = await attempts.claim(`worker-${index + 1}`, machineId);
       await attempts.acceptLocal(binding(claim));
       await attempts.commitTerminal(terminal(claim, {
@@ -1023,7 +1026,7 @@ describe('TestingAttemptService', () => {
       machines: ['machine-1', 'machine-2'],
       leaseSeconds: 1
     });
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const first = await attempts.claim('worker-1', 'machine-1');
     expect(first.current_claim.is_current).toBe(true);
     expect(JSON.stringify(first.current_claim)).not.toContain(first.lease_token);
@@ -1070,8 +1073,8 @@ describe('TestingAttemptService', () => {
       machines: ['machine-1', 'machine-2'],
       leaseSeconds: 1
     });
-    await runs.submit('run-1', 'user-1', testingRequest('reconcile-limit-1'));
-    await runs.submit('run-2', 'user-1', testingRequest('reconcile-limit-2'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('reconcile-limit-1'));
+    await submitTestingRun(runs, 'run-2', 'user-1', testingRequest('reconcile-limit-2'));
     await attempts.claim('worker-1', 'machine-1');
     await attempts.claim('worker-2', 'machine-2');
     advance(1_001);
@@ -1107,7 +1110,7 @@ describe('TestingAttemptService', () => {
 
   it('enforces the local acceptance no-rerun boundary and allows only exact same-attempt reconcile', async () => {
     const { repository, runs, attempts, advance } = await setup({ machines: ['machine-1', 'machine-2'], leaseSeconds: 1 });
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     const accepted = await attempts.acceptLocal(binding(claim));
     expect(await attempts.acceptLocal(binding(claim))).toMatchObject({
@@ -1164,7 +1167,7 @@ describe('TestingAttemptService', () => {
 
   it('keeps an abandoned reconcile blocked until late verified cleanup releases the slot', async () => {
     const { repository, runs, attempts, advance } = await setup({ leaseSeconds: 1 });
-    await runs.submit('run-1', 'user-1', testingRequest('submit-1'));
+    await submitTestingRun(runs, 'run-1', 'user-1', testingRequest('submit-1'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     advance(1_001);
@@ -1198,7 +1201,7 @@ describe('TestingAttemptService', () => {
     expect(await repository.getTestingMachineReservation('machine-1'))
       .toMatchObject({ runId: 'run-1', status: 'residual_blocking' });
 
-    await runs.submit('run-2', 'user-1', testingRequest('submit-2'));
+    await submitTestingRun(runs, 'run-2', 'user-1', testingRequest('submit-2'));
     await expect(attempts.claim('worker-1', 'machine-1')).rejects.toMatchObject({ code: 'not_found' });
     expect((await repository.getTestingRun('run-2'))?.attempts).toHaveLength(0);
 
@@ -1221,7 +1224,7 @@ describe('TestingAttemptService', () => {
 
   it('releases a cancelled unknown-acceptance attempt only after an exact Runtime fact', async () => {
     const { repository, runs, attempts, advance } = await setup({ leaseSeconds: 1 });
-    await runs.submit('run-before', 'user-1', testingRequest('submit-before'));
+    await submitTestingRun(runs, 'run-before', 'user-1', testingRequest('submit-before'));
     const before = await attempts.claim('worker-1', 'machine-1');
     await runs.cancel('run-before', 'user-1', cancelRequest('run-before', 'cancel-before'));
     expect((await repository.getTestingRun('run-before'))?.task.status).toBe('cancel_requested');
@@ -1257,7 +1260,7 @@ describe('TestingAttemptService', () => {
     await attempts.sweep();
     expect(await repository.getTestingMachineReservation('machine-1')).toBeUndefined();
 
-    await runs.submit('run-after', 'user-1', testingRequest('submit-after'));
+    await submitTestingRun(runs, 'run-after', 'user-1', testingRequest('submit-after'));
     const accepted = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(accepted));
     await runs.cancel('run-after', 'user-1', cancelRequest('run-after', 'cancel-after'));
@@ -1281,7 +1284,7 @@ describe('TestingAttemptService', () => {
 
   it('fails closed for missing or invalid no-local-acceptance verification', async () => {
     const { repository, runs, attempts } = await setup({ leaseSeconds: 1 });
-    await runs.submit('run-fact', 'user-1', testingRequest('submit-fact'));
+    await submitTestingRun(runs, 'run-fact', 'user-1', testingRequest('submit-fact'));
     const start = await attempts.claim('worker-1', 'machine-1');
     await runs.cancel('run-fact', 'user-1', cancelRequest('run-fact', 'cancel-fact'));
     await attempts.sweep();
@@ -1322,7 +1325,7 @@ describe('TestingAttemptService', () => {
 
   it('rejects foreign terminal refs, fails closed on authorization outage, and bounds attempts', async () => {
     const { repository, runs, attempts } = await setup({ leaseSeconds: 1 });
-    await runs.submit('run-binding', 'user-1', testingRequest('submit-binding'));
+    await submitTestingRun(runs, 'run-binding', 'user-1', testingRequest('submit-binding'));
     const claim = await attempts.claim('worker-1', 'machine-1');
     await attempts.acceptLocal(binding(claim));
     const foreignResults = terminal(claim).results;
@@ -1339,7 +1342,7 @@ describe('TestingAttemptService', () => {
     }))).rejects.toMatchObject({ code: 'stale_terminal_binding' });
     await attempts.commitTerminal(terminal(claim));
 
-    await runs.submit('run-auth', 'user-1', testingRequest('submit-auth'));
+    await submitTestingRun(runs, 'run-auth', 'user-1', testingRequest('submit-auth'));
     const outage = new TestingAttemptService(repository, {
       claimSigningKey: signingKey,
       authorizationProvider: { issueStartAuthorization: async () => { throw new Error('unavailable'); } },
@@ -1353,7 +1356,7 @@ describe('TestingAttemptService', () => {
     await runs.cancel('run-auth', 'user-1', cancelRequest('run-auth', 'cancel-auth'));
     await attempts.sweep();
 
-    await runs.submit('run-limit', 'user-1', testingRequest('submit-limit'));
+    await submitTestingRun(runs, 'run-limit', 'user-1', testingRequest('submit-limit'));
     for (let index = 0; index < TESTING_MAX_ATTEMPTS; index += 1) {
       await expect(outage.claim('worker-1', 'machine-1'))
         .rejects.toMatchObject({ code: 'testing_authorization_unavailable' });
@@ -1367,7 +1370,7 @@ describe('TestingAttemptService', () => {
 
   it('does not treat an admitted start authorization as the attempt lease', async () => {
     const { repository, runs, advance, now } = await setup();
-    await runs.submit('run-short-auth', 'user-1', testingRequest('submit-short-auth'));
+    await submitTestingRun(runs, 'run-short-auth', 'user-1', testingRequest('submit-short-auth'));
     const shortAuthorization = new TestingAttemptService(repository, {
       claimSigningKey: signingKey,
       authorizationProvider: {

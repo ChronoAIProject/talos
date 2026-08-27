@@ -1,4 +1,5 @@
 import { testingEventQuerySchema } from '@talos/testing-protocol';
+import { TalosError } from '../domain/errors.js';
 import type { ResolvedIdentity } from '../identity.js';
 import type { TestingRunService } from '../services/testing-run-service.js';
 
@@ -32,7 +33,20 @@ export const routeTestingRunRequest = async (
   }
   const runId = parts[4];
   if (method === 'PUT' && parts.length === 5) {
-    const result = await service.submit(runId, identity.userId, body, identity.groups);
+    if (identity.authenticatedTransport === undefined) {
+      throw new TalosError(
+        'nyxid_transport_context_required',
+        'Testing submit requires a NyxID-authenticated transport context',
+        401
+      );
+    }
+    const result = await service.submit(
+      runId,
+      identity.userId,
+      body,
+      identity.authenticatedTransport,
+      identity.groups
+    );
     return { status: result.created ? 201 : 200, body: result.acceptance };
   }
   if (method === 'GET' && parts.length === 5) {

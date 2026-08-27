@@ -66,6 +66,11 @@ describe('OpenAPI loader', () => {
     const properties = (name: string): Record<string, unknown> => asObject(schema(name).properties);
     for (const strictSchema of [
       'TestingToolRequest',
+      'TestingAuthenticatedTransportContext',
+      'NyxIdPointer',
+      'NyxIdRoutePointer',
+      'NyxIdAuthorizationPointer',
+      'TestingRunAcceptance',
       'TestingPolicyBinding',
       'TestingPolicyReference',
       'TestingBudgetsReference',
@@ -107,7 +112,18 @@ describe('OpenAPI loader', () => {
       'policy_revoked',
       'system_shutdown'
     ]);
-    expect(schema('TestingToolRequest').required).toContain('policy_binding');
+    expect(schema('TestingToolRequest').required).toEqual(expect.arrayContaining([
+      'request_id', 'client_correlation_id', 'idempotency_key', 'policy_binding'
+    ]));
+    expect(schema('TestingRunAcceptance').required).toEqual(expect.arrayContaining([
+      'request_id', 'client_correlation_id', 'authenticated_transport'
+    ]));
+    expect(schema('TestingRunSnapshot').required).toEqual(expect.arrayContaining([
+      'request_id', 'client_correlation_id', 'authenticated_transport'
+    ]));
+    expect(schema('TestingRunSubmittedData').required).toEqual(expect.arrayContaining([
+      'request_id', 'client_correlation_id', 'request_digest', 'authenticated_transport'
+    ]));
     expect(schema('TestingTask').required).toContain('budgets_ref');
     expect(schema('TestingTask').required).toEqual(expect.arrayContaining([
       'worker_id', 'lease_id', 'fence_token', 'admission_nonce', 'lease_claim'

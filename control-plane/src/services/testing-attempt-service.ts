@@ -1793,6 +1793,9 @@ export class TestingAttemptService {
     const snapshotCore = {
       schema_version: 'talos.testing-run-snapshot/v1' as const,
       run_id: run.id,
+      request_id: run.request.request_id,
+      client_correlation_id: run.request.client_correlation_id,
+      authenticated_transport: run.authenticatedTransport,
       snapshot_version: run.snapshotVersion,
       snapshot_ref: `talos://testing/runs/${run.id}/snapshots/${run.snapshotVersion}`,
       control_status: run.controlStatus,

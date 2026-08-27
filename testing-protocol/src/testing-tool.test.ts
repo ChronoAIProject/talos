@@ -4,6 +4,7 @@ import {
   computeTestingRunEventDigest,
   computeTestingRunSnapshotDigest,
   computeTestingToolRequestDigest,
+  testingAuthenticatedTransportContextSchema,
   testingCancelRequestSchema,
   testingCurrentClaimEnvelopeSchema,
   testingRunEventSchema,
@@ -17,6 +18,27 @@ const digest = `sha256:${'a'.repeat(64)}`;
 const timestamp = '2026-08-22T00:00:00.000Z';
 
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
+const authenticatedTransport = testingAuthenticatedTransportContextSchema.parse({
+  schema_version: 'talos.testing-authenticated-transport-context/v1',
+  transport_correlation_id: 'transport:run-1',
+  verified_client_correlation_id: 'client:run-1',
+  subject: 'user-1',
+  delegated_actor: null,
+  source: 'pql',
+  destination: 'talos-testing-tool',
+  route: { ref: 'nyxid://routes/testing/run-1', digest, operation: 'submit', run_id: 'run-1' },
+  authorization: {
+    ref: 'authorization://nyxid/testing/run-1',
+    digest,
+    operation: 'submit',
+    run_id: 'run-1',
+    valid_until: '2026-08-22T00:10:00.000Z'
+  },
+  audit_refs: [{ ref: 'nyxid://audit/events/run-1', digest }],
+  transport_acknowledgement: { ref: 'nyxid://transport-acks/testing/run-1', digest },
+  verified_request_digest: digest,
+  verified_at: timestamp
+});
 const policy = {
   network_scope: 'environment_owned_loopback_exact_origins' as const,
   environment_port_handle_policy: {
@@ -40,6 +62,8 @@ const policy = {
 
 const request = testingToolRequestSchema.parse({
   schema_version: 'talos.testing-tool-request/v1' as const,
+  request_id: 'request:run-1',
+  client_correlation_id: 'client:run-1',
   idempotency_key: 'snapshot:selection:revision:plan:policy',
   display_goal: 'Verify the login redirect',
   inputs: {
@@ -121,8 +145,30 @@ describe('Testing Tool contracts', () => {
     expect(computeTestingToolRequestDigest('run-1', request)).not.toBe(
       computeTestingToolRequestDigest('run-2', request)
     );
-    for (const forbiddenField of ['pool_id', 'machine_id', 'raw_plan', 'cwd', 'argv', 'lease_token']) {
+    for (const forbiddenField of [
+      'pool_id',
+      'machine_id',
+      'raw_plan',
+      'cwd',
+      'argv',
+      'lease_token',
+      'transport_correlation_id',
+      'route_ref',
+      'audit_refs'
+    ]) {
       expect(() => testingToolRequestSchema.parse({ ...request, [forbiddenField]: 'forbidden' })).toThrow();
+    }
+    for (const forbiddenInputField of [
+      'request_id',
+      'client_correlation_id',
+      'idempotency_key',
+      'transport_correlation_id',
+      'audit_refs'
+    ]) {
+      expect(() => testingToolRequestSchema.parse({
+        ...request,
+        inputs: { ...request.inputs, [forbiddenInputField]: 'forbidden' }
+      })).toThrow();
     }
     expect(() => testingToolRequestSchema.parse({
       ...request,
@@ -141,6 +187,9 @@ describe('Testing Tool contracts', () => {
     const core = {
       schema_version: 'talos.testing-run-snapshot/v1' as const,
       run_id: 'run-1',
+      request_id: request.request_id,
+      client_correlation_id: request.client_correlation_id,
+      authenticated_transport: authenticatedTransport,
       snapshot_version: 3,
       snapshot_ref: 'talos://testing/runs/run-1/snapshots/3',
       control_status: 'completed' as const,
@@ -235,7 +284,12 @@ describe('Testing Tool contracts', () => {
       sequence: 1,
       type: 'run.submitted' as const,
       time: timestamp,
-      data: { request_digest: digest }
+      data: {
+        request_id: request.request_id,
+        client_correlation_id: request.client_correlation_id,
+        request_digest: digest,
+        authenticated_transport: authenticatedTransport
+      }
     };
     expect(testingRunEventSchema.parse({
       ...eventCore,

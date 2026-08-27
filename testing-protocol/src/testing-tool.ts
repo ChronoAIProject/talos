@@ -17,6 +17,8 @@ const authorizationReferenceSchema = z.string().min(1).max(2048)
   .regex(/^authorization:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
 const localQaReferenceSchema = z.string().min(1).max(2048)
   .regex(/^local-qa:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
+const nyxidReferenceSchema = z.string().min(1).max(2048)
+  .regex(/^nyxid:\/\/[A-Za-z0-9][A-Za-z0-9.-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/);
 const requestNonceSchema = z.string().min(16).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export const testingControlStatusSchema = z.enum([
@@ -105,6 +107,8 @@ const testingPolicyBindingSchema = z.object({
 
 export const testingToolRequestSchema = z.object({
   schema_version: z.literal('talos.testing-tool-request/v1'),
+  request_id: identifierSchema,
+  client_correlation_id: identifierSchema,
   idempotency_key: idempotencyKeySchema,
   display_goal: z.string().min(1).max(1_000),
   inputs: testingInputReferencesSchema,
@@ -136,6 +140,40 @@ export const computeTestingToolRequestDigest = (
   input: z.input<typeof testingToolRequestSchema>
 ): string => digestJson({ run_id: testingRunIdSchema.parse(runId), request: testingToolRequestSchema.parse(input) });
 
+const nyxidPointerSchema = z.object({
+  ref: nyxidReferenceSchema,
+  digest: sha256DigestSchema
+}).strict();
+
+const nyxidRoutePointerSchema = nyxidPointerSchema.extend({
+  operation: z.literal('submit'),
+  run_id: testingRunIdSchema
+}).strict();
+
+const nyxidAuthorizationPointerSchema = z.object({
+  ref: authorizationReferenceSchema,
+  digest: sha256DigestSchema,
+  operation: z.literal('submit'),
+  run_id: testingRunIdSchema,
+  valid_until: timestampSchema
+}).strict();
+
+export const testingAuthenticatedTransportContextSchema = z.object({
+  schema_version: z.literal('talos.testing-authenticated-transport-context/v1'),
+  transport_correlation_id: identifierSchema,
+  verified_client_correlation_id: identifierSchema,
+  subject: identifierSchema,
+  delegated_actor: identifierSchema.nullable(),
+  source: z.literal('pql'),
+  destination: z.literal('talos-testing-tool'),
+  route: nyxidRoutePointerSchema,
+  authorization: nyxidAuthorizationPointerSchema,
+  audit_refs: z.array(nyxidPointerSchema).min(1).max(32),
+  transport_acknowledgement: nyxidPointerSchema,
+  verified_request_digest: sha256DigestSchema,
+  verified_at: timestampSchema
+}).strict();
+
 export const testingCapabilitiesSchema = z.object({
   schema_version: z.literal('talos.testing-capabilities/v1'),
   planning_contracts: z.tuple([
@@ -162,10 +200,13 @@ export const testingCapabilitiesSchema = z.object({
 export const testingRunAcceptanceSchema = z.object({
   schema_version: z.literal('talos.testing-run-acceptance/v1'),
   run_id: testingRunIdSchema,
+  request_id: identifierSchema,
+  client_correlation_id: identifierSchema,
   accepted: z.literal(true),
   replayed: z.boolean(),
   control_status: testingControlStatusSchema,
   request_digest: sha256DigestSchema,
+  authenticated_transport: testingAuthenticatedTransportContextSchema,
   created_at: timestampSchema
 }).strict();
 
@@ -207,6 +248,9 @@ export const testingSafeErrorSchema = z.object({
 const testingRunSnapshotObjectSchema = z.object({
   schema_version: z.literal('talos.testing-run-snapshot/v1'),
   run_id: testingRunIdSchema,
+  request_id: identifierSchema,
+  client_correlation_id: identifierSchema,
+  authenticated_transport: testingAuthenticatedTransportContextSchema,
   snapshot_version: z.number().int().positive(),
   snapshot_ref: talosReferenceSchema,
   control_status: testingControlStatusSchema,
@@ -327,7 +371,12 @@ const terminalCleanupOutcomeSchema = testingCleanupOutcomeSchema.refine(
 
 const runSubmittedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.submitted'),
-  data: z.object({ request_digest: sha256DigestSchema }).strict()
+  data: z.object({
+    request_id: identifierSchema,
+    client_correlation_id: identifierSchema,
+    request_digest: sha256DigestSchema,
+    authenticated_transport: testingAuthenticatedTransportContextSchema
+  }).strict()
 }).strict();
 const runReservedEventCoreSchema = testingRunEventBaseSchema.extend({
   type: z.literal('run.reserved'),
@@ -726,6 +775,7 @@ export const testingReconcileTaskSchema = z.object({
 }).strict();
 
 export type TestingToolRequest = z.infer<typeof testingToolRequestSchema>;
+export type TestingAuthenticatedTransportContext = z.infer<typeof testingAuthenticatedTransportContextSchema>;
 export type TestingCapabilities = z.infer<typeof testingCapabilitiesSchema>;
 export type TestingRunAcceptance = z.infer<typeof testingRunAcceptanceSchema>;
 export type TestingControlStatus = z.infer<typeof testingControlStatusSchema>;
