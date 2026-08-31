@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - qa-tools
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Contract and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run bundle:worker
+      - run: npm run generate:testing-fixtures
+      - name: Verify generated testing fixtures are committed
+        run: git diff --exit-code -- specs/testing-contract-fixtures.json
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:mongo-contract
+
+  images:
+    name: Runtime images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build control-plane image
+        run: docker build -f control-plane/Dockerfile -t talos-control-plane:ci .
+      - name: Build worker image
+        run: docker build -f worker/Dockerfile -t talos-worker:ci .
+      - name: Verify control-plane runtime imports
+        run: >-
+          docker run --rm --entrypoint node talos-control-plane:ci
+          -e "Promise.all([import('@talos/testing-protocol'), import('./dist/domain/schemas.js')])"
+      - name: Verify worker runtime imports
+        run: >-
+          docker run --rm --entrypoint node talos-worker:ci
+          -e "Promise.all([import('@talos/testing-protocol'), import('./dist/testing/testing-executor.js')])"
+      - name: Start control plane
+        run: >-
+          docker run --detach --name talos-control-plane-ci
+          --env TALOS_WEBHOOK_SECRET=ci-webhook-secret-1234567890
+          --env TALOS_ADMIN_TOKEN=ci-admin-token-1234567890
+          talos-control-plane:ci
+      - name: Verify control-plane health
+        run: |
+          for attempt in $(seq 1 30); do
+            if docker exec talos-control-plane-ci node -e "fetch('http://127.0.0.1:8080/healthz').then((response) => { if (!response.ok) process.exit(1); })"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs talos-control-plane-ci
+          exit 1
+      - name: Stop control plane
+        if: always()
+        run: docker rm --force talos-control-plane-ci || true
+
+  demo:
+    name: Contract demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run side-effect-free contract demo
+        run: |
+          npm run --silent demo:testing-contract -- --json > testing-contract-demo.json
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            const output = JSON.parse(await readFile('testing-contract-demo.json', 'utf8'));
+            if (output.side_effects !== false) {
+              throw new Error('contract demo must declare side_effects=false');
+            }
+          "
