@@ -187,3 +187,36 @@ All fixtures are deterministic, use opaque refs/digests only, carry no credentia
 Their external schema identities are consumer-contract examples accepted only by an explicit
 test-only authority; they are not published upstream manifests and cannot configure production
 terminal admission.
+
+## Side-Effect-Free Contract Demo
+
+Run the committed-fixture Demo in human-readable or machine-readable mode:
+
+```bash
+npm run demo:testing-contract
+npm run demo:testing-contract -- --json
+```
+
+The npm command first compiles the local protocol workspace so a clean checkout cannot use missing
+or stale generated JavaScript. The Demo script then reads only
+`specs/testing-contract-fixtures.json`; it does not start Talos, a worker, Local QA Runtime,
+Browser, network request, or child process. It validates the bundle with the published Zod
+contract, recomputes every Snapshot digest and canonical terminal constraint, and then reports
+fixture counts plus four representative scenarios: `passed`,
+`product_assertion_failed`, `all_skipped`, and `cleanup_failed`. The Cleanup failure scenario
+demonstrates that a failed cleanup outcome remains orthogonal to, and does not rewrite, the passed
+Case assertion outcome.
+
+JSON output uses `talos.testing-contract-demo/v1`, declares `side_effects=false`, lists exactly the
+five public operations, and identifies `talos.testing-run-snapshot/v1` as the canonical terminal
+authority. Each scenario contains all five outcomes, the terminal flag, Snapshot digest, and opaque
+CaseResultSet, EvidenceManifest, and CleanupReceipt refs with payload and owning-schema digests.
+A schema violation, fixture-kind count change, Snapshot digest mismatch, terminal inconsistency,
+missing representative scenario, changed operation, or representative scenario invariant violation
+makes the command exit nonzero. Fixture source regeneration remains separately enforced by CI with
+`npm run generate:testing-fixtures` and `git diff --exit-code`.
+
+This is a Talos contract Demo, not a Browser execution Demo. Talos exposes the orthogonal inputs
+that PQL needs for release policy, but Talos does not compute `ReleaseGateDecision`. External schema
+identities in the committed fixtures remain test-only examples until the Testing Packages and Local
+QA Runtime owning repositories publish their formal versioned manifests and digests.
