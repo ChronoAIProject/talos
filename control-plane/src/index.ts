@@ -10,9 +10,26 @@ import { MongoRepository } from './storage/mongo-repository.js';
 import type { Repository } from './storage/repository.js';
 import { pathToFileURL } from 'node:url';
 import type { Server } from 'node:http';
+import type { KeyObject } from 'node:crypto';
 import { createLogger } from './util/logger.js';
 import { DevIdentityResolver, JwtIdentityResolver, type IdentityResolver } from './identity.js';
 import { loadOpenApiDocument } from './openapi.js';
+import { TestingRunService } from './services/testing-run-service.js';
+import {
+  TestingAttemptService,
+  type TestingAuthorizationProvider,
+  type TestingCleanupReceiptVerifier,
+  type TestingRuntimeFactVerifier
+} from './services/testing-attempt-service.js';
+import {
+  StaticTestingPlacementPolicy,
+  type TestingPlacementPolicy
+} from './services/testing-placement-policy.js';
+import {
+  StaticTestingPlacementInputVerifier,
+  type TestingPlacementInputVerifier
+} from './services/testing-placement-verifier.js';
+import type { TestingExternalSchemaAuthority } from './services/testing-schema-authority.js';
 
 export interface ControlPlaneServer extends Server { stopSweep(): void; repository: Repository; }
 
@@ -31,6 +48,14 @@ export const createControlPlane = (
     sweepIntervalMs?: number;
     webhook?: Omit<WebhookDispatcherOptions, 'clock'>;
     openApiPath?: string;
+    testingAuthorizationProvider?: TestingAuthorizationProvider;
+    testingRuntimeFactVerifier?: TestingRuntimeFactVerifier;
+    testingCleanupReceiptVerifier?: TestingCleanupReceiptVerifier;
+    testingClaimSigningKey?: KeyObject | string;
+    testingClaimKeyId?: string;
+    testingPlacementPolicy?: TestingPlacementPolicy;
+    testingPlacementInputVerifier?: TestingPlacementInputVerifier;
+    testingExternalSchemaAuthority?: TestingExternalSchemaAuthority;
   } = {}
 ): ControlPlaneServer => {
   if (webhookSecret === undefined || webhookSecret.length < 16) throw new Error('TALOS_WEBHOOK_SECRET must be provided and at least 16 characters');
@@ -45,17 +70,56 @@ export const createControlPlane = (
     onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
     logger
   });
+  const testingRuns = new TestingRunService(repository, {
+    cursorSecret: webhookSecret,
+    clock: Date.now,
+    placementPolicy: options.testingPlacementPolicy,
+    placementInputVerifier: options.testingPlacementInputVerifier,
+    externalSchemaAuthority: options.testingExternalSchemaAuthority
+  });
+  const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
+  if (testingClaimSigningKey === undefined) {
+    logger.warn('testing claim signing key is not configured; using a development-only ephemeral Ed25519 key');
+  }
+  const testingAttempts = new TestingAttemptService(repository, {
+    claimSigningKey: testingClaimSigningKey,
+    claimKeyId: options.testingClaimKeyId ?? process.env.TALOS_TESTING_CLAIM_KEY_ID,
+    authorizationProvider: options.testingAuthorizationProvider,
+    runtimeFactVerifier: options.testingRuntimeFactVerifier,
+    cleanupReceiptVerifier: options.testingCleanupReceiptVerifier,
+    externalSchemaAuthority: options.testingExternalSchemaAuthority,
+    clock: Date.now
+  });
   const server = createApiServer(service, repository, {
     adminToken: options.adminToken ?? process.env.TALOS_ADMIN_TOKEN,
     identityResolver: options.identityResolver,
     openApiDocument,
+    testingRunService: testingRuns,
+    testingAttemptService: testingAttempts,
     clock: Date.now
   }) as ControlPlaneServer;
   server.repository = repository;
   server.on('close', () => { void repository.close(); });
-  const interval = setInterval(() => {
-    void service.expireLeases();
-  }, options.sweepIntervalMs ?? 10000);
+  let sweepInFlight = false;
+  const sweep = async (): Promise<void> => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    try {
+      try {
+        await service.expireLeases();
+      } catch (error) {
+        logger.error('task lease sweep failed', { error: errorMessage(error) });
+      }
+      try {
+        await testingAttempts.sweep();
+      } catch (error) {
+        logger.error('testing attempt sweep failed', { error: errorMessage(error) });
+      }
+    } finally {
+      sweepInFlight = false;
+    }
+  };
+  const interval = setInterval(() => { void sweep(); }, options.sweepIntervalMs ?? 10000);
   interval.unref();
   server.stopSweep = (): void => clearInterval(interval);
   return server;
@@ -77,7 +141,19 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
         createLogger().warn('NyxID JWT verification is not configured; using the development-only identity stub');
         return new DevIdentityResolver();
       })();
-  const server = createControlPlane(repository, config.webhookSecret, { adminToken: config.adminToken, sweepIntervalMs: config.sweepIntervalMs, identityResolver });
+  const server = createControlPlane(repository, config.webhookSecret, {
+    adminToken: config.adminToken,
+    sweepIntervalMs: config.sweepIntervalMs,
+    identityResolver,
+    testingClaimSigningKey: config.testingClaimPrivateKey,
+    testingClaimKeyId: config.testingClaimKeyId,
+    testingPlacementPolicy: config.testingPlacementPolicy === undefined
+      ? undefined
+      : new StaticTestingPlacementPolicy(config.testingPlacementPolicy),
+    testingPlacementInputVerifier: config.testingPlacementVerifier === undefined
+      ? undefined
+      : new StaticTestingPlacementInputVerifier(config.testingPlacementVerifier)
+  });
   const shutdown = (): void => {
     server.stopSweep();
     server.close();
@@ -88,9 +164,15 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
 }
 
 export * from './domain/types.js';
+export * from './domain/testing-types.js';
 export * from './domain/schemas.js';
 export * from './domain/errors.js';
 export * from './services/task-service.js';
+export * from './services/testing-run-service.js';
+export * from './services/testing-attempt-service.js';
+export * from './services/testing-placement-policy.js';
+export * from './services/testing-placement-verifier.js';
+export * from './services/testing-schema-authority.js';
 export * from './services/session-service.js';
 export * from './services/scheduler.js';
 export * from './services/profile-lock.js';
@@ -100,5 +182,8 @@ export * from './storage/memory-repository.js';
 export * from './storage/mongo-repository.js';
 export * from './storage/repository.js';
 export * from './http/server.js';
+export * from './http/testing-run-routes.js';
 export * from './identity.js';
 export * from './openapi.js';
+
+const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);

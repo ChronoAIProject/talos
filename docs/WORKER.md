@@ -17,6 +17,7 @@ The control-plane operator creates a separate NyxID catalog entry such as `talos
 
 - `POST /v1/worker/**`
 - `GET /v1/worker/**`
+- `POST /v1/testing/claims/**/resolve`, used for nonce-bound Runtime current-claim verification
 - `GET /healthz`, used by `talos-worker init` and `talos-worker status`
 
 NyxID's public proxy strips `Authorization` and all custom `X-Talos-*` headers. It forwards JSON bodies unchanged, so the daemon includes `worker_token`, `worker_id`, and `machine_id` in every worker POST body. Input polling uses `POST /v1/worker/tasks/{id}/input/poll`, carrying the lease and worker credentials in its body. Tokens are therefore not placed in URLs or proxy access logs.
@@ -33,9 +34,30 @@ Use the complete public service prefix during setup:
 https://nyxid.example.com/public/s/talos-worker
 ```
 
-The worker preserves that path prefix when calling `/healthz` and `/v1/worker/**`. Direct private URLs such as `http://talos-control-plane.talos.svc.cluster.local` remain supported.
+The worker preserves that path prefix when calling `/healthz`, `/v1/worker/**`, and the Runtime current-claim resolver. Direct private URLs such as `http://talos-control-plane.talos.svc.cluster.local` remain supported.
 
 Interactive sessions keep one browser context open while the external NyxID caller plans and submits one action at a time. The daemon skips its autonomous planner for these claims, polls with `TALOS_ACTION_POLL_MS` (default 2000), and fails idle sessions after `TALOS_SESSION_IDLE_MS` (default 600000). Closing the session causes the worker to close the browser and complete the underlying task.
+
+## Testing Runtime integration
+
+The Testing path is separate from Browser tasks. The daemon polls same-machine reconcile work first, then new `kind=testing` work, and finally the existing Browser queue. A TestingTask is always handled by the packaged `TestingExecutor`; it never enters `ScriptedPlanner`, `BrowserExecutor`, a shell, or a caller-selected plugin.
+
+Enable the consumer integration only when all four settings are available:
+
+```text
+TALOS_TESTING_RUNTIME_URL=http://127.0.0.1:4317
+TALOS_TESTING_RUNTIME_CREDENTIAL=...
+TALOS_TESTING_AUTHORIZATION_RESOLVER_URL=https://authorization.example/resolve
+TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN=...
+```
+
+`TALOS_TESTING_RUNTIME_URL` must be HTTP loopback (`localhost`, `127.0.0.1`, or `::1`). A remote authorization resolver must use HTTPS; HTTP is accepted only for a loopback resolver. The Runtime credential and authorization resolver token are sent in headers and are never copied into TestingTask, Runtime request bodies, events, results, or logs. Configuration is accepted only when all four settings are present; partial configuration fails at startup.
+
+The authorization resolver is a consumer port while the Hosted Authorization owner decision remains pending. It must return a verified, complete signed authorization envelope plus exact operation, method/path, body digest, attempt, and current-claim binding. The worker fails closed when that resolver or Talos current-claim resolution is unavailable. It does not replace missing authorization with its worker token or raw lease token.
+
+The Local QA Runtime, not `talos-worker`, materializes Source, starts the project environment and system Chrome, executes Testing Packages, owns the local journal, and performs exact cleanup. The worker forwards immutable refs/digests, maintains heartbeat/cancel/deadline/fence checks, and projects only bounded snapshots/events and opaque terminal refs. Cancel and reconcile requests carry a stable attempt-bound `effect_id`, so an authorization/claim rotation cannot start cleanup or quiesce twice after an acknowledgement is lost. A Runtime response is rejected when it exceeds the advertised bounded response limits.
+
+A macOS arm64 canary machine must advertise the exact task/runtime/package capability tags used by placement, including `testing_runtime=local-qa-mvp/v1`, `testing_task_contract=talos.testing-task/v1`, `testing_backend=browser`, `browser=chromium`, `os=darwin`, `arch=arm64`, `headed_display=true`, and the exact runner package id/version/digest. Machine tags are an index; the packaged executor still performs a fresh Runtime capability handshake before admission.
 
 ## Browser profile isolation
 

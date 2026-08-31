@@ -1,4 +1,20 @@
 import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
+
+export interface TestingAttemptMutationGuard {
+  readonly attemptId: string;
+  readonly operation: 'start' | 'reconcile';
+  readonly generation: number;
+  readonly fenceToken: string;
+  readonly leaseId: string;
+  readonly leaseExpiresAt: string;
+}
+
+export interface TestingAttemptDispatchGuard extends TestingAttemptMutationGuard {
+  readonly status: TestingAttemptStatus;
+  readonly dispatchLeaseExpiresAt: string;
+  readonly dispatchAuthorizationExpiresAt: string;
+}
 
 export interface Repository {
   ping(): Promise<void>;
@@ -31,4 +47,37 @@ export interface Repository {
   completeSessionAction(taskId: string, actionId: string): Promise<void>;
   saveSessionActionResult(result: SessionActionResult): Promise<void>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
+  createTestingRun(run: TestingRunRecord): Promise<boolean>;
+  getTestingRun(id: string): Promise<TestingRunRecord | undefined>;
+  getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined>;
+  listTestingRuns(): Promise<readonly TestingRunRecord[]>;
+  replaceTestingRun(run: TestingRunRecord, expectedRecordVersion: number): Promise<boolean>;
+  replaceTestingRunWithinDeadline(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    observedNow: number
+  ): Promise<boolean>;
+  replaceTestingRunForAttempt(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptMutationGuard,
+    observedNow: number
+  ): Promise<boolean>;
+  replaceTestingRunForDispatch(
+    run: TestingRunRecord,
+    expectedRecordVersion: number,
+    deadline: 'run' | 'reconcile',
+    guard: TestingAttemptDispatchGuard,
+    observedNow: number
+  ): Promise<boolean>;
+  createTestingMachineReservation(reservation: TestingMachineReservationRecord): Promise<boolean>;
+  getTestingMachineReservation(machineId: string): Promise<TestingMachineReservationRecord | undefined>;
+  listTestingMachineReservations(): Promise<readonly TestingMachineReservationRecord[]>;
+  replaceTestingMachineReservation(
+    reservation: TestingMachineReservationRecord,
+    expectedRecordVersion: number
+  ): Promise<boolean>;
+  releaseTestingMachineReservation(machineId: string, attemptId: string): Promise<boolean>;
 }

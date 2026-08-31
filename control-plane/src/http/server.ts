@@ -3,6 +3,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { URL } from 'node:url';
 import { z } from 'zod';
 import {
+  computeTestingWorkerMutationDigest,
+  testingWorkerMutationAckSchema,
+  type TestingControlStatus,
+  type TestingCurrentClaimEnvelope,
+  type TestingWorkerMutationOperation
+} from '@talos/testing-protocol';
+import {
   adminMachineSchema,
   adminPoolSchema,
   adminProfileSchema,
@@ -17,6 +24,11 @@ import {
   heartbeatSchema,
   resultSchema,
   taskInputSchema,
+  testingAttemptBindingBodySchema,
+  testingHeartbeatBodySchema,
+  testingNoLocalAcceptanceBodySchema,
+  testingTerminalCommitBodySchema,
+  testingWorkerClaimSchema,
   workerBodyCredentialsSchema,
   workerClaimSchema,
   workerActionPollSchema,
@@ -24,7 +36,16 @@ import {
   workerInputPollSchema,
   workerNeedsInputSchema
 } from '../domain/schemas.js';
-import { TalosError, conflict, forbidden, notFound, notImplemented, payloadTooLarge, unauthorized } from '../domain/errors.js';
+import {
+  TalosError,
+  conflict,
+  forbidden,
+  notFound,
+  notImplemented,
+  payloadTooLarge,
+  publicErrorRetryable,
+  unauthorized
+} from '../domain/errors.js';
 import type { TaskService } from '../services/task-service.js';
 import type { Repository } from '../storage/repository.js';
 import { hashWorkerToken } from '../config.js';
@@ -33,6 +54,12 @@ import { DevIdentityResolver, type IdentityResolver, type ResolvedIdentity } fro
 import type { OpenApiDocument } from '../openapi.js';
 import { SessionService, type SessionServiceOptions } from '../services/session-service.js';
 import { routeSessionRequest } from './session-routes.js';
+import { TestingRunService } from '../services/testing-run-service.js';
+import { routeTestingRunRequest } from './testing-run-routes.js';
+import {
+  TestingAttemptService,
+  type TestingAttemptBindingInput
+} from '../services/testing-attempt-service.js';
 
 export interface ServerOptions {
   identityResolver?: IdentityResolver;
@@ -42,6 +69,9 @@ export interface ServerOptions {
   openApiDocument?: OpenApiDocument;
   sessionService?: SessionService;
   session?: SessionServiceOptions;
+  testingRunService?: TestingRunService;
+  testingAttemptService?: TestingAttemptService;
+  testingCursorSecret?: string;
 }
 
 export const defaultIdentityResolver: IdentityResolver = new DevIdentityResolver();
@@ -53,6 +83,13 @@ export const createApiServer = (
 ): Server => {
   const identities = options.identityResolver ?? defaultIdentityResolver;
   const sessions = options.sessionService ?? new SessionService(service, repository, options.session);
+  const testingRuns = options.testingRunService ?? new TestingRunService(repository, {
+    cursorSecret: options.testingCursorSecret ?? 'development-testing-cursor-secret',
+    clock: options.clock
+  });
+  const testingAttempts = options.testingAttemptService ?? new TestingAttemptService(repository, {
+    clock: options.clock
+  });
   return createServer(async (request, response) => {
     try {
       const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
@@ -70,13 +107,13 @@ export const createApiServer = (
           return send(response, 503, { status: 'degraded' });
         }
       }
-      await route(request, response, service, sessions, repository, identities, options);
+      await route(request, response, service, sessions, testingRuns, testingAttempts, repository, identities, options);
     } catch (error) {
       const talos = error instanceof TalosError ? error : undefined;
       const validation = error instanceof z.ZodError
         ? {
             code: 'validation_error',
-            message: error.issues.map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; '),
+            message: 'request failed schema validation',
             status: 400
           }
         : undefined;
@@ -84,10 +121,19 @@ export const createApiServer = (
         ? { code: 'invalid_json', message: 'request body must be valid JSON', status: 400 }
         : undefined;
       const mapped = talos ?? validation ?? invalidJson;
-      send(response, mapped?.status ?? 500, {
+      const status = mapped?.status ?? 500;
+      const code = mapped?.code ?? 'internal_error';
+      const message = boundedPublicErrorMessage(mapped?.message ?? 'internal server error');
+      const details: Record<string, unknown> = { ...(talos?.details ?? {}) };
+      delete details.code;
+      delete details.message;
+      delete details.retryable;
+      send(response, status, {
         error: {
-          code: mapped?.code ?? 'internal_error',
-          message: mapped?.message ?? 'internal server error'
+          ...details,
+          code,
+          message,
+          retryable: publicErrorRetryable(code, status)
         }
       });
     }
@@ -99,6 +145,8 @@ const route = async (
   response: ServerResponse,
   service: TaskService,
   sessions: SessionService,
+  testingRuns: TestingRunService,
+  testingAttempts: TestingAttemptService,
   repository: Repository,
   identities: IdentityResolver,
   options: ServerOptions
@@ -107,7 +155,19 @@ const route = async (
   const url = new URL(request.url ?? '/', 'http://talos.local');
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (parts[0] !== 'v1') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (parts[0] !== 'v1') return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
+  if (
+    method === 'POST' &&
+    parts[1] === 'testing' &&
+    parts[2] === 'claims' &&
+    parts[3] !== undefined &&
+    parts[4] !== undefined &&
+    parts[5] === 'resolve' &&
+    parts.length === 6
+  ) {
+    const body = await readBody(request, options.maxBodyBytes);
+    return send(response, 200, await testingAttempts.resolveRuntimeCurrentClaim(parts[3], parts[4], body));
+  }
   if (parts[1] === 'handoffs' && parts[2] !== undefined && method === 'GET') {
     const identity = await requireIdentity(request, identities);
     const link = await repository.getHandoff(parts[2]);
@@ -120,10 +180,24 @@ const route = async (
     throw notImplemented('hosted handoff views are planned for Phase 3');
   }
   if (parts[1] === 'admin') return adminRoute(request, response, repository, parts, options);
-  if (parts[1] === 'worker') return workerRoute(request, response, service, sessions, repository, parts, options);
+  if (parts[1] === 'worker') {
+    return workerRoute(request, response, service, sessions, testingAttempts, repository, parts, options);
+  }
 
   const identity = await requireIdentity(request, identities);
   const userId = identity.userId;
+  if (parts[1] === 'tools' && parts[2] === 'testing') {
+    const body = ['POST', 'PUT'].includes(method) ? await readBody(request, options.maxBodyBytes) : {};
+    const routed = await routeTestingRunRequest({
+      method,
+      parts,
+      searchParams: url.searchParams,
+      body,
+      identity,
+      service: testingRuns
+    });
+    if (routed !== undefined) return send(response, routed.status, routed.body);
+  }
   if (parts[1] === 'sessions') {
     const body = method === 'POST' ? await readBody(request, options.maxBodyBytes) : {};
     const routed = await routeSessionRequest({ method, parts, searchParams: url.searchParams, body, identity, sessions });
@@ -189,7 +263,7 @@ const route = async (
     if (profile.userId !== userId) throw unauthorized('profile belongs to another user');
     throw notImplemented('profile login links are planned for Phase 2');
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const assertPoolOwner = async (repository: Repository, poolId: string, userId: string): Promise<NonNullable<Awaited<ReturnType<Repository['getPool']>>>> => {
@@ -281,7 +355,7 @@ const fleetPoolRoute = async (
       return send(response, 200, machines.map(publicMachine));
     }
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const adminRoute = async (
@@ -292,7 +366,7 @@ const adminRoute = async (
   options: ServerOptions
 ): Promise<void> => {
   requireAdmin(request, options.adminToken);
-  if (request.method !== 'POST') return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (request.method !== 'POST') return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
   if (parts[2] === 'pools') {
     const input = adminPoolSchema.parse(await readBody(request, options.maxBodyBytes));
     if (await repository.getPool(input.id) !== undefined) throw conflict('pool already exists');
@@ -321,7 +395,7 @@ const adminRoute = async (
     await repository.saveProfile({ id: input.id, userId: input.user_id, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
     return send(response, 201, { id: input.id });
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
 
 const workerRoute = async (
@@ -329,6 +403,7 @@ const workerRoute = async (
   response: ServerResponse,
   service: TaskService,
   sessions: SessionService,
+  testingAttempts: TestingAttemptService,
   repository: Repository,
   parts: readonly string[],
   options: ServerOptions
@@ -338,6 +413,9 @@ const workerRoute = async (
   const maxBodyBytes = isActionResult ? 8 * 1024 * 1024 : options.maxBodyBytes;
   const body = method === 'POST' ? await readBody(request, maxBodyBytes) : undefined;
   const workerIdentity = await requireWorker(request, repository, body);
+  if (parts[2] === 'testing') {
+    return testingWorkerRoute(response, testingAttempts, parts, method, body, workerIdentity);
+  }
   if (method === 'POST' && parts[2] === 'claim') {
     const input = workerClaimSchema.parse(body);
     if (input.machine_id !== workerIdentity.machineId) throw unauthorized('authenticated machine does not match claim machine');
@@ -345,7 +423,9 @@ const workerRoute = async (
     const claimed = await service.claim(input.worker_id, input.machine_id);
     return send(response, 200, { task: service.toPublicTask(claimed.task), lease: claimed.lease, leaseToken: claimed.leaseToken });
   }
-  if (parts[2] !== 'tasks' || parts[3] === undefined) return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  if (parts[2] !== 'tasks' || parts[3] === undefined) {
+    return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
+  }
   const taskId = parts[3];
   const task = await repository.getTask(taskId);
   if (task?.machineId !== workerIdentity.machineId) throw unauthorized('task is assigned to another machine');
@@ -385,8 +465,164 @@ const workerRoute = async (
     const artifact = { id: newId('artifact'), name: input.name, contentType: input.content_type, size: input.size, uri: input.uri, createdAt: new Date(options.clock?.() ?? Date.now()).toISOString() };
     return send(response, 201, service.toPublicTask(await service.addArtifact(taskId, worker, input.lease_token, artifact)));
   }
-  return send(response, 404, { error: { code: 'not_found', message: 'route not found' } });
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
 };
+
+const testingWorkerRoute = async (
+  response: ServerResponse,
+  service: TestingAttemptService,
+  parts: readonly string[],
+  method: string,
+  body: unknown,
+  worker: WorkerIdentity
+): Promise<void> => {
+  if (method === 'POST' && parts[3] === 'claim' && parts.length === 4) {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match testing claim machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match testing claim worker');
+    return send(response, 200, await service.claim(worker.workerId, worker.machineId));
+  }
+  if (method === 'POST' && parts[3] === 'reconcile-claim' && parts.length === 4) {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match reconcile machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match reconcile worker');
+    return send(response, 200, await service.claimNextReconcile(worker.workerId, worker.machineId));
+  }
+  if (method === 'GET' && parts[3] === 'claims' && parts[4] !== undefined && parts[5] !== undefined && parts.length === 6) {
+    const claim = await service.resolveCurrentClaim(parts[4], parts[5]);
+    if (claim.claim.machine_id !== worker.machineId) throw unauthorized('testing claim belongs to another machine');
+    return send(response, 200, claim);
+  }
+  if (method !== 'POST' || parts[3] !== 'runs' || parts[4] === undefined || parts[5] === undefined || parts.length !== 6) {
+    return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
+  }
+  const runId = parts[4];
+  const action = parts[5];
+  if (action === 'reconcile-claim') {
+    const input = testingWorkerClaimSchema.parse(body);
+    if (input.machine_id !== worker.machineId) throw unauthorized('authenticated machine does not match reconcile machine');
+    if (input.worker_id !== worker.workerId) throw unauthorized('authenticated worker does not match reconcile worker');
+    return send(response, 200, await service.claimReconcile(worker.workerId, worker.machineId, runId));
+  }
+  if (action === 'heartbeat') {
+    const input = testingHeartbeatBodySchema.parse(body);
+    const attempt = testingBinding(runId, input, worker);
+    return send(response, 200, await service.heartbeat(attempt, input.extend_seconds, input.progress));
+  }
+  if (action === 'local-accept' || action === 'running') {
+    const input = testingAttemptBindingBodySchema.parse(body);
+    const attempt = testingBinding(runId, input, worker);
+    const claim = action === 'local-accept'
+      ? await service.acceptLocal(attempt)
+      : await service.markRunning(attempt);
+    const operation = action === 'local-accept' ? 'local_accept' : 'running';
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      operation,
+      runId,
+      input,
+      {},
+      operation === 'local_accept' ? 'local_accepted' : 'running',
+      claim
+    ));
+  }
+  if (action === 'not-accepted') {
+    const input = testingNoLocalAcceptanceBodySchema.parse(body);
+    const run = await service.confirmNotLocallyAccepted(testingBinding(runId, input, worker), input.fact);
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      'not_accepted',
+      runId,
+      input,
+      { fact: input.fact },
+      run.controlStatus,
+      undefined,
+      run.snapshotVersion
+    ));
+  }
+  if (action === 'result' || action === 'reconcile') {
+    const input = testingTerminalCommitBodySchema.parse(body);
+    const terminal = {
+      ...testingBinding(runId, input, worker),
+      controlStatus: input.control_status,
+      executionOutcome: input.execution_outcome,
+      evidenceOutcome: input.evidence_outcome,
+      uploadOutcome: input.upload_outcome,
+      cleanupOutcome: input.cleanup_outcome,
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      ...(input.results === undefined ? {} : { results: input.results }),
+      ...(input.safe_error === undefined ? {} : { safeError: input.safe_error })
+    };
+    const run = action === 'reconcile'
+      ? await service.commitReconcileTerminal(terminal)
+      : await service.commitTerminal(terminal);
+    return send(response, 200, testingWorkerMutationAcknowledgement(
+      action === 'result' ? 'terminal' : 'reconcile_terminal',
+      runId,
+      input,
+      testingTerminalMutationPayload(input),
+      run.controlStatus,
+      undefined,
+      run.snapshotVersion
+    ));
+  }
+  return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
+};
+
+const testingBinding = (
+  runId: string,
+  input: { attempt_id: string; generation: number; fence_token: string; lease_token: string },
+  worker: WorkerIdentity
+): TestingAttemptBindingInput => ({
+  runId,
+  attemptId: input.attempt_id,
+  machineId: worker.machineId,
+  workerId: worker.workerId,
+  generation: input.generation,
+  fenceToken: input.fence_token,
+  leaseToken: input.lease_token
+});
+
+const testingWorkerMutationAcknowledgement = (
+  operation: TestingWorkerMutationOperation,
+  runId: string,
+  input: z.infer<typeof testingAttemptBindingBodySchema>,
+  payload: Readonly<Record<string, unknown>>,
+  controlStatus: TestingControlStatus,
+  currentClaim?: TestingCurrentClaimEnvelope,
+  snapshotVersion?: number
+): ReturnType<typeof testingWorkerMutationAckSchema.parse> => testingWorkerMutationAckSchema.parse({
+  schema_version: 'talos.testing-worker-mutation-ack/v1',
+  operation,
+  run_id: runId,
+  attempt_id: input.attempt_id,
+  generation: input.generation,
+  fence_token: input.fence_token,
+  mutation_digest: computeTestingWorkerMutationDigest({
+    schema_version: 'talos.testing-worker-mutation/v1',
+    operation,
+    run_id: runId,
+    attempt_id: input.attempt_id,
+    generation: input.generation,
+    fence_token: input.fence_token,
+    lease_token: input.lease_token,
+    payload
+  }),
+  control_status: controlStatus,
+  ...(snapshotVersion === undefined ? {} : { snapshot_version: snapshotVersion }),
+  ...(currentClaim === undefined ? {} : { current_claim: currentClaim })
+});
+
+const testingTerminalMutationPayload = (
+  input: z.infer<typeof testingTerminalCommitBodySchema>
+): Readonly<Record<string, unknown>> => ({
+  control_status: input.control_status,
+  execution_outcome: input.execution_outcome,
+  evidence_outcome: input.evidence_outcome,
+  upload_outcome: input.upload_outcome,
+  cleanup_outcome: input.cleanup_outcome,
+  ...(input.summary === undefined ? {} : { summary: input.summary }),
+  ...(input.results === undefined ? {} : { results: input.results }),
+  ...(input.safe_error === undefined ? {} : { safe_error: input.safe_error })
+});
 
 const requireIdentity = async (request: IncomingMessage, resolver: IdentityResolver): Promise<ResolvedIdentity> => {
   const header = request.headers['x-nyxid-identity-token'];
@@ -459,4 +695,12 @@ const sendSerialized = (response: ServerResponse, status: number, payload: strin
   response.end(payload);
 };
 
-export const parseError = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
+const publicErrorEnvelope = (code: string, message: string, status: number): unknown => ({
+  error: { code, message: boundedPublicErrorMessage(message), retryable: publicErrorRetryable(code, status) }
+});
+
+const boundedPublicErrorMessage = (message: string): string => message.slice(0, 4_096) || 'request failed';
+
+export const parseError = z.object({
+  error: z.object({ code: z.string(), message: z.string(), retryable: z.boolean() }).passthrough()
+});

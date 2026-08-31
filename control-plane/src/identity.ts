@@ -1,10 +1,15 @@
 import { createPublicKey, type KeyObject } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify, type RemoteJWKSet } from 'jose';
+import {
+  testingAuthenticatedTransportContextSchema,
+  type TestingAuthenticatedTransportContext
+} from '@talos/testing-protocol';
 
 export interface ResolvedIdentity {
   userId: string;
   groups: readonly string[];
   permissions: readonly string[];
+  authenticatedTransport?: TestingAuthenticatedTransportContext;
 }
 
 export interface IdentityResolver {
@@ -56,10 +61,15 @@ export class JwtIdentityResolver implements IdentityResolver {
       const issuedAt = verified.payload.iat;
       const expiresAt = verified.payload.exp;
       if (typeof issuedAt !== 'number' || typeof expiresAt !== 'number' || issuedAt > Math.floor(Date.now() / 1000) + 60) return undefined;
+      const authenticatedTransport = verified.payload.nyxid_transport === undefined
+        ? undefined
+        : testingAuthenticatedTransportContextSchema.parse(verified.payload.nyxid_transport);
+      if (authenticatedTransport !== undefined && authenticatedTransport.subject !== subject) return undefined;
       return {
         userId: subject,
         groups: stringArray(verified.payload.groups),
-        permissions: stringArray(verified.payload.permissions)
+        permissions: stringArray(verified.payload.permissions),
+        ...(authenticatedTransport === undefined ? {} : { authenticatedTransport })
       };
     } catch {
       return undefined;

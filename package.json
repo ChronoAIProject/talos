@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
+    "testing-protocol",
     "control-plane",
     "worker"
   ],
@@ -11,7 +12,10 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint \"**/*.{ts,tsx}\"",
     "bundle:worker": "node scripts/bundle-worker.mjs",
+    "generate:testing-fixtures": "npm run build && node scripts/generate-testing-contract-fixtures.mjs",
+    "demo:testing-contract": "tsc -b testing-protocol --force --pretty false && node scripts/demo-testing-contract.mjs",
     "test": "vitest run --coverage",
+    "test:mongo-contract": "vitest run control-plane/src/storage/repository-contract.test.ts",
     "test:watch": "vitest"
   },
   "devDependencies": {

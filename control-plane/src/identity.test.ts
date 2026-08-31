@@ -9,6 +9,28 @@ const generate = promisify(generateKeyPair);
 const keysPromise = generate('rsa', { modulusLength: 2048 });
 const issuer = 'https://nyxid.example';
 const audience = 'talos-service';
+const digest = `sha256:${'a'.repeat(64)}`;
+const authenticatedTransport = {
+  schema_version: 'talos.testing-authenticated-transport-context/v1',
+  transport_correlation_id: 'transport:request-1',
+  verified_client_correlation_id: 'client:request-1',
+  subject: 'alice',
+  delegated_actor: null,
+  source: 'pql',
+  destination: 'talos-testing-tool',
+  route: { ref: 'nyxid://routes/testing/run-1', digest, operation: 'submit', run_id: 'run-1' },
+  authorization: {
+    ref: 'authorization://nyxid/testing/run-1',
+    digest,
+    operation: 'submit',
+    run_id: 'run-1',
+    valid_until: '2026-08-22T00:10:00.000Z'
+  },
+  audit_refs: [{ ref: 'nyxid://audit/events/request-1', digest }],
+  transport_acknowledgement: { ref: 'nyxid://transport-acks/testing/request-1', digest },
+  verified_request_digest: digest,
+  verified_at: '2026-08-22T00:00:00.000Z'
+};
 
 const token = async (overrides: Record<string, unknown> = {}): Promise<string> => {
   const { privateKey } = await keysPromise;
@@ -40,6 +62,36 @@ describe('identity resolvers', () => {
     expect(await resolver.resolve(await token())).toMatchObject({ userId: 'alice', groups: ['eng'], permissions: ['tasks:submit'] });
     const noGroups = await new SignJWT({}).setProtectedHeader({ alg: 'RS256' }).setSubject('bob').setIssuer(issuer).setAudience(audience).setIssuedAt().setExpirationTime('1h').sign((await keysPromise).privateKey);
     expect(await resolver.resolve(noGroups)).toMatchObject({ userId: 'bob', groups: [] });
+  });
+
+  it('accepts only a well-formed NyxID transport projection bound to the JWT subject', async () => {
+    const { publicKey } = await keysPromise;
+    const resolver = new JwtIdentityResolver({ publicKey: await exportSPKI(publicKey), issuer, audience });
+
+    await expect(resolver.resolve(await token({ nyxid_transport: authenticatedTransport }))).resolves.toMatchObject({
+      userId: 'alice',
+      authenticatedTransport: {
+        subject: 'alice',
+        destination: 'talos-testing-tool',
+        transport_correlation_id: 'transport:request-1'
+      }
+    });
+    await expect(resolver.resolve(await token({ nyxid_transport: {} }))).resolves.toBeUndefined();
+    await expect(resolver.resolve(await token({
+      nyxid_transport: { ...authenticatedTransport, subject: 'mallory' }
+    }))).resolves.toBeUndefined();
+    await expect(resolver.resolve(await token({
+      nyxid_transport: { ...authenticatedTransport, source: 'untrusted-client' }
+    }))).resolves.toBeUndefined();
+    await expect(resolver.resolve(await token({
+      nyxid_transport: {
+        ...authenticatedTransport,
+        route: { ...authenticatedTransport.route, operation: 'cancel' }
+      }
+    }))).resolves.toBeUndefined();
+    await expect(resolver.resolve(await token({
+      nyxid_transport: { ...authenticatedTransport, audit_refs: [], forged_audit_ref: 'nyxid://audit/events/forged' }
+    }))).resolves.toBeUndefined();
   });
 
   it('rejects wrong signature, expiry, issuer, audience, and future iat', async () => {

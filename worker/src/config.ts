@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { workerConfigSchema, type WorkerConfig } from './runtime/client.js';
+import { workerConfigFileSchema, workerConfigSchema, type WorkerConfig } from './runtime/client.js';
 
 export const defaultWorkerDirectory = (home = homedir()): string => join(home, '.talos-worker');
 export const defaultWorkerConfigPath = (home = homedir()): string => join(defaultWorkerDirectory(home), 'config.json');
@@ -26,7 +26,7 @@ export const loadWorkerConfig = (
   env: NodeJS.ProcessEnv = process.env,
   fileConfig?: unknown
 ): WorkerConfig => {
-  const stored = fileConfig === undefined ? {} : workerConfigSchema.partial().parse(fileConfig);
+  const stored = fileConfig === undefined ? {} : workerConfigFileSchema.parse(fileConfig);
   return workerConfigSchema.parse({
     ...stored,
     ...(env.TALOS_CONTROL_PLANE_URL === undefined ? {} : { controlPlaneUrl: env.TALOS_CONTROL_PLANE_URL }),
@@ -39,7 +39,11 @@ export const loadWorkerConfig = (
     ...(env.TALOS_POLL_MS === undefined ? {} : { pollMs: env.TALOS_POLL_MS }),
     ...(env.TALOS_INPUT_POLL_MS === undefined ? {} : { inputPollMs: env.TALOS_INPUT_POLL_MS }),
     ...(env.TALOS_ACTION_POLL_MS === undefined ? {} : { actionPollMs: env.TALOS_ACTION_POLL_MS }),
-    ...(env.TALOS_SESSION_IDLE_MS === undefined ? {} : { sessionIdleMs: env.TALOS_SESSION_IDLE_MS })
+    ...(env.TALOS_SESSION_IDLE_MS === undefined ? {} : { sessionIdleMs: env.TALOS_SESSION_IDLE_MS }),
+    ...(env.TALOS_TESTING_RUNTIME_URL === undefined ? {} : { testingRuntimeUrl: env.TALOS_TESTING_RUNTIME_URL }),
+    ...(env.TALOS_TESTING_RUNTIME_CREDENTIAL === undefined ? {} : { testingRuntimeCredential: env.TALOS_TESTING_RUNTIME_CREDENTIAL }),
+    ...(env.TALOS_TESTING_AUTHORIZATION_RESOLVER_URL === undefined ? {} : { testingAuthorizationResolverUrl: env.TALOS_TESTING_AUTHORIZATION_RESOLVER_URL }),
+    ...(env.TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN === undefined ? {} : { testingAuthorizationResolverToken: env.TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN })
   });
 };
 
@@ -54,7 +58,11 @@ export const workerConfigToEnv = (config: WorkerConfig): NodeJS.ProcessEnv => ({
   TALOS_INPUT_POLL_MS: String(config.inputPollMs),
   TALOS_ACTION_POLL_MS: String(config.actionPollMs),
   TALOS_SESSION_IDLE_MS: String(config.sessionIdleMs),
-  ...(config.cdpEndpoint === undefined ? {} : { TALOS_CDP_ENDPOINT: config.cdpEndpoint })
+  ...(config.cdpEndpoint === undefined ? {} : { TALOS_CDP_ENDPOINT: config.cdpEndpoint }),
+  ...(config.testingRuntimeUrl === undefined ? {} : { TALOS_TESTING_RUNTIME_URL: config.testingRuntimeUrl }),
+  ...(config.testingRuntimeCredential === undefined ? {} : { TALOS_TESTING_RUNTIME_CREDENTIAL: config.testingRuntimeCredential }),
+  ...(config.testingAuthorizationResolverUrl === undefined ? {} : { TALOS_TESTING_AUTHORIZATION_RESOLVER_URL: config.testingAuthorizationResolverUrl }),
+  ...(config.testingAuthorizationResolverToken === undefined ? {} : { TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN: config.testingAuthorizationResolverToken })
 });
 
 const errorMessage = (error: unknown): string => error instanceof Error

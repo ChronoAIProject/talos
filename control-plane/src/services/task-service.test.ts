@@ -5,6 +5,8 @@ import { ProfileLockService } from './profile-lock.js';
 import { Scheduler } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { WebhookSigner } from './webhook-signer.js';
+import type { Task } from '../domain/types.js';
+import { computeTestingTaskPayloadDigest, testingTaskSchema } from '@talos/testing-protocol';
 
 const setup = (clock: { value: number } = { value: Date.now() }) => {
   const repository = new MemoryRepository();
@@ -135,6 +137,136 @@ describe('task service', () => {
     await repository.saveMachine({ id: 'second', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
     const task = await service.createTask('user-a', { kind: 'browse', goal: 'second may claim' });
     expect((await service.claim('worker-b', 'second')).task.id).toBe(task.id);
+  });
+
+  it('never dispatches strict testing tasks through the generic claim path', async () => {
+    const { repository, service } = setup({ value: 1_000 });
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const testingTaskInput = {
+      schema_version: 'talos.testing-task/v1',
+      id: 'testing-task',
+      kind: 'testing',
+      interaction: 'managed',
+      qa_run_id: 'run-1',
+      dispatch_attempt_id: 'attempt-1',
+      generation: 1,
+      machine_id: 'machine',
+      worker_id: 'worker-testing',
+      lease_id: 'lease-testing',
+      fence_token: 'fence-token-testing-1',
+      admission_nonce: 'admission-nonce-testing-1',
+      lease_claim: { schema: 'talos.testing-lease-claim/v1', ref: 'talos://testing/claims/run-1/claim-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
+      inputs: {
+        schema_version: 'talos.testing-input-references/v1',
+        project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1', ref: 'artifact://pql/project-pack-snapshot/snapshot-1', digest },
+        test_selection: { schema: 'pql.test-selection/v1', ref: 'artifact://pql/test-selection/selection-1', digest },
+        testing_design_input_set: { schema: 'pql.testing-design-input-set.v1', ref: 'artifact://pql/testing-design-input-set/input-1', digest },
+        source_revision: { repository_id: 'repo-1', exact_revision: '0123456789abcdef0123456789abcdef01234567', ref: 'artifact://source/revision-1', digest },
+        structured_plan: { schema: 'testing-structured-plan.v2', ref: 'artifact://plans/plan-1', digest },
+        environment_profile: { ref: 'artifact://environments/environment-1', digest },
+        testing_package: { package_id: 'testing-browser-runner', version: '1.0', digest }
+      },
+      runner: { package_id: 'testing-browser-runner', version: '1.0', digest },
+      policy_ref: { schema: 'talos.testing-execution-policy/v1', ref: 'talos://policies/testing/policy-1', digest },
+      budgets_ref: { schema: 'talos.testing-budgets/v1', ref: 'talos://policies/testing/budgets-1', digest },
+      local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
+      expected_runtime_capability: 'local-qa-mvp/v1',
+      deadline: '2026-08-22T00:10:00.000Z'
+    } as const;
+    const testing = testingTaskSchema.parse({
+      ...testingTaskInput,
+      task_payload_digest: computeTestingTaskPayloadDigest(testingTaskInput)
+    });
+    const queuedTestingTask: Task = {
+      id: 'testing-task',
+      userId: 'user-a',
+      kind: 'testing',
+      goal: 'display only',
+      constraints: {},
+      mode: 'act',
+      interaction: 'managed',
+      status: 'submitted',
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(1_000).toISOString(),
+      findings: [],
+      artifacts: [],
+      testing
+    };
+    await repository.saveTask(queuedTestingTask);
+    const browser = await service.createTask('user-a', { kind: 'browse', goal: 'browser work' });
+    expect((await service.claim('worker-a', 'machine')).task.id).toBe(browser.id);
+    expect((await repository.getTask('testing-task'))?.status).toBe('submitted');
+    await expect(service.createTask('user-a', { kind: 'testing', goal: 'caller bypass' }))
+      .rejects.toBeDefined();
+  });
+
+  it('fails closed for testing tasks on every generic user, worker, and lease-expiry path', async () => {
+    const { repository, service } = setup({ value: 2_000 });
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const testingTaskInput = {
+      schema_version: 'talos.testing-task/v1',
+      id: 'testing-task-guarded',
+      kind: 'testing',
+      interaction: 'managed',
+      qa_run_id: 'run-guarded',
+      dispatch_attempt_id: 'attempt-guarded',
+      generation: 1,
+      machine_id: 'machine-guarded',
+      worker_id: 'worker-testing',
+      lease_id: 'lease-testing',
+      fence_token: 'fence-token-testing-2',
+      admission_nonce: 'admission-nonce-testing-2',
+      lease_claim: { schema: 'talos.testing-lease-claim/v1', ref: 'talos://testing/claims/run-guarded/claim-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
+      inputs: {
+        schema_version: 'talos.testing-input-references/v1',
+        project_pack_snapshot: { schema: 'pql.project-pack-snapshot/v1', ref: 'artifact://pql/project-pack-snapshot/snapshot-1', digest },
+        test_selection: { schema: 'pql.test-selection/v1', ref: 'artifact://pql/test-selection/selection-1', digest },
+        testing_design_input_set: { schema: 'pql.testing-design-input-set.v1', ref: 'artifact://pql/testing-design-input-set/input-1', digest },
+        source_revision: { repository_id: 'repo-1', exact_revision: '0123456789abcdef0123456789abcdef01234567', ref: 'artifact://source/revision-1', digest },
+        structured_plan: { schema: 'testing-structured-plan.v2', ref: 'artifact://plans/plan-1', digest },
+        environment_profile: { ref: 'artifact://environments/environment-1', digest },
+        testing_package: { package_id: 'testing-browser-runner', version: '1.0', digest }
+      },
+      runner: { package_id: 'testing-browser-runner', version: '1.0', digest },
+      policy_ref: { schema: 'talos.testing-execution-policy/v1', ref: 'talos://policies/testing/policy-1', digest },
+      budgets_ref: { schema: 'talos.testing-budgets/v1', ref: 'talos://policies/testing/budgets-1', digest },
+      local_request_authorization: { ref: 'authorization://local-qa-request/start-1', digest, expires_at: '2026-08-22T00:10:00.000Z' },
+      expected_runtime_capability: 'local-qa-mvp/v1',
+      deadline: '2026-08-22T00:10:00.000Z'
+    } as const;
+    const testing = testingTaskSchema.parse({
+      ...testingTaskInput,
+      task_payload_digest: computeTestingTaskPayloadDigest(testingTaskInput)
+    });
+    const task: Task = {
+      id: testing.id,
+      userId: 'user-a',
+      kind: 'testing',
+      goal: 'display only',
+      constraints: {},
+      mode: 'act',
+      interaction: 'managed',
+      status: 'claimed',
+      workerId: 'worker-guarded',
+      machineId: 'machine-guarded',
+      leaseToken: 'lease-guarded',
+      leaseExpiresAt: new Date(1_000).toISOString(),
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      findings: [],
+      artifacts: [],
+      testing
+    };
+    await repository.saveTask(task);
+
+    await expect(service.getTask(task.id, task.userId)).rejects.toMatchObject({ code: 'conflict' });
+    await expect(service.cancel(task.id, task.userId)).rejects.toMatchObject({ code: 'conflict' });
+    await expect(service.heartbeat(task.id, 'worker-guarded', 'lease-guarded', 30))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect(await service.expireLeases(2_000)).toEqual([]);
+    expect(await repository.getTask(task.id)).toMatchObject({ status: 'claimed', leaseToken: 'lease-guarded' });
   });
 
   it('signals cancellation and fails queued deadline tasks', async () => {

@@ -8,6 +8,7 @@ describe('HttpWorkerClient', () => {
     const client = new HttpWorkerClient({ controlPlaneUrl: 'http://localhost:8080', workerId: 'w', machineId: 'm', workerToken: 'worker-token-123456' });
     expect((await client.claim()).task).toMatchObject({ id: 't', profileId: 'profile_a' });
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe('error');
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get('authorization')).toBe('Bearer worker-token-123456');
     expect(headers.get('x-talos-worker-token')).toBe('worker-token-123456');
@@ -44,6 +45,7 @@ describe('HttpWorkerClient', () => {
     await client.actionResult('t', 'action_1', 'lease_1', { value: 'ok' });
     expect(fetchMock).toHaveBeenCalledTimes(8);
     for (const call of fetchMock.mock.calls) {
+      expect(call[1]?.redirect).toBe('error');
       expect(JSON.parse(String(call[1]?.body))).toMatchObject({
         worker_token: 'worker-token-123456',
         worker_id: 'w',

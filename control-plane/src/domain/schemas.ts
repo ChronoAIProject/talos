@@ -1,4 +1,15 @@
 import { z } from 'zod';
+import {
+  browserActionSchema,
+  testingCleanupOutcomeSchema,
+  testingEvidenceOutcomeSchema,
+  testingExecutionOutcomeSchema,
+  testingRunSummarySchema,
+  testingSafeErrorSchema,
+  testingNoLocalAcceptanceFactSchema,
+  testingTerminalRefsSchema,
+  testingUploadOutcomeSchema
+} from '@talos/testing-protocol';
 
 export const capabilityTagSchema = z.enum([
   'os',
@@ -14,17 +25,7 @@ const requirementsSchema = z.record(
   z.union([z.string().min(1), z.boolean()])
 );
 
-export const sessionActionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('screenshot'), format: z.enum(['jpeg', 'png']).default('jpeg'), quality: z.number().int().min(1).max(100).default(70) }),
-  z.object({ type: z.literal('click'), x: z.number().finite(), y: z.number().finite(), button: z.enum(['left', 'middle', 'right']).default('left') }),
-  z.object({ type: z.literal('type'), text: z.string().max(10000) }),
-  z.object({ type: z.literal('key'), key: z.string().min(1).max(100) }),
-  z.object({ type: z.literal('scroll'), deltaX: z.number().finite().default(0), deltaY: z.number().finite() }),
-  z.object({ type: z.literal('wait'), milliseconds: z.number().int().nonnegative().max(60000) }),
-  z.object({ type: z.literal('act-on-a11y-node'), nodeId: z.string().min(1), action: z.enum(['click', 'type']), text: z.string().optional() }),
-  z.object({ type: z.literal('extract-structured-dom'), selector: z.string().min(1).max(1000) }),
-  z.object({ type: z.literal('navigate'), url: z.string().url() })
-]);
+export const sessionActionSchema = browserActionSchema;
 
 export const sessionCreateSchema = z.object({
   pool_id: z.string().trim().min(1).max(255).optional(),
@@ -78,10 +79,85 @@ export const workerClaimSchema = workerBodyCredentialsSchema.extend({
   machine_id: z.string().trim().min(1).max(255)
 });
 
+export const testingWorkerClaimSchema = z.object({
+  worker_token: z.string().min(1).optional(),
+  worker_id: z.string().trim().min(1).max(255),
+  machine_id: z.string().trim().min(1).max(255)
+}).strict();
+
 export const heartbeatSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
   extend_seconds: z.number().int().positive().max(300).default(60)
 });
+
+const testingWorkerCredentialsShape = {
+  worker_token: z.string().min(1).optional(),
+  worker_id: z.string().trim().min(1).max(255).optional(),
+  machine_id: z.string().trim().min(1).max(255).optional()
+};
+
+export const testingAttemptBindingBodySchema = z.object({
+  ...testingWorkerCredentialsShape,
+  attempt_id: z.string().trim().min(1).max(255),
+  generation: z.number().int().positive(),
+  fence_token: z.string().min(16).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  lease_token: z.string().min(1).max(512)
+}).strict();
+
+export const testingHeartbeatBodySchema = testingAttemptBindingBodySchema.extend({
+  extend_seconds: z.number().int().positive().max(300).default(60),
+  progress: z.object({
+    phase: z.string().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+    completed_cases: z.number().int().nonnegative(),
+    total_cases: z.number().int().nonnegative(),
+    runtime_event_sequence: z.number().int().nonnegative()
+  }).strict().refine((value) => value.completed_cases <= value.total_cases, {
+    message: 'completed_cases cannot exceed total_cases',
+    path: ['completed_cases']
+  }).optional()
+}).strict();
+
+export const testingTerminalCommitBodySchema = testingAttemptBindingBodySchema.extend({
+  control_status: z.enum(['completed', 'failed', 'cancelled']),
+  execution_outcome: testingExecutionOutcomeSchema,
+  evidence_outcome: testingEvidenceOutcomeSchema,
+  upload_outcome: testingUploadOutcomeSchema,
+  cleanup_outcome: testingCleanupOutcomeSchema,
+  summary: testingRunSummarySchema.optional(),
+  results: testingTerminalRefsSchema.optional(),
+  safe_error: testingSafeErrorSchema.optional()
+}).strict().superRefine((value, context) => {
+  if (value.execution_outcome === 'executing') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot still be executing', path: ['execution_outcome'] });
+  }
+  if (value.evidence_outcome === 'staging') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'terminal commit cannot still stage evidence', path: ['evidence_outcome'] });
+  }
+  if (value.cleanup_outcome === 'pending' || value.cleanup_outcome === 'unobserved') {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'worker terminal commit requires an observed, settled cleanup outcome', path: ['cleanup_outcome'] });
+  }
+  if (value.execution_outcome === 'all_skipped' && value.summary?.all_skipped !== true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped execution requires exact all-skipped summary counts', path: ['summary'] });
+  }
+  if (value.execution_outcome === 'passed' && value.summary?.all_skipped === true) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'all-skipped execution cannot be passed', path: ['execution_outcome'] });
+  }
+  if (['passed', 'failed', 'blocked', 'error', 'all_skipped'].includes(value.execution_outcome)) {
+    if (value.summary === undefined || value.results?.case_result_set === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled Runner execution requires summary and CaseResultSet reference', path: ['results'] });
+    }
+  }
+  if (['complete', 'partial'].includes(value.evidence_outcome) && value.results?.evidence_manifest === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'settled evidence requires EvidenceManifest reference', path: ['results', 'evidence_manifest'] });
+  }
+  if (value.results?.cleanup_receipt === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'observed cleanup requires CleanupReceipt reference', path: ['results', 'cleanup_receipt'] });
+  }
+});
+
+export const testingNoLocalAcceptanceBodySchema = testingAttemptBindingBodySchema.extend({
+  fact: testingNoLocalAcceptanceFactSchema
+}).strict();
 
 export const workerNeedsInputSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1)

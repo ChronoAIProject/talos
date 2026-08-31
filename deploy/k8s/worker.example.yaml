@@ -35,6 +35,19 @@ spec:
                 secretKeyRef:
                   name: talos-worker-token
                   key: TALOS_WORKER_TOKEN
+            # Testing requires a Local QA Runtime sidecar or host-loopback service
+            # plus an accepted authorization consumer endpoint. Supply all four
+            # variables together; omit all four while that integration is disabled.
+            # - name: TALOS_TESTING_RUNTIME_URL
+            #   value: http://127.0.0.1:4317
+            # - name: TALOS_TESTING_RUNTIME_CREDENTIAL
+            #   valueFrom:
+            #     secretKeyRef: { name: talos-testing-worker, key: runtime-credential }
+            # - name: TALOS_TESTING_AUTHORIZATION_RESOLVER_URL
+            #   value: https://authorization.example/resolve
+            # - name: TALOS_TESTING_AUTHORIZATION_RESOLVER_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: talos-testing-worker, key: resolver-token }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
