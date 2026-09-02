@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run build:control-plane-runtime
+      - run: npm run verify:control-plane-runtime
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run bundle:worker
@@ -60,6 +62,12 @@ jobs:
         run: >-
           docker run --rm --entrypoint node talos-control-plane:ci
           -e "Promise.all([import('@talos/testing-protocol'), import('./dist/domain/schemas.js')])"
+      - name: Verify control-plane image excludes test authorities
+        run: |
+          container_id=$(docker create talos-control-plane:ci)
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+          docker cp "$container_id:/app/control-plane/dist" /tmp/talos-control-plane-dist
+          node scripts/verify-control-plane-runtime.mjs /tmp/talos-control-plane-dist
       - name: Verify worker runtime imports
         run: >-
           docker run --rm --entrypoint node talos-worker:ci
