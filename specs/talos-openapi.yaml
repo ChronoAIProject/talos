@@ -410,6 +410,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/worker/testing/runs/{run_id}/reconcile:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:
@@ -423,6 +424,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/worker/testing/runs/{run_id}/not-accepted:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:

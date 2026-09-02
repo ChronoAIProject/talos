@@ -21,6 +21,7 @@ import type { TestingMachineReservationRecord } from '../domain/testing-types.js
 import { submitTestingRun, testAuthenticatedTransportContext } from '../test-support/testing-transport.js';
 import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
 import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
+import type { TestingExternalSchemaAuthority } from './testing-schema-authority.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -281,6 +282,45 @@ describe('TestingRunService', () => {
       status: 'unavailable',
       reason_code: 'external_schema_authority_unavailable'
     });
+  });
+
+  it('keeps malformed or incomplete external schema capability projections non-admitting', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const delegate = testTestingExternalSchemaAuthority();
+    const canonical = await delegate.getCapabilities();
+    const malformedProjections: readonly [string, unknown][] = [
+      ['incomplete', canonical.slice(0, -1)],
+      ['wrong-order', [canonical[1], canonical[0], ...canonical.slice(2)]],
+      ['wrong-owner', [{ ...canonical[0], owner: 'local-qa-runtime' }, ...canonical.slice(1)]],
+      ['available-without-identity', [{ ...canonical[0], schemas: [] }, ...canonical.slice(1)]]
+    ];
+
+    for (const [name, projection] of malformedProjections) {
+      const authority: TestingExternalSchemaAuthority = {
+        getCapabilities: async () => projection as Awaited<
+          ReturnType<TestingExternalSchemaAuthority['getCapabilities']>
+        >,
+        verifyTerminalReference: delegate.verifyTerminalReference.bind(delegate)
+      };
+      const service = new TestingRunService(repository, {
+        cursorSecret: 'testing-cursor-secret-123456',
+        placementPolicy: testTestingPlacementPolicy(),
+        placementInputVerifier: testTestingPlacementInputVerifier(),
+        executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+        externalSchemaAuthority: authority
+      });
+      const capability = await service.getCapabilities('user-1');
+      expect(capability.external_schema_capabilities.every((entry) => entry.status === 'unavailable')).toBe(true);
+      expect(capability.admission_availability).toEqual({
+        status: 'unavailable',
+        reason_code: 'external_schema_authority_unavailable'
+      });
+      const runId = `run-malformed-schema-capability-${name}`;
+      await expect(submitTestingRun(service, runId, 'user-1', request(`malformed-schema-${name}`)))
+        .rejects.toMatchObject({ code: 'external_schema_authority_unavailable', status: 503 });
+      expect(await repository.getTestingRun(runId)).toBeUndefined();
+    }
   });
 
   it('keeps admission closed for every missing local execution dependency', async () => {

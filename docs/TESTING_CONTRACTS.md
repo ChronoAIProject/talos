@@ -1,6 +1,6 @@
 # Talos Testing Tool Contracts
 
-Status: PQL consumer contract candidate for PR #10.
+Status: Contract demo merged to `qa-tools` in PR #10; production providers remain blocked by Issue #12.
 
 ## Public Operations
 

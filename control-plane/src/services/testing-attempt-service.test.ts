@@ -21,7 +21,10 @@ import {
 import { submitTestingRun } from '../test-support/testing-transport.js';
 import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
 import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
-import type { TestingExternalSchemaAuthority } from './testing-schema-authority.js';
+import type {
+  TestingExternalSchemaAuthority,
+  TestingExternalSchemaReferenceVerification
+} from './testing-schema-authority.js';
 import { TestingRunService } from './testing-run-service.js';
 import {
   TESTING_MAX_ATTEMPTS,
@@ -935,6 +938,42 @@ describe('TestingAttemptService', () => {
     }
   });
 
+  it('rejects every well-formed external schema verification identity mismatch before persistence', async () => {
+    const mismatches: readonly [string, (
+      verification: TestingExternalSchemaReferenceVerification
+    ) => TestingExternalSchemaReferenceVerification][] = [
+      ['contract', (verification) => ({ ...verification, contract: 'evidence_manifest' })],
+      ['owner', (verification) => ({ ...verification, owner: 'local-qa-runtime' })],
+      ['reference-schema', (verification) => ({ ...verification, referenceSchema: 'wrong.reference.schema' })],
+      ['schema-id', (verification) => ({ ...verification, schemaId: 'wrong-schema-id' })],
+      ['version', (verification) => ({ ...verification, version: 'wrong-version' })],
+      ['schema-digest', (verification) => ({ ...verification, schemaDigest: `sha256:${'b'.repeat(64)}` })],
+      ['artifact-ref', (verification) => ({ ...verification, artifactRef: 'artifact://wrong/reference-1' })],
+      ['artifact-digest', (verification) => ({ ...verification, artifactDigest: `sha256:${'b'.repeat(64)}` })]
+    ];
+
+    for (const [name, mismatch] of mismatches) {
+      const delegate = testTestingExternalSchemaAuthority();
+      const authority: TestingExternalSchemaAuthority = {
+        getCapabilities: delegate.getCapabilities.bind(delegate),
+        verifyTerminalReference: async (...input) => {
+          const verification = await delegate.verifyTerminalReference(...input);
+          return verification === undefined ? undefined : mismatch(verification);
+        }
+      };
+      const runId = `run-schema-mismatch-${name}`;
+      const { repository, runs, attempts } = await setup({ externalSchemaAuthority: authority });
+      await submitTestingRun(runs, runId, 'user-1', testingRequest(`submit-${runId}`));
+      const claim = await attempts.claim('worker-1', 'machine-1');
+      await attempts.acceptLocal(binding(claim));
+
+      await expect(attempts.commitTerminal(terminal(claim)))
+        .rejects.toMatchObject({ code: 'invalid_external_schema_reference', status: 401 });
+      expect(await repository.getTestingRun(runId)).toMatchObject({ controlStatus: 'local_accepted' });
+      expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+    }
+  });
+
   it('rejects unbounded cleanup verification records without persisting adapter fields', async () => {
     const unboundedVerifier: TestingCleanupReceiptVerifier = {
       verifyCleanupReceipt: async (receipt, context) => ({
@@ -1498,6 +1537,22 @@ describe('TestingAttemptService', () => {
     await expect(rejectingVerifier.confirmNotLocallyAccepted(binding(reconcile), noLocalAcceptanceFact(start, reconcile)))
       .rejects.toMatchObject({ code: 'invalid_no_local_acceptance_fact' });
     expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+
+    const unavailableVerifier = new TestingAttemptService(repository, {
+      claimSigningKey: signingKey,
+      authorizationProvider,
+      runtimeFactVerifier: {
+        verifyTerminalNoLocalAcceptance: async () => { throw new Error('Runtime authority timeout'); }
+      },
+      clock: () => Date.parse(start.current_claim.observed_at),
+      leaseSeconds: 1
+    });
+    await expect(unavailableVerifier.confirmNotLocallyAccepted(
+      binding(reconcile),
+      noLocalAcceptanceFact(start, reconcile)
+    )).rejects.toMatchObject({ code: 'testing_fact_verifier_unavailable', status: 503 });
+    expect(await repository.getTestingMachineReservation('machine-1')).toBeDefined();
+    expect(await repository.getTestingRun('run-fact')).toMatchObject({ controlStatus: 'cancel_requested' });
   });
 
   it('rejects foreign terminal refs, fails closed on authorization outage, and bounds attempts', async () => {
