@@ -2,9 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   computeTestingRunSnapshotDigest,
-  testingRunSnapshotSchema,
-  validateTestingContractFixtureJson
+  testingRunSnapshotSchema
 } from '@talos/testing-protocol';
+import { validateTestingContractFixtureJson } from '../testing-protocol/dist/pql-contract-fixtures.js';
 
 const DEMO_SCHEMA_VERSION = 'talos.testing-contract-demo/v1';
 const CANONICAL_TERMINAL_AUTHORITY = 'talos.testing-run-snapshot/v1';

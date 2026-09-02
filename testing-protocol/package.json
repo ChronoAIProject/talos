@@ -11,6 +11,9 @@
       "import": "./dist/index.js"
     }
   },
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:runtime": "tsc -p tsconfig.runtime.json"
+  },
   "dependencies": { "zod": "^3.24.1" }
 }
