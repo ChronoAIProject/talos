@@ -20,6 +20,7 @@ import type { TestingPlacementPolicy } from './testing-placement-policy.js';
 import type { TestingMachineReservationRecord } from '../domain/testing-types.js';
 import { submitTestingRun, testAuthenticatedTransportContext } from '../test-support/testing-transport.js';
 import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const pointer = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -109,7 +110,10 @@ const serviceFor = async (
   return new TestingRunService(repository, {
     ...options,
     placementPolicy: testTestingPlacementPolicy(),
-    placementInputVerifier: testTestingPlacementInputVerifier()
+    placementInputVerifier: testTestingPlacementInputVerifier(),
+    externalSchemaAuthority: options.externalSchemaAuthority ?? testTestingExternalSchemaAuthority(),
+    executionDependencyReadiness: options.executionDependencyReadiness ??
+      testTestingExecutionDependencyReadiness()
   });
 };
 
@@ -158,8 +162,8 @@ describe('TestingRunService', () => {
       }]
     });
     expect(offline.external_schema_capabilities).toEqual(expect.arrayContaining([
-      expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'unavailable' }),
-      expect.objectContaining({ contract: 'cleanup_receipt', owner: 'local-qa-runtime', status: 'unavailable' })
+      expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'available' }),
+      expect.objectContaining({ contract: 'cleanup_receipt', owner: 'local-qa-runtime', status: 'available' })
     ]));
 
     await repository.saveMachine({ ...machine, online: true });
@@ -226,7 +230,11 @@ describe('TestingRunService', () => {
     const machine = await repository.getMachine('testing-pool-configured-canary');
     if (machine === undefined) throw new Error('testing capability machine fixture missing');
     await repository.saveMachine({ ...machine, online: true });
-    const service = new TestingRunService(repository, { cursorSecret: 'testing-cursor-secret-123456' });
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
+    });
 
     const capability = await service.getCapabilities('user-1');
     expect(capability.backend_availability.availability).toBe('available');
@@ -241,6 +249,9 @@ describe('TestingRunService', () => {
     await provisionTestingPool(repository);
     const verified = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
       externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
     const available = await verified.getCapabilities('user-1');
@@ -254,6 +265,9 @@ describe('TestingRunService', () => {
 
     const unavailable = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
       externalSchemaAuthority: {
         getCapabilities: async () => { throw new Error('upstream unavailable'); },
         verifyTerminalReference: async () => undefined
@@ -263,6 +277,75 @@ describe('TestingRunService', () => {
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ status: 'unavailable', reason_code: 'upstream_schema_manifest_unavailable' })
       ]));
+    expect((await unavailable.getCapabilities('user-1')).admission_availability).toEqual({
+      status: 'unavailable',
+      reason_code: 'external_schema_authority_unavailable'
+    });
+  });
+
+  it('keeps admission closed for every missing local execution dependency', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const ready = testTestingExecutionDependencyReadiness();
+    const missingDependencies = [
+      ['persistentClaimSigningKey', 'testing_claim_signing_key_unavailable'],
+      ['authorizationProvider', 'testing_authorization_unavailable'],
+      ['runtimeFactVerifier', 'testing_fact_verifier_unavailable'],
+      ['cleanupReceiptVerifier', 'cleanup_verifier_unavailable']
+    ] as const;
+
+    for (const [dependency, expectedCode] of missingDependencies) {
+      const service = new TestingRunService(repository, {
+        cursorSecret: 'testing-cursor-secret-123456',
+        placementPolicy: testTestingPlacementPolicy(),
+        placementInputVerifier: testTestingPlacementInputVerifier(),
+        externalSchemaAuthority: testTestingExternalSchemaAuthority(),
+        executionDependencyReadiness: { ...ready, [dependency]: false }
+      });
+      expect((await service.getCapabilities('user-1')).admission_availability).toEqual({
+        status: 'unavailable',
+        reason_code: expectedCode
+      });
+      const runId = `run-missing-${dependency}`;
+      await expect(submitTestingRun(service, runId, 'user-1', request(`missing-${dependency}`)))
+        .rejects.toMatchObject({ code: expectedCode, status: 503 });
+      expect(await repository.getTestingRun(runId)).toBeUndefined();
+    }
+  });
+
+  it('reports and enforces one dependency priority before invoking placement', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    let verifierCalls = 0;
+    let policyCalls = 0;
+    const inputVerifier = testTestingPlacementInputVerifier();
+    const policy = testTestingPlacementPolicy();
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementInputVerifier: {
+        verify: async (input) => {
+          verifierCalls += 1;
+          return inputVerifier.verify(input);
+        }
+      },
+      placementPolicy: {
+        select: async (input) => {
+          policyCalls += 1;
+          return policy.select(input);
+        }
+      },
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
+    });
+
+    expect((await service.getCapabilities('user-1')).admission_availability).toEqual({
+      status: 'unavailable',
+      reason_code: 'testing_claim_signing_key_unavailable'
+    });
+    await expect(submitTestingRun(service, 'run-dependency-priority', 'user-1', request('dependency-priority')))
+      .rejects.toMatchObject({ code: 'testing_claim_signing_key_unavailable', status: 503 });
+    expect(verifierCalls).toBe(0);
+    expect(policyCalls).toBe(0);
+    expect(await repository.getTestingRun('run-dependency-priority')).toBeUndefined();
   });
 
   it('reports bounded Runner package projection truncation instead of silently omitting identities', async () => {
@@ -430,7 +513,9 @@ describe('TestingRunService', () => {
     const service = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       placementPolicy,
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
 
     const winner = submitTestingRun(service, 'run-policy-race', 'user-1', request('policy-race-key'));
@@ -448,7 +533,9 @@ describe('TestingRunService', () => {
     const service = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       placementPolicy: testTestingPlacementPolicy(),
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
 
     await expect(submitTestingRun(service, 'run-no-capability', 'user-1', request('no-capability-key')))
@@ -467,7 +554,9 @@ describe('TestingRunService', () => {
     const service = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       placementPolicy,
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
 
     await expect(submitTestingRun(service, 'run-denied', 'user-denied', request('denied-key')))
@@ -483,10 +572,55 @@ describe('TestingRunService', () => {
 
     const unavailable = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
     await expect(submitTestingRun(unavailable, 'run-unavailable', 'user-1', request('unavailable-key')))
       .rejects.toMatchObject({ code: 'testing_placement_policy_unavailable', status: 503 });
+  });
+
+  it('fails new admission closed when owning schema manifests are unavailable but preserves replay', async () => {
+    const repository = new MemoryRepository();
+    await provisionTestingPool(repository);
+    const unpublished = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness()
+    });
+    await expect(submitTestingRun(
+      unpublished,
+      'run-schema-unpublished',
+      'user-1',
+      request('schema-unpublished-key')
+    )).rejects.toMatchObject({ code: 'external_schema_authority_unavailable', status: 503 });
+    expect(await repository.getTestingRun('run-schema-unpublished')).toBeUndefined();
+
+    const delegate = testTestingExternalSchemaAuthority();
+    let available = true;
+    const service = new TestingRunService(repository, {
+      cursorSecret: 'testing-cursor-secret-123456',
+      placementPolicy: testTestingPlacementPolicy(),
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: {
+        getCapabilities: async () => {
+          if (!available) throw new Error('upstream unavailable');
+          return delegate.getCapabilities();
+        },
+        verifyTerminalReference: delegate.verifyTerminalReference.bind(delegate)
+      }
+    });
+
+    await expect(submitTestingRun(service, 'run-schema-ready', 'user-1', request('schema-ready-key')))
+      .resolves.toMatchObject({ created: true });
+    available = false;
+    await expect(submitTestingRun(service, 'run-schema-ready', 'user-1', request('schema-ready-key')))
+      .resolves.toMatchObject({ created: false, acceptance: { replayed: true } });
+    await expect(submitTestingRun(service, 'run-schema-unavailable', 'user-1', request('schema-unavailable-key')))
+      .rejects.toMatchObject({ code: 'external_schema_authority_unavailable', status: 503 });
+    expect(await repository.getTestingRun('run-schema-unavailable')).toBeUndefined();
   });
 
   it('returns stable snapshots and replay-stable opaque event pages across later state changes', async () => {

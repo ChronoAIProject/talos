@@ -70,14 +70,20 @@ export const createControlPlane = (
     onWebhook: (event, signed, callback) => dispatcher.dispatch(event, callback, signed),
     logger
   });
+  const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
   const testingRuns = new TestingRunService(repository, {
     cursorSecret: webhookSecret,
     clock: Date.now,
     placementPolicy: options.testingPlacementPolicy,
     placementInputVerifier: options.testingPlacementInputVerifier,
-    externalSchemaAuthority: options.testingExternalSchemaAuthority
+    externalSchemaAuthority: options.testingExternalSchemaAuthority,
+    executionDependencyReadiness: {
+      persistentClaimSigningKey: testingClaimSigningKey !== undefined,
+      authorizationProvider: options.testingAuthorizationProvider !== undefined,
+      runtimeFactVerifier: options.testingRuntimeFactVerifier !== undefined,
+      cleanupReceiptVerifier: options.testingCleanupReceiptVerifier !== undefined
+    }
   });
-  const testingClaimSigningKey = options.testingClaimSigningKey ?? process.env.TALOS_TESTING_CLAIM_PRIVATE_KEY;
   if (testingClaimSigningKey === undefined) {
     logger.warn('testing claim signing key is not configured; using a development-only ephemeral Ed25519 key');
   }

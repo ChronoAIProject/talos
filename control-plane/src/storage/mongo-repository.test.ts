@@ -11,6 +11,8 @@ import {
   testTestingPlacementInputVerifier,
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 
 type FakeDocument = { _id: string; [key: string]: unknown };
 
@@ -160,7 +162,9 @@ const makeTestingRun = async (): Promise<TestingRunRecord> => {
     cursorSecret: 'mongo-double-cursor-secret-1234',
     clock: () => Date.parse('2026-08-22T00:00:00.000Z'),
     placementPolicy: testTestingPlacementPolicy(),
-    placementInputVerifier: testTestingPlacementInputVerifier()
+    placementInputVerifier: testTestingPlacementInputVerifier(),
+    executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+    externalSchemaAuthority: testTestingExternalSchemaAuthority()
   });
   await submitTestingRun(service, 'run-mongo', 'user-1', {
     schema_version: 'talos.testing-tool-request/v1',

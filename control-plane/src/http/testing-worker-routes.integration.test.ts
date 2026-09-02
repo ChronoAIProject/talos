@@ -15,6 +15,7 @@ import {
 } from '../test-support/testing-placement.js';
 import { testResolvedIdentity } from '../test-support/testing-transport.js';
 import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -122,6 +123,7 @@ describe('Testing worker HTTP routes', () => {
       clock: () => now,
       placementPolicy: testTestingPlacementPolicy(),
       placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
       externalSchemaAuthority
     });
     const attempts = new TestingAttemptService(repository, {

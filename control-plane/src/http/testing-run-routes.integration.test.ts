@@ -17,6 +17,8 @@ import {
   testTestingPlacementInputVerifier,
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 import {
   testAuthenticatedTransportContext,
   testResolvedIdentity
@@ -67,7 +69,9 @@ describe('Testing Tool HTTP routes', () => {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now,
       placementPolicy: testTestingPlacementPolicy(),
-      placementInputVerifier: testTestingPlacementInputVerifier()
+      placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+      externalSchemaAuthority: testTestingExternalSchemaAuthority()
     });
     const identities = new Map<string, ResolvedIdentity>([
       ['user:user-1', { userId: 'user-1', groups: [], permissions: [] }],
@@ -114,7 +118,7 @@ describe('Testing Tool HTTP routes', () => {
         runner_packages_total_count: 1,
         runner_packages_truncated: false,
         external_schema_capabilities: expect.arrayContaining([
-          expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'unavailable' })
+          expect.objectContaining({ contract: 'action', owner: 'testing-packages', status: 'available' })
         ]),
         error_contract: { catalog_version: 'talos.testing-error-catalog/v1' }
       });
