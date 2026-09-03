@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 **/dist/
+**/dist-runtime/
 worker/release/
 **/*.tsbuildinfo
 .DS_Store

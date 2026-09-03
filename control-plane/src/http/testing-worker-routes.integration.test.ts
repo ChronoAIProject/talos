@@ -15,6 +15,7 @@ import {
 } from '../test-support/testing-placement.js';
 import { testResolvedIdentity } from '../test-support/testing-transport.js';
 import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -116,12 +117,21 @@ describe('Testing worker HTTP routes', () => {
       new ProfileLockService(repository),
       new WebhookSigner('webhook-secret-1234')
     );
-    const externalSchemaAuthority = testTestingExternalSchemaAuthority();
+    const externalSchemaDelegate = testTestingExternalSchemaAuthority();
+    let externalSchemaAvailable = true;
+    const externalSchemaAuthority = {
+      getCapabilities: async () => {
+        if (!externalSchemaAvailable) throw new Error('schema authority unavailable');
+        return externalSchemaDelegate.getCapabilities();
+      },
+      verifyTerminalReference: externalSchemaDelegate.verifyTerminalReference.bind(externalSchemaDelegate)
+    };
     const runs = new TestingRunService(repository, {
       cursorSecret: 'testing-cursor-secret-123456',
       clock: () => now,
       placementPolicy: testTestingPlacementPolicy(),
       placementInputVerifier: testTestingPlacementInputVerifier(),
+      executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
       externalSchemaAuthority
     });
     const attempts = new TestingAttemptService(repository, {
@@ -314,43 +324,52 @@ describe('Testing worker HTTP routes', () => {
         generation: claimed.task.generation,
         fence_token: claimed.task.fence_token
       };
-      const result = await fetch(`${base}/v1/worker/testing/runs/run-http/result`, {
-        method: 'POST',
-        headers: workerHeaders,
-        body: JSON.stringify({
-          ...binding,
-          control_status: 'completed',
-          execution_outcome: 'passed',
-          evidence_outcome: 'complete',
-          upload_outcome: 'uploaded',
-          cleanup_outcome: 'complete',
-          summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false },
-          results: {
-            schema_version: 'talos.testing-terminal-refs/v1',
-            binding: terminalBinding,
-            case_result_set: {
-              schema: 'testing-case-result-set.v2',
-              schema_digest: digest,
-              ref: 'artifact://testing/results/run-http',
-              digest,
-              binding: terminalBinding
-            },
-            evidence_manifest: {
-              schema: 'testing-evidence-manifest.v1',
-              schema_digest: digest,
-              ref: 'artifact://testing/evidence/run-http',
-              digest,
-              binding: terminalBinding
-            },
-            cleanup_receipt: {
-              schema: 'qa.local-cleanup-receipt/v2',
-              schema_digest: digest,
-              ref: 'artifact://testing/cleanup/run-http',
-              digest,
-              binding: terminalBinding
-            }
+      const terminalRequest = {
+        ...binding,
+        control_status: 'completed',
+        execution_outcome: 'passed',
+        evidence_outcome: 'complete',
+        upload_outcome: 'uploaded',
+        cleanup_outcome: 'complete',
+        summary: { total: 1, passed: 1, failed: 0, blocked: 0, error: 0, skipped: 0, all_skipped: false },
+        results: {
+          schema_version: 'talos.testing-terminal-refs/v1',
+          binding: terminalBinding,
+          case_result_set: {
+            schema: 'testing-case-result-set.v2',
+            schema_digest: digest,
+            ref: 'artifact://testing/results/run-http',
+            digest,
+            binding: terminalBinding
+          },
+          evidence_manifest: {
+            schema: 'testing-evidence-manifest.v1',
+            schema_digest: digest,
+            ref: 'artifact://testing/evidence/run-http',
+            digest,
+            binding: terminalBinding
+          },
+          cleanup_receipt: {
+            schema: 'qa.local-cleanup-receipt/v2',
+            schema_digest: digest,
+            ref: 'artifact://testing/cleanup/run-http',
+            digest,
+            binding: terminalBinding
           }
-        })
+        }
+      };
+      externalSchemaAvailable = false;
+      const unavailableResult = await fetch(`${base}/v1/worker/testing/runs/run-http/result`, {
+        method: 'POST', headers: workerHeaders, body: JSON.stringify(terminalRequest)
+      });
+      expect(unavailableResult.status).toBe(503);
+      expect(await unavailableResult.json()).toMatchObject({
+        error: { code: 'external_schema_authority_unavailable', retryable: true }
+      });
+      expect(await runs.get('run-http', 'user-1')).toMatchObject({ control_status: 'running', terminal: false });
+      externalSchemaAvailable = true;
+      const result = await fetch(`${base}/v1/worker/testing/runs/run-http/result`, {
+        method: 'POST', headers: workerHeaders, body: JSON.stringify(terminalRequest)
       });
       expect(result.status).toBe(200);
       expect(await result.json()).toMatchObject({
@@ -409,10 +428,7 @@ describe('Testing worker HTTP routes', () => {
         generation: reconcileClaim.task.generation,
         fence_token: reconcileClaim.task.fence_token
       };
-      const reconcile = await fetch(`${base}/v1/worker/testing/runs/run-reconcile/reconcile`, {
-        method: 'POST',
-        headers: restartedWorkerHeaders,
-        body: JSON.stringify({
+      const reconcileRequest = {
           ...reconcileBinding,
           control_status: 'failed',
           execution_outcome: 'lost_or_inconclusive',
@@ -431,7 +447,21 @@ describe('Testing worker HTTP routes', () => {
             }
           },
           safe_error: { code: 'runtime_lost', message: 'runtime state was reconciled', retryable: false }
-        })
+      };
+      externalSchemaAvailable = false;
+      const unavailableReconcile = await fetch(`${base}/v1/worker/testing/runs/run-reconcile/reconcile`, {
+        method: 'POST', headers: restartedWorkerHeaders, body: JSON.stringify(reconcileRequest)
+      });
+      expect(unavailableReconcile.status).toBe(503);
+      expect(await unavailableReconcile.json()).toMatchObject({
+        error: { code: 'external_schema_authority_unavailable', retryable: true }
+      });
+      expect(await runs.get('run-reconcile', 'user-1')).toMatchObject({
+        control_status: 'reconcile_required', terminal: false
+      });
+      externalSchemaAvailable = true;
+      const reconcile = await fetch(`${base}/v1/worker/testing/runs/run-reconcile/reconcile`, {
+        method: 'POST', headers: restartedWorkerHeaders, body: JSON.stringify(reconcileRequest)
       });
       expect(reconcile.status).toBe(200);
       expect(await reconcile.json()).toMatchObject({ run_id: 'run-reconcile', control_status: 'failed' });

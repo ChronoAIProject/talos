@@ -26,6 +26,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run build:control-plane-runtime
+      - run: npm run build:worker-runtime
+      - run: npm run verify:runtime-distributions
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run bundle:worker
@@ -60,10 +63,24 @@ jobs:
         run: >-
           docker run --rm --entrypoint node talos-control-plane:ci
           -e "Promise.all([import('@talos/testing-protocol'), import('./dist/domain/schemas.js')])"
+      - name: Verify complete control-plane image runtime surface
+        run: |
+          container_id=$(docker create talos-control-plane:ci)
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+          mkdir -p /tmp/talos-control-plane-app
+          docker cp "$container_id:/app/." /tmp/talos-control-plane-app
+          node scripts/verify-runtime-image.mjs control-plane /tmp/talos-control-plane-app
       - name: Verify worker runtime imports
         run: >-
           docker run --rm --entrypoint node talos-worker:ci
           -e "Promise.all([import('@talos/testing-protocol'), import('./dist/testing/testing-executor.js')])"
+      - name: Verify complete worker image runtime surface
+        run: |
+          container_id=$(docker create talos-worker:ci)
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+          mkdir -p /tmp/talos-worker-app
+          docker cp "$container_id:/app/." /tmp/talos-worker-app
+          node scripts/verify-runtime-image.mjs worker /tmp/talos-worker-app
       - name: Start control plane
         run: >-
           docker run --detach --name talos-control-plane-ci

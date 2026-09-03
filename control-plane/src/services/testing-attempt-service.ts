@@ -608,20 +608,25 @@ export class TestingAttemptService {
       ) {
         throw new TalosError('stale_no_local_acceptance_fact', 'no-local-acceptance fact is bound to another attempt', 409);
       }
-      const verification = await verifier.verifyTerminalNoLocalAcceptance(fact, {
-        runId: run.id,
-        taskId: run.task.id,
-        attemptId: attempt.id,
-        machineId: attempt.machineId,
-        generation: attempt.generation,
-        fenceToken: attempt.fenceToken,
-        admissionNonce: attempt.admissionNonce,
-        startClaimDigest: fact.start_claim_digest,
-        reconcileClaimId: attempt.claimId,
-        reconcileLeaseId: attempt.leaseId,
-        reconcileClaimDigest,
-        reconcileIssuedAt: attempt.issuedAt
-      });
+      let verification: TestingNoLocalAcceptanceVerification | undefined;
+      try {
+        verification = await verifier.verifyTerminalNoLocalAcceptance(fact, {
+          runId: run.id,
+          taskId: run.task.id,
+          attemptId: attempt.id,
+          machineId: attempt.machineId,
+          generation: attempt.generation,
+          fenceToken: attempt.fenceToken,
+          admissionNonce: attempt.admissionNonce,
+          startClaimDigest: fact.start_claim_digest,
+          reconcileClaimId: attempt.claimId,
+          reconcileLeaseId: attempt.leaseId,
+          reconcileClaimDigest,
+          reconcileIssuedAt: attempt.issuedAt
+        });
+      } catch {
+        throw new TalosError('testing_fact_verifier_unavailable', 'testing Runtime fact verifier is unavailable', 503);
+      }
       if (
         verification === undefined ||
         verification.schemaVersion !== 'talos.testing-no-local-acceptance-verification/v1' ||

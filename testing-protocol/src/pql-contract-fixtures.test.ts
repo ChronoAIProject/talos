@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import * as productionProtocol from './index.js';
 import {
   testingContractFixtureJson,
   testingContractFixtures,
@@ -16,6 +17,13 @@ import {
 const fixturePath = new URL('../../specs/testing-contract-fixtures.json', import.meta.url);
 
 describe('PQL contract fixtures', () => {
+  it('keeps fixture generation outside the production package entrypoint', () => {
+    expect('testingContractFixtureBundleSchema' in productionProtocol).toBe(false);
+    expect('testingContractFixtures' in productionProtocol).toBe(false);
+    expect('testingContractFixtureJson' in productionProtocol).toBe(false);
+    expect('validateTestingContractFixtureJson' in productionProtocol).toBe(false);
+  });
+
   it('keeps the committed cross-language JSON artifact generated and schema-valid', () => {
     const source = readFileSync(fixturePath, 'utf8');
     expect(source).toBe(testingContractFixtureJson);

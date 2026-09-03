@@ -1,6 +1,6 @@
 # Talos Testing Tool Contracts
 
-Status: PQL consumer contract candidate for PR #10.
+Status: Contract demo merged to `qa-tools` in PR #10; production providers remain blocked by Issue #12.
 
 ## Public Operations
 
@@ -66,10 +66,11 @@ As of 2026-08-28, the local Testing Packages owning repo does not publish a cros
 Action/Observation/Assertion/CaseResultSet schema manifest with exact IDs, versions, and digests,
 and the Local QA Runtime owning repo does not publish an equivalent EvidenceManifest/CleanupReceipt
 manifest. `get_capabilities` therefore reports those `upstream_manifest` entries as `unavailable`
-with `upstream_schema_manifest_unpublished`. The same injected authority boundary is used by
-terminal admission: while an owning manifest is unavailable, Talos rejects terminal refs with
-`external_schema_authority_unavailable` and cannot publish a positive canonical terminal Snapshot
-that depends on them. A manifest identity mismatch is rejected with
+with `upstream_schema_manifest_unpublished`, and aggregate `admission_availability` is unavailable
+with `external_schema_authority_unavailable`. New submit admission fails closed with the same stable
+error, before a QARun is created. An already admitted run remains idempotently replayable, but its
+terminal refs are independently rechecked through the same injected authority boundary before any
+canonical terminal Snapshot can be persisted. A manifest identity mismatch is rejected with
 `invalid_external_schema_reference`. Talos must not synthesize identities. Once owners publish
 manifests, their adapter can expose and verify exact schema ID/version/digest tuples through this
 boundary without copying an authoritative Schema into Talos.
@@ -85,7 +86,9 @@ upstream manifest digest.
 - the five formal operation names;
 - `observed_at` and a 30-second `valid_until`;
 - execution/runtime/task/result adapter contract identifiers;
-- a separate admission readiness fact for placement verifier/policy configuration;
+- an aggregate admission readiness fact for placement verifier/policy configuration, a persistent
+  claim-signing key, Authorization/Runtime-fact/Cleanup provider ports, and all owning-repo external
+  schema manifests;
 - one bounded backend availability aggregate without pool or machine IDs;
 - exact Runner `package_id + version + digest` tuples observed on visible configured machines;
 - visible pool/configured machine/online machine/available slot counts;
@@ -97,9 +100,12 @@ Availability is advisory and identity-scoped. Available capacity subtracts both 
 leases and every durable Testing reservation record, including expired records that have not yet
 been state-aware swept or explicitly released. `residual_blocking` reservations remain occupied
 until their explicit release proof is persisted. Hardware/package availability is separate from
-`admission_availability`, so an unconfigured placement verifier or policy cannot look end-to-end
-ready. Capability observation does not reserve capacity and cannot replace submit-time input
-verification, placement policy, reservation, or worker/Runtime admission.
+`admission_availability`, so a missing local execution dependency or unavailable owning-schema
+manifest cannot look end-to-end ready. New submit checks the same aggregate before placement and
+QARun persistence. Existing identical idempotent admissions remain replayable during later provider
+degradation. Capability observation does not reserve capacity and cannot replace
+submit-time input verification, placement policy, provider and schema-authority revalidation,
+reservation, or worker/Runtime admission.
 
 ## Orthogonal Outcomes
 
@@ -157,7 +163,9 @@ not reflect an unbounded Zod issue list or caller-controlled paths in public err
 | Unsupported or policy-denied capability | `testing_placement_denied` | No |
 | No currently eligible configured machine/package | `testing_placement_unavailable` | Yes |
 | Placement policy/verifier unavailable | `testing_placement_policy_unavailable`, `testing_placement_verifier_unavailable` | Yes |
+| Persistent Testing claim key unavailable | `testing_claim_signing_key_unavailable` | Yes |
 | Authorization service unavailable | `testing_authorization_unavailable` | Yes |
+| Runtime fact verifier unavailable | `testing_fact_verifier_unavailable` | Yes |
 | Authorization denied/expired/binding mismatch | `nyxid_authorization_mismatch`, `nyxid_authorization_expired`, `nyxid_*_mismatch` | No |
 | Wrong machine/worker/attempt | `stale_testing_machine`, `stale_testing_worker`, `stale_testing_attempt` | No |
 | Lease/generation/fence invalid | `invalid_testing_lease`, `testing_lease_expired`, `stale_testing_generation`, `stale_testing_fence` | No |

@@ -100,6 +100,14 @@ export interface TestingRunServiceOptions {
   readonly placementPolicy?: TestingPlacementPolicy;
   readonly placementInputVerifier?: TestingPlacementInputVerifier;
   readonly externalSchemaAuthority?: TestingExternalSchemaAuthority;
+  readonly executionDependencyReadiness?: TestingExecutionDependencyReadiness;
+}
+
+export interface TestingExecutionDependencyReadiness {
+  readonly persistentClaimSigningKey: boolean;
+  readonly authorizationProvider: boolean;
+  readonly runtimeFactVerifier: boolean;
+  readonly cleanupReceiptVerifier: boolean;
 }
 
 export class TestingRunService {
@@ -171,11 +179,7 @@ export class TestingRunService {
       scope: 'resolved_identity_visible_pools',
       ...capabilityBase,
       external_schema_capabilities: externalSchemaCapabilities,
-      admission_availability: this.options.placementInputVerifier === undefined
-        ? { status: 'unavailable', reason_code: 'testing_placement_verifier_unavailable' }
-        : this.options.placementPolicy === undefined
-          ? { status: 'unavailable', reason_code: 'testing_placement_policy_unavailable' }
-          : { status: 'available', reason_code: null },
+      admission_availability: this.admissionAvailability(externalSchemaCapabilities),
       backend_availability: {
         backend: 'browser',
         browser: 'chromium',
@@ -249,6 +253,8 @@ export class TestingRunService {
     const now = new Date(this.clock()).toISOString();
     let placement: TestingRunRecord['placement'];
     try {
+      this.assertExecutionDependenciesReady();
+      await this.assertExternalSchemaAdmissionReady();
       placement = await this.selectPlacement(userId, requesterGroups, request, now);
     } catch (error) {
       const racedReplay = await this.resolveExistingSubmit(
@@ -560,6 +566,70 @@ export class TestingRunService {
       throw new TalosError('testing_placement_unavailable', 'testing canary pool does not advertise the approved capability contract', 503);
     }
     return { ...decision, selectedAt };
+  }
+
+  private admissionAvailability(
+    externalSchemaCapabilities: readonly TestingCapabilities['external_schema_capabilities'][number][]
+  ): TestingCapabilities['admission_availability'] {
+    const executionDependency = this.unavailableExecutionDependency();
+    if (executionDependency !== undefined) {
+      return { status: 'unavailable', reason_code: executionDependency.code };
+    }
+    if (externalSchemaCapabilities.some((capability) => capability.status !== 'available')) {
+      return { status: 'unavailable', reason_code: 'external_schema_authority_unavailable' };
+    }
+    if (this.options.placementInputVerifier === undefined) {
+      return { status: 'unavailable', reason_code: 'testing_placement_verifier_unavailable' };
+    }
+    if (this.options.placementPolicy === undefined) {
+      return { status: 'unavailable', reason_code: 'testing_placement_policy_unavailable' };
+    }
+    return { status: 'available', reason_code: null };
+  }
+
+  private assertExecutionDependenciesReady(): void {
+    const unavailable = this.unavailableExecutionDependency();
+    if (unavailable !== undefined) throw new TalosError(unavailable.code, unavailable.message, 503);
+  }
+
+  private unavailableExecutionDependency(): { code: string; message: string } | undefined {
+    const readiness = this.options.executionDependencyReadiness;
+    if (readiness?.persistentClaimSigningKey !== true) {
+      return {
+        code: 'testing_claim_signing_key_unavailable',
+        message: 'persistent testing claim signing key is unavailable'
+      };
+    }
+    if (readiness.authorizationProvider !== true) {
+      return {
+        code: 'testing_authorization_unavailable',
+        message: 'testing authorization provider is unavailable'
+      };
+    }
+    if (readiness.runtimeFactVerifier !== true) {
+      return {
+        code: 'testing_fact_verifier_unavailable',
+        message: 'testing Runtime fact verifier is unavailable'
+      };
+    }
+    if (readiness.cleanupReceiptVerifier !== true) {
+      return {
+        code: 'cleanup_verifier_unavailable',
+        message: 'cleanup receipt verifier is unavailable'
+      };
+    }
+    return undefined;
+  }
+
+  private async assertExternalSchemaAdmissionReady(): Promise<void> {
+    const capabilities = await resolveTestingExternalSchemaCapabilities(this.options.externalSchemaAuthority);
+    if (capabilities.some((capability) => capability.status !== 'available')) {
+      throw new TalosError(
+        'external_schema_authority_unavailable',
+        'upstream schema authority is unavailable for testing admission',
+        503
+      );
+    }
   }
 
   private assertAuthenticatedTransport(

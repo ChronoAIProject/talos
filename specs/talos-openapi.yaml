@@ -410,6 +410,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/worker/testing/runs/{run_id}/reconcile:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:
@@ -423,6 +424,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/worker/testing/runs/{run_id}/not-accepted:
     parameters: [{ $ref: '#/components/parameters/TestingRunId' }]
     post:
@@ -898,7 +900,9 @@ components:
         result_contracts: { type: array, minItems: 3, maxItems: 3, description: Talos adapter slot identities; external Schema authority remains with Testing Packages and Local QA Runtime and requires the upstream manifest projection below., prefixItems: [{ const: testing-case-result-set.v2 }, { const: testing-evidence-manifest.v1 }, { const: qa.local-cleanup-receipt/v2 }] }
         backends: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: browser }] }
         browsers: { type: array, minItems: 1, maxItems: 1, prefixItems: [{ const: chromium }] }
-        admission_availability: { $ref: '#/components/schemas/TestingAdmissionAvailability' }
+        admission_availability:
+          allOf: [{ $ref: '#/components/schemas/TestingAdmissionAvailability' }]
+          description: Aggregate submit readiness for placement, a persistent claim-signing key, Authorization, Runtime-fact and Cleanup verifier ports, and all owning-repo external schema manifests. Existing idempotent admissions remain replayable during later authority degradation.
         backend_availability: { $ref: '#/components/schemas/TestingBackendAvailability' }
         runner_packages: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/TestingRunnerPackageCapability' } }
         runner_packages_total_count: { type: integer, minimum: 0, maximum: 1000000 }

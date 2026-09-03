@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "build:runtime": "tsc -p tsconfig.runtime.json"
   },
   "dependencies": {
     "@talos/testing-protocol": "0.1.0",

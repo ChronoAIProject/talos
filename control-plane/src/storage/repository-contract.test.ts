@@ -13,6 +13,8 @@ import {
   testTestingPlacementInputVerifier,
   testTestingPlacementPolicy
 } from '../test-support/testing-placement.js';
+import { testTestingExternalSchemaAuthority } from '../test-support/testing-schema-authority.js';
+import { testTestingExecutionDependencyReadiness } from '../test-support/testing-execution-readiness.js';
 
 interface Harness {
   repository: Repository;
@@ -196,7 +198,9 @@ const testingRunContractTest = (makeHarness: () => Promise<Harness>): void => {
         cursorSecret: 'repository-contract-secret-1234',
         clock: () => observedNow,
         placementPolicy: testTestingPlacementPolicy('pool-1'),
-        placementInputVerifier: testTestingPlacementInputVerifier()
+        placementInputVerifier: testTestingPlacementInputVerifier(),
+        executionDependencyReadiness: testTestingExecutionDependencyReadiness(),
+        externalSchemaAuthority: testTestingExternalSchemaAuthority()
       });
       const policy = {
         network_scope: 'environment_owned_loopback_exact_origins' as const,
