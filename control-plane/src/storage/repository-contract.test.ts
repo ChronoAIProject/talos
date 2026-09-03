@@ -21,6 +21,12 @@ interface Harness {
   close: () => Promise<void>;
 }
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolver) => { resolve = resolver; });
+  return { promise, resolve };
+};
+
 const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
 const MONGODB_CONNECT_TIMEOUT_MS = 5_000;
 const MONGODB_CONTRACT_TEST_TIMEOUT_MS = 30_000;
@@ -160,16 +166,117 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         result: { value: 'ok' },
         completedAt: '2025-01-01T00:00:01.000Z'
       };
-      expect(await repository.finalizeSessionAction(completed)).toBe(true);
+      expect(await repository.finalizeSessionAction(completed, ['dispatched'])).toBe(true);
       expect(await repository.getSessionActionResult(action.id)).toMatchObject({ taskId: action.taskId, result: { value: 'ok' } });
       expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
-      expect(await repository.finalizeSessionAction(completed)).toBe(false);
+      expect(await repository.finalizeSessionAction(completed, ['dispatched'])).toBe(false);
       expect(await repository.getSessionActionResult(action.id)).toEqual(completed);
       const pending = { ...action, id: 'action-cancel', state: 'pending' as const };
       expect(await repository.enqueueSessionAction(pending)).toBe(true);
       expect(await repository.getPendingSessionAction(action.taskId)).toMatchObject({ id: pending.id });
-      expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(true);
-      expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(false);
+      const cancelled = {
+        actionId: pending.id,
+        taskId: pending.taskId,
+        result: { error: { code: 'session_closed' } },
+        completedAt: '2025-01-01T00:00:02.000Z'
+      };
+      expect(await repository.finalizeSessionAction(cancelled, ['pending'])).toBe(true);
+      expect(await repository.finalizeSessionAction(cancelled, ['pending'])).toBe(false);
+      expect(await repository.getSessionActionResult(pending.id)).toEqual(cancelled);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('preserves a worker result when worker terminalization wins the teardown race', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const action = {
+        id: 'action-worker-wins',
+        taskId: 'task-worker-wins',
+        action: { type: 'navigate' as const, url: 'https://example.com' },
+        state: 'pending' as const,
+        createdAt: '2025-01-01T00:00:00.000Z'
+      };
+      expect(await repository.enqueueSessionAction(action)).toBe(true);
+      let browserExecutions = 0;
+      if (await repository.takePendingSessionAction(action.taskId) !== undefined) browserExecutions += 1;
+      const workerResult = {
+        actionId: action.id,
+        taskId: action.taskId,
+        result: { value: 'worker-result' },
+        completedAt: '2025-01-01T00:00:01.000Z'
+      };
+      const teardownResult = {
+        actionId: action.id,
+        taskId: action.taskId,
+        result: { error: { code: 'session_closed' } },
+        completedAt: '2025-01-01T00:00:02.000Z'
+      };
+      const teardownBarrier = deferred();
+      const teardown = (async () => {
+        await teardownBarrier.promise;
+        return repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched']);
+      })();
+
+      expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(true);
+      teardownBarrier.resolve();
+      expect(await teardown).toBe(false);
+      expect(await repository.getSessionActionResult(action.id)).toEqual(workerResult);
+      expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
+      expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
+      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      expect(browserExecutions).toBe(1);
+      expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-next' })).toBe(true);
+      expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-extra' })).toBe(false);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('preserves teardown cancellation when teardown terminalization wins the worker race', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const action = {
+        id: 'action-teardown-wins',
+        taskId: 'task-teardown-wins',
+        action: { type: 'navigate' as const, url: 'https://example.com' },
+        state: 'pending' as const,
+        createdAt: '2025-01-01T00:00:00.000Z'
+      };
+      expect(await repository.enqueueSessionAction(action)).toBe(true);
+      let browserExecutions = 0;
+      if (await repository.takePendingSessionAction(action.taskId) !== undefined) browserExecutions += 1;
+      const workerResult = {
+        actionId: action.id,
+        taskId: action.taskId,
+        result: { value: 'worker-result' },
+        completedAt: '2025-01-01T00:00:02.000Z'
+      };
+      const teardownResult = {
+        actionId: action.id,
+        taskId: action.taskId,
+        result: { error: { code: 'session_closed' } },
+        completedAt: '2025-01-01T00:00:01.000Z'
+      };
+      const workerBarrier = deferred();
+      const worker = (async () => {
+        await workerBarrier.promise;
+        return repository.finalizeSessionAction(workerResult, ['dispatched']);
+      })();
+
+      expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(true);
+      workerBarrier.resolve();
+      expect(await worker).toBe(false);
+      expect(await repository.getSessionActionResult(action.id)).toEqual(teardownResult);
+      expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
+      expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
+      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      expect(browserExecutions).toBe(1);
+      expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-next' })).toBe(true);
+      expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-extra' })).toBe(false);
     } finally {
       await close();
     }

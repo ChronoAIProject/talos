@@ -43,10 +43,10 @@ export interface Repository {
   getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
   takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
   requeueSessionAction(taskId: string): Promise<void>;
-  cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean>;
-  completeSessionAction(taskId: string, actionId: string): Promise<void>;
-  finalizeSessionAction(result: SessionActionResult): Promise<boolean>;
-  saveSessionActionResult(result: SessionActionResult): Promise<void>;
+  finalizeSessionAction(
+    result: SessionActionResult,
+    expectedStates: readonly PendingSessionAction['state'][]
+  ): Promise<boolean>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
   markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void>;
   markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void>;

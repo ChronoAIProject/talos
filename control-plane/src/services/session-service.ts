@@ -89,18 +89,18 @@ export class SessionService {
     await this.sessionTask(id, userId);
     const pending = await this.repository.getPendingSessionAction(id);
     const closed = await this.tasks.closeInteractive(id, userId);
-    const cancelled = pending?.state === 'pending' &&
-      await this.repository.cancelPendingSessionAction(id, pending.id);
-    if (pending !== undefined && cancelled) {
-      await this.repository.saveSessionActionResult({
+    if (pending?.state === 'pending') {
+      const completedAt = new Date(this.clock()).toISOString();
+      const cancelled = await this.repository.finalizeSessionAction({
         actionId: pending.id,
         taskId: id,
         result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
-        completedAt: new Date(this.clock()).toISOString()
-      });
-      const updated = { ...closed, pendingActionId: undefined };
-      await this.repository.saveTask(updated);
-      return this.toView(updated);
+        completedAt
+      }, ['pending']);
+      if (cancelled) {
+        await this.repository.markSessionActionCompleted(id, pending.id, completedAt);
+        return this.toView(await this.sessionTask(id, userId));
+      }
     }
     return this.toView(closed);
   }
@@ -168,7 +168,7 @@ export class SessionService {
     if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
     const completedAt = new Date(this.clock()).toISOString();
     const stored: SessionActionResult = { actionId, taskId, result, completedAt };
-    if (!await this.repository.finalizeSessionAction(stored)) {
+    if (!await this.repository.finalizeSessionAction(stored, ['dispatched'])) {
       const existing = await this.repository.getSessionActionResult(actionId);
       if (existing?.taskId === taskId) throw actionAlreadyCompleted();
       throw conflict('session action is not in flight');

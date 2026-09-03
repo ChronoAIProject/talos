@@ -137,28 +137,15 @@ export class MemoryRepository implements Repository {
     if (action?.state === 'dispatched') this.pendingActions.set(taskId, { ...action, state: 'pending' });
   }
 
-  public async cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean> {
-    const action = this.pendingActions.get(taskId);
-    if (action?.id !== actionId || action.state !== 'pending') return false;
-    this.pendingActions.delete(taskId);
-    return true;
-  }
-
-  public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
-    const action = this.pendingActions.get(taskId);
-    if (action?.id === actionId) this.pendingActions.delete(taskId);
-  }
-
-  public async finalizeSessionAction(result: SessionActionResult): Promise<boolean> {
+  public async finalizeSessionAction(
+    result: SessionActionResult,
+    expectedStates: readonly PendingSessionAction['state'][]
+  ): Promise<boolean> {
     const action = this.pendingActions.get(result.taskId);
-    if (action?.id !== result.actionId || action.state !== 'dispatched') return false;
+    if (action?.id !== result.actionId || !expectedStates.includes(action.state)) return false;
     this.actionResults.set(result.actionId, result);
     this.pendingActions.delete(result.taskId);
     return true;
-  }
-
-  public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
-    this.actionResults.set(result.actionId, result);
   }
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
