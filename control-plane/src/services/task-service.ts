@@ -335,6 +335,40 @@ export class TaskService {
     return task;
   }
 
+  public async getWorkerActionResultTask(
+    taskId: string,
+    actionId: string,
+    workerId: string,
+    machineId: string | undefined,
+    leaseToken: string,
+    hasStoredResult: (taskId: string, actionId: string) => Promise<boolean>
+  ): Promise<Task> {
+    const task = await this.repository.getTask(taskId);
+    if (task === undefined) throw unauthorized('worker does not own action result');
+    if (task.kind === 'testing') throw conflict('testing tasks require the Testing Executor API');
+    if (
+      task.workerId !== workerId ||
+      task.machineId === undefined ||
+      task.leaseToken === undefined
+    ) {
+      throw unauthorized('worker does not own action result');
+    }
+    const expected = Buffer.from(task.leaseToken);
+    const actual = Buffer.from(leaseToken);
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      throw unauthorized('invalid lease token');
+    }
+    if (machineId !== undefined && task.machineId !== machineId) {
+      throw unauthorized('worker does not own action result');
+    }
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+      if (machineId === undefined) throw unauthorized('authenticated machine is required for terminal action result');
+      if (!await hasStoredResult(taskId, actionId)) throw unauthorized('worker does not own action result');
+      return task;
+    }
+    return this.getWorkerTask(taskId, workerId, leaseToken);
+  }
+
   private async releaseLease(task: Task): Promise<void> {
     if (task.machineId !== undefined) {
       const machine = await this.repository.getMachine(task.machineId);

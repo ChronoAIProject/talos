@@ -91,8 +91,9 @@ export const createApiServer = (
     clock: options.clock
   });
   return createServer(async (request, response) => {
+    let path = '/';
     try {
-      const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
+      path = new URL(request.url ?? '/', 'http://talos.local').pathname;
       if (request.method === 'GET' && path === '/openapi.json' && options.openApiDocument !== undefined) {
         return sendSerialized(response, 200, options.openApiDocument.json, 'application/json');
       }
@@ -109,7 +110,10 @@ export const createApiServer = (
       }
       await route(request, response, service, sessions, testingRuns, testingAttempts, repository, identities, options);
     } catch (error) {
-      const talos = error instanceof TalosError ? error : undefined;
+      const caughtTalos = error instanceof TalosError ? error : undefined;
+      const talos = caughtTalos?.status === 401 && isWorkerActionResultPath(request.method, path)
+        ? unauthorized('unauthorized')
+        : caughtTalos;
       const validation = error instanceof z.ZodError
         ? {
             code: 'validation_error',
@@ -139,6 +143,9 @@ export const createApiServer = (
     }
   });
 };
+
+const isWorkerActionResultPath = (method: string | undefined, path: string): boolean =>
+  method === 'POST' && /^\/v1\/worker\/tasks\/[^/]+\/actions\/[^/]+\/result$/.test(path);
 
 const route = async (
   request: IncomingMessage,
@@ -413,6 +420,15 @@ const workerRoute = async (
   const maxBodyBytes = isActionResult ? 8 * 1024 * 1024 : options.maxBodyBytes;
   const body = method === 'POST' ? await readBody(request, maxBodyBytes) : undefined;
   const workerIdentity = await requireWorker(request, repository, body);
+  if (isActionResult) {
+    const bodyCredentials = workerBodyCredentialsSchema.safeParse(body);
+    if (bodyCredentials.success && (
+      (bodyCredentials.data.machine_id !== undefined && bodyCredentials.data.machine_id !== workerIdentity.machineId) ||
+      (bodyCredentials.data.worker_id !== undefined && bodyCredentials.data.worker_id !== workerIdentity.workerId)
+    )) {
+      throw unauthorized('action result credentials do not match authenticated worker');
+    }
+  }
   if (parts[2] === 'testing') {
     return testingWorkerRoute(response, testingAttempts, parts, method, body, workerIdentity);
   }
@@ -448,7 +464,7 @@ const workerRoute = async (
   }
   if (method === 'POST' && parts[4] === 'actions' && parts[5] !== undefined && parts[6] === 'result') {
     const input = workerActionResultSchema.parse(body);
-    await sessions.saveWorkerResult(taskId, parts[5], worker, input.lease_token, input.result);
+    await sessions.saveWorkerResult(taskId, parts[5], worker, input.lease_token, input.result, workerIdentity.machineId);
     return send(response, 200, { stored: true });
   }
   if (method === 'GET' && parts[4] === 'input') {
