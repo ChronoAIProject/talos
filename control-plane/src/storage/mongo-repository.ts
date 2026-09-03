@@ -56,6 +56,10 @@ export class MongoRepository implements Repository {
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
+      this.pendingActions.createIndex(
+        { taskId: 1 },
+        { unique: true, partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } } }
+      ),
       this.actionResults.createIndex({ taskId: 1 }),
       this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true }),
       this.testingMachineReservations.createIndex({ runId: 1, attemptId: 1 }, { unique: true }),
@@ -161,22 +165,23 @@ export class MongoRepository implements Repository {
   }
 
   public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
-    const result = await this.pendingActions.updateOne(
-      { _id: action.taskId },
-      { $setOnInsert: { ...action, _id: action.taskId } },
-      { upsert: true }
-    );
-    return result.upsertedCount === 1;
+    try {
+      await this.pendingActions.insertOne({ ...action, _id: action.id });
+      return true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
   }
 
   public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const document = await this.pendingActions.findOne({ _id: taskId });
+    const document = await this.pendingActions.findOne({ taskId, state: { $in: ['pending', 'dispatched'] } });
     return document === null ? undefined : sessionActionFromDocument(document);
   }
 
   public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
     const document = await this.pendingActions.findOneAndUpdate(
-      { _id: taskId, state: 'pending' },
+      { taskId, state: 'pending' },
       { $set: { state: 'dispatched' } },
       { returnDocument: 'after' }
     );
@@ -185,18 +190,33 @@ export class MongoRepository implements Repository {
 
   public async requeueSessionAction(taskId: string): Promise<void> {
     await this.pendingActions.updateOne(
-      { _id: taskId, state: 'dispatched' },
+      { taskId, state: 'dispatched' },
       { $set: { state: 'pending' } }
     );
   }
 
   public async cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean> {
-    const result = await this.pendingActions.deleteOne({ _id: taskId, id: actionId, state: 'pending' });
+    const result = await this.pendingActions.deleteOne({ taskId, id: actionId, state: 'pending' });
     return result.deletedCount === 1;
   }
 
   public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
-    await this.pendingActions.deleteOne({ _id: taskId, id: actionId });
+    await this.pendingActions.deleteOne({ taskId, id: actionId });
+  }
+
+  public async finalizeSessionAction(result: SessionActionResult): Promise<boolean> {
+    const document = await this.pendingActions.findOneAndUpdate(
+      { taskId: result.taskId, id: result.actionId, state: 'dispatched' },
+      {
+        $set: {
+          state: 'completed',
+          completionResult: result.result,
+          completedAt: result.completedAt
+        }
+      },
+      { returnDocument: 'after' }
+    );
+    return document !== null;
   }
 
   public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
@@ -209,7 +229,20 @@ export class MongoRepository implements Repository {
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
     const document = await this.actionResults.findOne({ _id: actionId });
-    return document === null ? undefined : sessionActionResultFromDocument(document);
+    if (document !== null) return sessionActionResultFromDocument(document);
+    const completed = await this.pendingActions.findOne({ id: actionId, state: 'completed' });
+    return completed === null ? undefined : completedSessionActionResultFromDocument(completed);
+  }
+
+  public async markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void> {
+    await this.tasks.updateOne({ _id: taskId }, { $set: { pendingActionId: actionId, updatedAt } });
+  }
+
+  public async markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void> {
+    await this.tasks.updateOne(
+      { _id: taskId, pendingActionId: actionId },
+      { $unset: { pendingActionId: '' }, $set: { lastActionId: actionId, updatedAt: completedAt } }
+    );
   }
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
@@ -384,6 +417,12 @@ const handoffFromDocument = (document: Document): HandoffLink => withoutId(docum
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
 const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
+const completedSessionActionResultFromDocument = (document: Document): SessionActionResult => ({
+  actionId: document.id as string,
+  taskId: document.taskId as string,
+  result: document.completionResult,
+  completedAt: document.completedAt as string
+});
 const testingRunFromDocument = (document: Document): TestingRunRecord => withoutId(document) as unknown as TestingRunRecord;
 const testingMachineReservationFromDocument = (document: Document): TestingMachineReservationRecord =>
   withoutId(document) as unknown as TestingMachineReservationRecord;

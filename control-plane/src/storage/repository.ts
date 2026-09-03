@@ -45,8 +45,11 @@ export interface Repository {
   requeueSessionAction(taskId: string): Promise<void>;
   cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean>;
   completeSessionAction(taskId: string, actionId: string): Promise<void>;
+  finalizeSessionAction(result: SessionActionResult): Promise<boolean>;
   saveSessionActionResult(result: SessionActionResult): Promise<void>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
+  markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void>;
+  markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void>;
   createTestingRun(run: TestingRunRecord): Promise<boolean>;
   getTestingRun(id: string): Promise<TestingRunRecord | undefined>;
   getTestingRunByIdempotencyKey(userId: string, idempotencyKey: string): Promise<TestingRunRecord | undefined>;

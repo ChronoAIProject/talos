@@ -149,12 +149,31 @@ export class MemoryRepository implements Repository {
     if (action?.id === actionId) this.pendingActions.delete(taskId);
   }
 
+  public async finalizeSessionAction(result: SessionActionResult): Promise<boolean> {
+    const action = this.pendingActions.get(result.taskId);
+    if (action?.id !== result.actionId || action.state !== 'dispatched') return false;
+    this.actionResults.set(result.actionId, result);
+    this.pendingActions.delete(result.taskId);
+    return true;
+  }
+
   public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
     this.actionResults.set(result.actionId, result);
   }
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
     return this.actionResults.get(actionId);
+  }
+
+  public async markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (task !== undefined) this.tasks.set(taskId, { ...task, pendingActionId: actionId, updatedAt });
+  }
+
+  public async markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (task?.pendingActionId !== actionId) return;
+    this.tasks.set(taskId, { ...task, pendingActionId: undefined, lastActionId: actionId, updatedAt: completedAt });
   }
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {

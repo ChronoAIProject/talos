@@ -124,11 +124,7 @@ export class SessionService {
     if (!await this.repository.enqueueSessionAction(pending)) {
       throw conflict('session already has an action in flight');
     }
-    await this.repository.saveTask({
-      ...task,
-      pendingActionId: pending.id,
-      updatedAt: new Date(this.clock()).toISOString()
-    });
+    await this.repository.markSessionActionPending(task.id, pending.id, new Date(this.clock()).toISOString());
     return this.waitForResult(pending.id, task.id, waitSeconds);
   }
 
@@ -170,20 +166,14 @@ export class SessionService {
   ): Promise<void> {
     const task = await this.tasks.getWorkerTask(taskId, workerId, leaseToken);
     if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
-    const existing = await this.repository.getSessionActionResult(actionId);
-    if (existing?.taskId === taskId) throw actionAlreadyCompleted();
-    const pending = await this.repository.getPendingSessionAction(taskId);
-    if (pending?.id !== actionId || pending.state !== 'dispatched') throw conflict('session action is not in flight');
     const completedAt = new Date(this.clock()).toISOString();
     const stored: SessionActionResult = { actionId, taskId, result, completedAt };
-    await this.repository.saveSessionActionResult(stored);
-    await this.repository.completeSessionAction(taskId, actionId);
-    await this.repository.saveTask({
-      ...task,
-      pendingActionId: undefined,
-      lastActionId: actionId,
-      updatedAt: completedAt
-    });
+    if (!await this.repository.finalizeSessionAction(stored)) {
+      const existing = await this.repository.getSessionActionResult(actionId);
+      if (existing?.taskId === taskId) throw actionAlreadyCompleted();
+      throw conflict('session action is not in flight');
+    }
+    await this.repository.markSessionActionCompleted(task.id, actionId, completedAt);
   }
 
   private async waitForResult(actionId: string, taskId: string, waitSeconds: number): Promise<ActionView> {

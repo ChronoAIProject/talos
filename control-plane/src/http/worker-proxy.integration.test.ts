@@ -56,9 +56,13 @@ const readRequestBody = async (request: AsyncIterable<Uint8Array>): Promise<Buff
 
 describe('worker rendezvous through a NyxID-style public proxy', () => {
   const servers: Server[] = [];
+  const runtimeCleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    await Promise.all(servers.splice(0).map(close));
+    const runtimeResults = await Promise.allSettled(runtimeCleanups.splice(0).map((cleanup) => cleanup()));
+    const serverResults = await Promise.allSettled(servers.splice(0).map(close));
+    const failure = [...runtimeResults, ...serverResults].find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   });
 
   it('completes the worker flow when the proxy strips all authentication headers', async () => {
@@ -234,6 +238,24 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
       sessionIdleMs: 10_000
     });
     const running = runtime.runOnce();
+    let runtimeFinished = false;
+    runtimeCleanups.push(async () => {
+      if (runtimeFinished) return;
+      let stopFailure: unknown;
+      try {
+        const response = await fetch(`${base}/v1/sessions/${created.id}/close`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}'
+        });
+        if (!response.ok) stopFailure = new Error(`failed to stop worker runtime: HTTP ${response.status}`);
+      } catch (error) {
+        stopFailure = error;
+      }
+      await running;
+      runtimeFinished = true;
+      if (stopFailure !== undefined) throw stopFailure;
+    });
     const sendAction = async (action: unknown) => {
       const response = await fetch(`${base}/v1/sessions/${created.id}/actions?wait_seconds=5`, {
         method: 'POST',
@@ -261,6 +283,7 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
     });
     expect(closeResponse.status).toBe(200);
     await running;
+    runtimeFinished = true;
     expect(calls).toEqual(['navigate', 'screenshot', 'extract-structured-dom', 'close']);
     expect((await repository.getTask(created.id))?.status).toBe('completed');
   });
