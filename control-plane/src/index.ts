@@ -79,7 +79,9 @@ export const createControlPlane = (
     externalSchemaAuthority: options.testingExternalSchemaAuthority,
     executionDependencyReadiness: {
       persistentClaimSigningKey: testingClaimSigningKey !== undefined,
-      authorizationProvider: options.testingAuthorizationProvider !== undefined,
+      authorizationProvider:
+        typeof options.testingAuthorizationProvider?.issueStartAuthorization === 'function' &&
+        typeof options.testingAuthorizationProvider.issueReconcileAuthorization === 'function',
       runtimeFactVerifier: options.testingRuntimeFactVerifier !== undefined,
       cleanupReceiptVerifier: options.testingCleanupReceiptVerifier !== undefined
     }
