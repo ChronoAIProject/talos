@@ -276,13 +276,12 @@ export class TaskService {
         if (current.status === 'closing') {
           const pending = await this.repository.getPendingSessionAction(current.id);
           if (pending !== undefined) {
-            await this.repository.saveSessionActionResult({
+            await this.repository.finalizeSessionAction({
               actionId: pending.id,
               taskId: current.id,
               result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
               completedAt: new Date(now).toISOString()
-            });
-            await this.repository.completeSessionAction(current.id, pending.id);
+            }, ['pending', 'dispatched']);
           }
           const completed: Task = {
             ...current,

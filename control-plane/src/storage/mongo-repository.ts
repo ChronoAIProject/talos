@@ -195,18 +195,12 @@ export class MongoRepository implements Repository {
     );
   }
 
-  public async cancelPendingSessionAction(taskId: string, actionId: string): Promise<boolean> {
-    const result = await this.pendingActions.deleteOne({ taskId, id: actionId, state: 'pending' });
-    return result.deletedCount === 1;
-  }
-
-  public async completeSessionAction(taskId: string, actionId: string): Promise<void> {
-    await this.pendingActions.deleteOne({ taskId, id: actionId });
-  }
-
-  public async finalizeSessionAction(result: SessionActionResult): Promise<boolean> {
+  public async finalizeSessionAction(
+    result: SessionActionResult,
+    expectedStates: readonly PendingSessionAction['state'][]
+  ): Promise<boolean> {
     const document = await this.pendingActions.findOneAndUpdate(
-      { taskId: result.taskId, id: result.actionId, state: 'dispatched' },
+      { taskId: result.taskId, id: result.actionId, state: { $in: expectedStates } },
       {
         $set: {
           state: 'completed',
@@ -217,14 +211,6 @@ export class MongoRepository implements Repository {
       { returnDocument: 'after' }
     );
     return document !== null;
-  }
-
-  public async saveSessionActionResult(result: SessionActionResult): Promise<void> {
-    await this.actionResults.replaceOne(
-      { _id: result.actionId },
-      { ...result, _id: result.actionId },
-      { upsert: true }
-    );
   }
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
