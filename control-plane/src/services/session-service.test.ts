@@ -160,6 +160,37 @@ describe('session service', () => {
     )).rejects.toMatchObject({ code: 'action_already_completed', status: 409 });
   });
 
+  it('converges a lost worker acknowledgement after session teardown', async () => {
+    const { clock, repository, sessions, tasks } = await setup();
+    const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
+    const claim = await tasks.claim('worker', 'machine');
+    const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
+    await sessions.saveWorkerResult(created.id, sent.action_id, 'worker', claim.leaseToken, { value: 'winner' });
+    await sessions.close(created.id, 'user-a');
+    clock.value = 12_000;
+    await tasks.expireLeases();
+    await expect(sessions.saveWorkerResult(created.id, sent.action_id, 'worker', claim.leaseToken, { value: 'retry' }, 'machine'))
+      .rejects.toMatchObject({ code: 'action_already_completed', status: 409 });
+    expect((await repository.getSessionActionResult(sent.action_id))?.result).toEqual({ value: 'winner' });
+    expect((await repository.getMachine('machine'))?.activeLeases).toBe(0);
+  });
+
+  it('classifies a teardown winner as an immutable action completion', async () => {
+    const { clock, repository, sessions, tasks } = await setup();
+    const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
+    const claim = await tasks.claim('worker', 'machine');
+    const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
+    await sessions.close(created.id, 'user-a');
+    clock.value = 12_000;
+    await tasks.expireLeases();
+    await expect(sessions.saveWorkerResult(created.id, sent.action_id, 'worker', claim.leaseToken, { value: 'late' }, 'machine'))
+      .rejects.toMatchObject({ code: 'action_already_completed', status: 409 });
+    expect((await repository.getSessionActionResult(sent.action_id))?.result).toEqual({ error: { code: 'session_closed', message: 'session closed before the action completed' } });
+    expect((await repository.getMachine('machine'))?.activeLeases).toBe(0);
+  });
+
   it('rejects task-only operations and completes a closing session when its lease expires', async () => {
     const { clock, repository, sessions, tasks } = await setup();
     const created = await sessions.create('user-a', { mode: 'act', constraints: {} });

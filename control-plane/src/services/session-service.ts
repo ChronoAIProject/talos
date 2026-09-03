@@ -162,10 +162,22 @@ export class SessionService {
     actionId: string,
     workerId: string,
     leaseToken: string,
-    result: unknown
+    result: unknown,
+    authenticatedMachineId?: string
   ): Promise<void> {
-    const task = await this.tasks.getWorkerTask(taskId, workerId, leaseToken);
+    const task = await this.tasks.getWorkerActionResultTask(
+      taskId,
+      actionId,
+      workerId,
+      authenticatedMachineId,
+      leaseToken,
+      async (candidateTaskId, candidateActionId) => {
+        const existing = await this.repository.getSessionActionResult(candidateActionId);
+        return existing?.taskId === candidateTaskId && existing.actionId === candidateActionId;
+      }
+    );
     if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw actionAlreadyCompleted();
     const completedAt = new Date(this.clock()).toISOString();
     const stored: SessionActionResult = { actionId, taskId, result, completedAt };
     if (!await this.repository.finalizeSessionAction(stored, ['dispatched'])) {
