@@ -154,12 +154,20 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
       await repository.requeueSessionAction(action.taskId);
       expect(await repository.takePendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'dispatched' });
-      await repository.saveSessionActionResult({ actionId: action.id, taskId: action.taskId, result: { value: 'ok' }, completedAt: '2025-01-01T00:00:01.000Z' });
+      const completed = {
+        actionId: action.id,
+        taskId: action.taskId,
+        result: { value: 'ok' },
+        completedAt: '2025-01-01T00:00:01.000Z'
+      };
+      expect(await repository.finalizeSessionAction(completed)).toBe(true);
       expect(await repository.getSessionActionResult(action.id)).toMatchObject({ taskId: action.taskId, result: { value: 'ok' } });
-      await repository.completeSessionAction(action.taskId, action.id);
       expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.finalizeSessionAction(completed)).toBe(false);
+      expect(await repository.getSessionActionResult(action.id)).toEqual(completed);
       const pending = { ...action, id: 'action-cancel', state: 'pending' as const };
       expect(await repository.enqueueSessionAction(pending)).toBe(true);
+      expect(await repository.getPendingSessionAction(action.taskId)).toMatchObject({ id: pending.id });
       expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(true);
       expect(await repository.cancelPendingSessionAction(pending.taskId, pending.id)).toBe(false);
     } finally {

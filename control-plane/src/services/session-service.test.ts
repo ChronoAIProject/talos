@@ -112,6 +112,31 @@ describe('session service', () => {
       .rejects.toMatchObject({ code: 'not_found' });
   });
 
+  it('accepts the next action once the previous result is observable', async () => {
+    const { repository, sessions, tasks } = await setup();
+    const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
+    const claim = await tasks.claim('worker', 'machine');
+    const first = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
+    await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
+    await sessions.saveWorkerResult(
+      created.id,
+      first.action_id,
+      'worker',
+      claim.leaseToken,
+      { value: 'done' }
+    );
+
+    await expect(sessions.getAction(created.id, first.action_id, 'user-a', 0)).resolves.toEqual({
+      action_id: first.action_id,
+      status: 'completed',
+      result: { value: 'done' }
+    });
+    const second = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 2 }, 0);
+    expect(second.status).toBe('pending');
+    expect(second.action_id).not.toBe(first.action_id);
+    expect((await repository.getTask(created.id))?.pendingActionId).toBe(second.action_id);
+  });
+
   it('reports a stable conflict when an action result is posted again', async () => {
     const { sessions, tasks } = await setup();
     const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
