@@ -145,4 +145,178 @@ describe('interactive session HTTP API', () => {
       body: '{}'
     })).status).toBe(200);
   });
+
+  it('returns one opaque denial for invalid terminal action-result bindings', async () => {
+    const clock = { value: 1_000 };
+    const repository = new MemoryRepository();
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({
+      id: 'machine',
+      poolId: 'pool',
+      tags: { browser: true },
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: hashWorkerToken('worker-token-123456')
+    });
+    await repository.saveMachine({
+      id: 'other-machine',
+      poolId: 'pool',
+      tags: { browser: true },
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: hashWorkerToken('other-worker-token-123456')
+    });
+    const tasks = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    const server = createApiServer(tasks, repository, {
+      clock: () => clock.value,
+      session: { clock: () => clock.value }
+    });
+    servers.push(server);
+    const base = await listen(server);
+    const alice = { 'x-nyxid-identity-token': 'user:alice', 'content-type': 'application/json' };
+    const createSession = async (): Promise<{ id: string }> => {
+      const response = await fetch(`${base}/v1/sessions`, {
+        method: 'POST',
+        headers: alice,
+        body: JSON.stringify({ mode: 'act' })
+      });
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{ id: string }>;
+    };
+    const sendAction = async (taskId: string): Promise<{ action_id: string }> => {
+      const response = await fetch(`${base}/v1/sessions/${taskId}/actions?wait_seconds=0`, {
+        method: 'POST',
+        headers: alice,
+        body: JSON.stringify({ action: { type: 'wait', milliseconds: 1 } })
+      });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<{ action_id: string }>;
+    };
+    const session = await createSession();
+    const claimResponse = await fetch(`${base}/v1/worker/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        worker_token: 'worker-token-123456',
+        worker_id: 'worker',
+        machine_id: 'machine'
+      })
+    });
+    expect(claimResponse.status).toBe(200);
+    const claim = await claimResponse.json() as { leaseToken: string };
+    const action = await sendAction(session.id);
+    const credentials = {
+      worker_token: 'worker-token-123456',
+      worker_id: 'worker',
+      machine_id: 'machine',
+      lease_token: claim.leaseToken
+    };
+    await fetch(`${base}/v1/worker/tasks/${session.id}/actions/poll`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(credentials)
+    });
+    const stored = await fetch(`${base}/v1/worker/tasks/${session.id}/actions/${action.action_id}/result`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...credentials, result: { value: 'winner' } })
+    });
+    expect(stored.status).toBe(200);
+    await fetch(`${base}/v1/sessions/${session.id}/close`, { method: 'POST', headers: alice, body: '{}' });
+    clock.value = 12_000;
+    await tasks.expireLeases();
+
+    const originalHeaders = {
+      authorization: 'Bearer worker-token-123456',
+      'x-talos-worker-id': 'worker',
+      'x-talos-machine-id': 'machine',
+      'content-type': 'application/json'
+    };
+    const resultUrl = `${base}/v1/worker/tasks/${session.id}/actions/${action.action_id}/result`;
+    const retry = await fetch(resultUrl, {
+      method: 'POST',
+      headers: originalHeaders,
+      body: JSON.stringify({ lease_token: claim.leaseToken, result: { value: 'retry' } })
+    });
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toMatchObject({ error: { code: 'action_already_completed' } });
+
+    const otherSession = await createSession();
+    await tasks.claim('other-worker', 'other-machine');
+    const otherAction = await sendAction(otherSession.id);
+    const unauthorizedEnvelope = {
+      error: { code: 'unauthorized', message: 'unauthorized', retryable: false }
+    };
+    const deniedRequests = [
+      {
+        url: resultUrl,
+        headers: {
+          authorization: 'Bearer other-worker-token-123456',
+          'x-talos-worker-id': 'worker',
+          'x-talos-machine-id': 'other-machine',
+          'content-type': 'application/json'
+        },
+        body: { lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: resultUrl,
+        headers: originalHeaders,
+        body: { worker_id: 'other-worker', machine_id: 'other-machine', lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: resultUrl,
+        headers: { ...originalHeaders, 'x-talos-worker-id': 'other-worker' },
+        body: { lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: resultUrl,
+        headers: originalHeaders,
+        body: { lease_token: 'wrong-lease', result: { value: 'x' } }
+      },
+      {
+        url: `${base}/v1/worker/tasks/missing-task/actions/${action.action_id}/result`,
+        headers: originalHeaders,
+        body: { lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: `${base}/v1/worker/tasks/${session.id}/actions/${otherAction.action_id}/result`,
+        headers: originalHeaders,
+        body: { lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: `${base}/v1/worker/tasks/${session.id}/actions/random-action/result`,
+        headers: originalHeaders,
+        body: { lease_token: claim.leaseToken, result: { value: 'x' } }
+      },
+      {
+        url: `${base}/v1/worker/tasks/missing-task/actions/random-action/result`,
+        headers: originalHeaders,
+        body: { lease_token: claim.leaseToken }
+      }
+    ];
+    for (const denied of deniedRequests) {
+      const response = await fetch(denied.url, {
+        method: 'POST',
+        headers: denied.headers,
+        body: JSON.stringify(denied.body)
+      });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(unauthorizedEnvelope);
+    }
+    const authorizedMalformed = await fetch(resultUrl, {
+      method: 'POST',
+      headers: originalHeaders,
+      body: JSON.stringify({ lease_token: claim.leaseToken })
+    });
+    expect(authorizedMalformed.status).toBe(400);
+    expect(await authorizedMalformed.json()).toMatchObject({ error: { code: 'validation_error' } });
+  });
 });

@@ -91,8 +91,9 @@ export const createApiServer = (
     clock: options.clock
   });
   return createServer(async (request, response) => {
+    let path = '/';
     try {
-      const path = new URL(request.url ?? '/', 'http://talos.local').pathname;
+      path = new URL(request.url ?? '/', 'http://talos.local').pathname;
       if (request.method === 'GET' && path === '/openapi.json' && options.openApiDocument !== undefined) {
         return sendSerialized(response, 200, options.openApiDocument.json, 'application/json');
       }
@@ -109,7 +110,10 @@ export const createApiServer = (
       }
       await route(request, response, service, sessions, testingRuns, testingAttempts, repository, identities, options);
     } catch (error) {
-      const talos = error instanceof TalosError ? error : undefined;
+      const caughtTalos = error instanceof TalosError ? error : undefined;
+      const talos = caughtTalos?.status === 401 && isWorkerActionResultPath(request.method, path)
+        ? unauthorized('unauthorized')
+        : caughtTalos;
       const validation = error instanceof z.ZodError
         ? {
             code: 'validation_error',
@@ -139,6 +143,9 @@ export const createApiServer = (
     }
   });
 };
+
+const isWorkerActionResultPath = (method: string | undefined, path: string): boolean =>
+  method === 'POST' && /^\/v1\/worker\/tasks\/[^/]+\/actions\/[^/]+\/result$/.test(path);
 
 const route = async (
   request: IncomingMessage,
