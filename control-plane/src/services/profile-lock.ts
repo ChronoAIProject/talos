@@ -1,9 +1,9 @@
 import { conflict, forbidden, notFound } from '../domain/errors.js';
-import type { Profile } from '../domain/types.js';
+import type { MachineLeaseReservation, Profile } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 
 export class ProfileLockService {
-  public constructor(private readonly repository: Repository, private readonly leaseSeconds = 300) {}
+  public constructor(private readonly repository: Repository, _leaseSeconds = 300) {}
 
   public async assertOwner(profileId: string, userId: string): Promise<Profile> {
     const profile = await this.repository.getProfile(profileId);
@@ -12,25 +12,19 @@ export class ProfileLockService {
     return profile;
   }
 
-  public async acquire(profileId: string, userId: string, taskId: string, now = Date.now(), machineId?: string, leaseSeconds = this.leaseSeconds): Promise<Profile> {
-    const profile = await this.assertOwner(profileId, userId);
-    if (profile.lockedByTaskId !== undefined && profile.lockExpiresAt !== undefined && Date.parse(profile.lockExpiresAt) > now && profile.lockedByTaskId !== taskId) {
-      throw conflict('profile already has an active session');
-    }
-    const next: Profile = { ...profile, ...(machineId === undefined ? {} : { machineId }), lockedByTaskId: taskId, lockExpiresAt: new Date(now + leaseSeconds * 1000).toISOString() };
-    await this.repository.saveProfile(next);
-    return next;
+  public async acquire(
+    profileId: string,
+    userId: string,
+    machineId: string,
+    reservation: MachineLeaseReservation,
+    now = Date.now()
+  ): Promise<Profile> {
+    const profile = await this.repository.acquireProfileLease(profileId, userId, machineId, reservation, now);
+    if (profile === undefined) throw conflict('profile already has an active session');
+    return profile;
   }
 
-  public async release(profileId: string, taskId: string): Promise<void> {
-    const profile = await this.repository.getProfile(profileId);
-    if (profile?.lockedByTaskId === taskId) await this.repository.saveProfile({ id: profile.id, userId: profile.userId, ...(profile.machineId === undefined ? {} : { machineId: profile.machineId }) });
-  }
-
-  public async renew(profileId: string, taskId: string, now = Date.now(), leaseSeconds = this.leaseSeconds): Promise<void> {
-    const profile = await this.repository.getProfile(profileId);
-    if (profile?.lockedByTaskId === taskId) {
-      await this.repository.saveProfile({ ...profile, lockExpiresAt: new Date(now + leaseSeconds * 1000).toISOString() });
-    }
+  public async release(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    return this.repository.releaseProfileLease(profileId, reservation);
   }
 }

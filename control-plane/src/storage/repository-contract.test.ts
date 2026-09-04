@@ -5,6 +5,10 @@ import type { Repository } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
 import type { BrowserTask, WebhookEvent } from '../domain/types.js';
+import { TaskService } from '../services/task-service.js';
+import { Scheduler } from '../services/scheduler.js';
+import { ProfileLockService } from '../services/profile-lock.js';
+import { WebhookSigner } from '../services/webhook-signer.js';
 import { TestingRunService } from '../services/testing-run-service.js';
 import { submitTestingRun } from '../test-support/testing-transport.js';
 import { digestJson } from '@talos/testing-protocol';
@@ -25,6 +29,26 @@ const deferred = () => {
   let resolve!: () => void;
   const promise = new Promise<void>((resolver) => { resolve = resolver; });
   return { promise, resolve };
+};
+
+const barrierRepository = (repository: Repository, participants = 2): Repository => {
+  const barrier = deferred();
+  let arrivals = 0;
+  return new Proxy(repository, {
+    get(target, property) {
+      if (property === 'listQueuedTasks') {
+        return async () => {
+          const queued = await target.listQueuedTasks();
+          arrivals += 1;
+          if (arrivals === participants) barrier.resolve();
+          await barrier.promise;
+          return queued;
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  });
 };
 
 const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
@@ -99,6 +123,159 @@ const mongoHarness = async (): Promise<Harness> => {
 };
 
 const contractTests = (makeHarness: () => Promise<Harness>): void => {
+  const taskService = (repository: Repository, clock = { value: 1_000 }): TaskService => new TaskService(
+    repository,
+    new Scheduler(repository),
+    new ProfileLockService(repository),
+    new WebhookSigner('repository-contract-webhook-secret'),
+    { clock: () => clock.value, leaseSeconds: 10 }
+  );
+
+  it('linearizes task claim, machine admission, and profile ownership', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.savePool({ id: 'claim-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'claim-machine', poolId: 'claim-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+      await repository.saveProfile({ id: 'claim-profile', userId: 'user-1' });
+      await repository.saveTask(baseTask({ id: 'claim-task', profileId: 'claim-profile' }));
+      const service = taskService(barrierRepository(repository));
+
+      const results = await Promise.allSettled([
+        service.claim('worker-a', 'claim-machine'),
+        service.claim('worker-b', 'claim-machine')
+      ]);
+      const winners = results.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<TaskService['claim']>>> => result.status === 'fulfilled');
+      expect(winners).toHaveLength(1);
+      const winner = winners[0]!.value;
+      const stored = await repository.getTask('claim-task');
+      const machine = await repository.getMachine('claim-machine');
+      const profile = await repository.getProfile('claim-profile');
+      expect(stored).toMatchObject({
+        status: 'claimed',
+        workerId: winner.task.workerId,
+        leaseToken: winner.leaseToken,
+        claimId: winner.task.claimId,
+        claimGeneration: 1
+      });
+      expect(machine).toMatchObject({ activeLeases: 1 });
+      expect(machine?.leaseReservations).toEqual([expect.objectContaining({
+        taskId: stored?.id,
+        claimId: stored?.claimId,
+        claimGeneration: stored?.claimGeneration
+      })]);
+      expect(profile).toMatchObject({
+        lockedByTaskId: stored?.id,
+        lockedByClaimId: stored?.claimId,
+        lockedByClaimGeneration: stored?.claimGeneration
+      });
+      expect(await repository.releaseMachineLease('claim-machine', { taskId: 'claim-task', claimId: 'loser-claim', claimGeneration: 1 })).toBe(false);
+      expect(await repository.releaseProfileLease('claim-profile', { taskId: 'claim-task', claimId: 'loser-claim', claimGeneration: 1 })).toBe(false);
+      expect(await repository.getMachine('claim-machine')).toMatchObject({ activeLeases: 1 });
+      expect(await repository.getProfile('claim-profile')).toMatchObject({ lockedByClaimId: stored?.claimId });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('atomically admits only one claim into the final machine slot', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.savePool({ id: 'capacity-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'capacity-machine', poolId: 'capacity-pool', tags: {}, capacity: 2, activeLeases: 1, online: true, workerTokenHash: 'hash' });
+      await repository.saveTask(baseTask({ id: 'capacity-task-a', createdAt: '2025-01-01T00:00:00.000Z' }));
+      await repository.saveTask(baseTask({ id: 'capacity-task-b', createdAt: '2025-01-01T00:00:01.000Z' }));
+      const service = taskService(barrierRepository(repository));
+
+      const results = await Promise.allSettled([
+        service.claim('worker-a', 'capacity-machine'),
+        service.claim('worker-b', 'capacity-machine')
+      ]);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(await repository.getMachine('capacity-machine')).toMatchObject({
+        activeLeases: 2,
+        leaseReservations: [expect.any(Object)]
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('preserves machine lease accounting across stale metadata saves', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveMachine({ id: 'machine-accounting', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'old-hash' });
+      const staleMachine = (await repository.getMachine('machine-accounting'))!;
+      const firstReservation = { taskId: 'task-a', claimId: 'claim-a', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
+      const secondReservation = { taskId: 'task-b', claimId: 'claim-b', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
+
+      expect(await repository.reserveMachineLease(staleMachine.id, firstReservation)).toBe(true);
+      await repository.saveMachine({ ...staleMachine, workerTokenHash: 'rotated-hash' });
+
+      expect(await repository.getMachine(staleMachine.id)).toMatchObject({
+        activeLeases: 1,
+        workerTokenHash: 'rotated-hash',
+        leaseReservations: [firstReservation]
+      });
+      expect(await repository.reserveMachineLease(staleMachine.id, secondReservation)).toBe(false);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('reconciles interrupted projections and fences a requeued generation', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: 1_000 };
+      await repository.savePool({ id: 'reconcile-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'reconcile-machine', poolId: 'reconcile-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+      await repository.saveProfile({ id: 'reconcile-profile', userId: 'user-1' });
+      const submitted = baseTask({ id: 'reconcile-task', profileId: 'reconcile-profile' });
+      await repository.saveTask(submitted);
+      const interrupted = await repository.claimTask({
+        ...submitted,
+        status: 'claimed',
+        workerId: 'worker-a',
+        machineId: 'reconcile-machine',
+        leaseToken: 'lease-a',
+        leaseExpiresAt: '1970-01-01T00:00:11.000Z',
+        claimId: 'claim-a',
+        claimGeneration: 1,
+        claimedAt: '1970-01-01T00:00:01.000Z',
+        updatedAt: '1970-01-01T00:00:01.000Z'
+      }, 0);
+      expect(interrupted).toBeDefined();
+      const service = taskService(repository, clock);
+      await service.reconcileClaims();
+      expect(await repository.getMachine('reconcile-machine')).toMatchObject({ activeLeases: 1 });
+      expect(await repository.getProfile('reconcile-profile')).toMatchObject({ lockedByClaimId: 'claim-a' });
+
+      const claimed = (await repository.getTask('reconcile-task'))!;
+      expect(await repository.replaceTaskForClaim({
+        ...claimed,
+        status: 'submitted',
+        workerId: undefined,
+        machineId: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        queuePriority: -1
+      }, { claimId: 'claim-a', claimGeneration: 1, status: 'claimed' })).toBe(true);
+
+      const restarted = taskService(repository, clock);
+      await restarted.reconcileClaims();
+      expect(await repository.getMachine('reconcile-machine')).toMatchObject({ activeLeases: 0, leaseReservations: [] });
+      expect(await repository.getProfile('reconcile-profile')).not.toHaveProperty('lockedByTaskId');
+
+      clock.value = 12_000;
+      const reclaimed = await restarted.claim('worker-b', 'reconcile-machine', 12_000);
+      expect(reclaimed.task.claimGeneration).toBe(2);
+      await expect(restarted.heartbeat('reconcile-task', 'worker-a', 'lease-a', 10)).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(await repository.getMachine('reconcile-machine')).toMatchObject({ activeLeases: 1 });
+      expect(await repository.getProfile('reconcile-profile')).toMatchObject({ lockedByClaimId: reclaimed.task.claimId });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('round-trips registry entities and task state', async () => {
     const { repository, close } = await makeHarness();
     try {

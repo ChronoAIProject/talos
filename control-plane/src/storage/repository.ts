@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -21,6 +21,9 @@ export interface Repository {
   close(): Promise<void>;
   getTask(id: string): Promise<Task | undefined>;
   saveTask(task: Task): Promise<void>;
+  claimTask(task: Task, expectedClaimGeneration: number): Promise<Task | undefined>;
+  replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean>;
+  replaceSubmittedTask(task: Task, expectedClaimGeneration: number): Promise<boolean>;
   listQueuedTasks(): Promise<readonly Task[]>;
   listTasks(): Promise<readonly Task[]>;
   getPool(id: string): Promise<Pool | undefined>;
@@ -29,8 +32,14 @@ export interface Repository {
   listMachines(poolId?: string): Promise<readonly Machine[]>;
   getMachine(id: string): Promise<Machine | undefined>;
   saveMachine(machine: Machine): Promise<void>;
+  reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean>;
+  renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean>;
+  releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
   getProfile(id: string): Promise<Profile | undefined>;
   saveProfile(profile: Profile): Promise<void>;
+  acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined>;
+  releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
+  listProfiles(): Promise<readonly Profile[]>;
   listProfilesByUser(userId: string): Promise<readonly Profile[]>;
   saveHandoff(link: HandoffLink): Promise<void>;
   getHandoff(id: string): Promise<HandoffLink | undefined>;

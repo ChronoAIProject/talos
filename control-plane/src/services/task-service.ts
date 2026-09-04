@@ -1,7 +1,7 @@
 import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, PublicTask, Task, TaskFinding, WebhookEvent } from '../domain/types.js';
+import type { Lease, MachineLeaseReservation, PublicTask, Task, TaskClaimGuard, TaskFinding, WebhookEvent } from '../domain/types.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -87,20 +87,17 @@ export class TaskService {
   public async getTask(id: string, userId: string): Promise<Task> { return this.authorizedTask(id, userId); }
 
   public async claim(workerId: string, machineId: string, now = this.clock()): Promise<{ task: Task; lease: Lease; leaseToken: string }> {
+    await this.reconcileClaims(now);
     const queued = await this.repository.listQueuedTasks();
     for (const candidate of queued) {
       if (candidate.kind === 'testing') continue;
       try {
         const eligible = await this.scheduler.isEligible(candidate, machineId, candidate.userId, candidate.requesterGroups ?? []);
         if (eligible === undefined) continue;
-        const { machine } = eligible;
-        if (candidate.profileId !== undefined) {
-          const profile = await this.profiles.assertOwner(candidate.profileId, candidate.userId);
-          if (profile.machineId !== undefined && profile.machineId !== machine.id) continue;
-          await this.profiles.acquire(candidate.profileId, candidate.userId, candidate.id, now, machine.id, this.leaseSeconds);
-        }
         const expiresAt = new Date(now + this.leaseSeconds * 1000).toISOString();
         const leaseToken = newId('lease');
+        const claimId = newId('claim');
+        const claimGeneration = (candidate.claimGeneration ?? 0) + 1;
         const task: Task = {
           ...candidate,
           status: 'claimed',
@@ -108,14 +105,20 @@ export class TaskService {
           claimedAt: new Date(now).toISOString(),
           leaseExpiresAt: expiresAt,
           leaseToken,
+          claimId,
+          claimGeneration,
           queuePriority: undefined,
           workerId,
           machineId
         };
-        await this.repository.saveTask(task);
-        await this.repository.saveMachine({ ...machine, activeLeases: machine.activeLeases + 1 });
-        await this.emit(task, 'task.state_changed', { status: task.status });
-        return { task, lease: { taskId: task.id, workerId, machineId, expiresAt }, leaseToken };
+        const claimed = await this.repository.claimTask(task, candidate.claimGeneration ?? 0);
+        if (claimed === undefined) continue;
+        if (!await this.ensureClaimProjections(claimed, now)) {
+          await this.abortClaim(claimed, candidate.queuePriority, now);
+          continue;
+        }
+        await this.emit(claimed, 'task.state_changed', { status: claimed.status });
+        return { task: claimed, lease: { taskId: claimed.id, workerId, machineId, expiresAt }, leaseToken };
       } catch (error) {
         if (error instanceof TalosError && error.code === 'conflict') continue;
         throw error;
@@ -127,15 +130,17 @@ export class TaskService {
   public async heartbeat(taskId: string, workerId: string, leaseToken: string, extendSeconds: number): Promise<Task> {
     const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     const now = this.clock();
-    const nextStatus = task.status === 'claimed' ? 'running' : task.status;
     const updated: Task = {
       ...task,
-      status: nextStatus,
+      status: task.status === 'claimed' ? 'running' : task.status,
       updatedAt: new Date(now).toISOString(),
       leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString()
     };
-    if (task.profileId !== undefined) await this.profiles.renew(task.profileId, task.id, now, extendSeconds);
-    await this.repository.saveTask(updated);
+    await this.replaceClaimedTask(task, updated);
+    if (!await this.ensureClaimProjections(updated, now)) {
+      await this.abortClaim(updated, -1, now);
+      throw conflict('lease accounting could not be renewed');
+    }
     if (task.status !== updated.status) await this.emit(updated, 'task.state_changed', { status: updated.status });
     return updated;
   }
@@ -149,7 +154,7 @@ export class TaskService {
       findings: [...findings],
       ...(error === undefined ? {} : { error })
     };
-    await this.repository.saveTask(updated);
+    await this.replaceClaimedTask(task, updated);
     await this.releaseLease(updated);
     await this.emit(updated, 'task.state_changed', { status });
     if (status === 'completed') await this.emit(updated, 'task.completed', { status });
@@ -163,7 +168,7 @@ export class TaskService {
       updatedAt: new Date(this.clock()).toISOString(),
       artifacts: [...task.artifacts, artifact]
     };
-    await this.repository.saveTask(updated);
+    await this.replaceClaimedTask(task, updated);
     return updated;
   }
 
@@ -179,8 +184,12 @@ export class TaskService {
       updatedAt: new Date(now).toISOString(),
       leaseExpiresAt: task.workerId === undefined ? task.leaseExpiresAt : new Date(now + this.leaseSeconds * 1000).toISOString()
     };
-    if (task.workerId !== undefined && task.profileId !== undefined) await this.profiles.renew(task.profileId, task.id, now, this.leaseSeconds);
-    await this.repository.saveTask(updated);
+    if (task.workerId !== undefined) {
+      await this.replaceClaimedTask(task, updated);
+      if (!await this.ensureClaimProjections(updated, now)) throw conflict('lease accounting could not be renewed');
+    } else if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0)) {
+      throw conflict('task state changed concurrently');
+    }
     await this.emit(updated, 'task.state_changed', { status: updated.status });
     return updated;
   }
@@ -193,7 +202,7 @@ export class TaskService {
       status: 'needs_input',
       updatedAt: new Date(this.clock()).toISOString()
     };
-    await this.repository.saveTask(updated);
+    await this.replaceClaimedTask(task, updated);
     await this.emit(updated, 'task.needs_input', { status: updated.status });
     return updated;
   }
@@ -218,7 +227,7 @@ export class TaskService {
       updatedAt: new Date(this.clock()).toISOString(),
       handoff: { url, expiresAt: expires }
     };
-    await this.repository.saveTask(updated);
+    await this.replaceClaimedTask(task, updated);
     await this.emit(updated, 'task.handoff_requested', { handoff_url: url, expires });
     return { handoff_url: url, expires };
   }
@@ -232,8 +241,12 @@ export class TaskService {
       status: 'cancelled',
       updatedAt: new Date(this.clock()).toISOString()
     };
-    await this.repository.saveTask(updated);
-    await this.releaseLease(updated);
+    if (task.status === 'submitted') {
+      if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0)) throw conflict('task state changed concurrently');
+    } else {
+      await this.replaceClaimedTask(task, updated);
+      await this.releaseLease(updated);
+    }
     await this.emit(updated, 'task.state_changed', { status: updated.status });
     return updated;
   }
@@ -248,14 +261,18 @@ export class TaskService {
       status,
       updatedAt: new Date(this.clock()).toISOString()
     };
-    await this.repository.saveTask(updated);
-    if (status === 'completed') await this.releaseLease(updated);
+    if (task.status === 'submitted') {
+      if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0)) throw conflict('task state changed concurrently');
+    } else {
+      await this.replaceClaimedTask(task, updated);
+    }
     await this.emit(updated, 'task.state_changed', { status });
     if (status === 'completed') await this.emit(updated, 'task.completed', { status });
     return updated;
   }
 
   public async expireLeases(now = this.clock()): Promise<readonly Task[]> {
+    await this.reconcileClaims(now);
     const active = await this.repository.listTasks();
     const expired: Task[] = [];
     for (const candidate of active) {
@@ -268,8 +285,9 @@ export class TaskService {
           updatedAt: new Date(now).toISOString(),
           error: { code: 'deadline_exceeded', message: deadlineExceeded().message }
         };
-        await this.repository.saveTask(failed);
-        await this.emit(failed, 'task.state_changed', { status: failed.status, error: failed.error });
+        if (await this.repository.replaceSubmittedTask(failed, current.claimGeneration ?? 0)) {
+          await this.emit(failed, 'task.state_changed', { status: failed.status, error: failed.error });
+        }
         continue;
       }
       if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running', 'closing'].includes(current.status)) {
@@ -289,8 +307,8 @@ export class TaskService {
             pendingActionId: undefined,
             updatedAt: new Date(now).toISOString()
           };
-          await this.repository.saveTask(completed);
-          await this.releaseLease(current);
+          if (!await this.tryReplaceClaimedTask(current, completed)) continue;
+          await this.releaseLease(completed);
           await this.emit(completed, 'task.state_changed', { status: completed.status });
           await this.emit(completed, 'task.completed', { status: completed.status });
           continue;
@@ -305,13 +323,44 @@ export class TaskService {
           machineId: undefined,
           queuePriority: -1
         };
+        if (!await this.tryReplaceClaimedTask(current, requeued)) continue;
         if (current.interaction === 'interactive') await this.repository.requeueSessionAction(current.id);
-        await this.repository.saveTask(requeued);
         await this.releaseLease(current);
         expired.push(requeued);
       }
     }
+    await this.reconcileClaims(now);
     return expired;
+  }
+
+  public async reconcileClaims(now = this.clock()): Promise<void> {
+    const tasks = (await this.repository.listTasks()).filter((task) => task.kind !== 'testing');
+    for (const task of tasks) {
+      if (!this.isActiveClaim(task)) continue;
+      if (!await this.ensureClaimProjections(task, now)) await this.abortClaim(task, -1, now);
+    }
+
+    const currentTasks = new Map((await this.repository.listTasks()).map((task) => [task.id, task]));
+    for (const machine of await this.repository.listMachines()) {
+      for (const reservation of machine.leaseReservations ?? []) {
+        const task = currentTasks.get(reservation.taskId);
+        if (!this.matchesActiveClaim(task, reservation)) {
+          await this.repository.releaseMachineLease(machine.id, reservation);
+        }
+      }
+    }
+    for (const profile of await this.repository.listProfiles()) {
+      if (profile.lockedByTaskId === undefined || profile.lockedByClaimId === undefined || profile.lockedByClaimGeneration === undefined) continue;
+      const reservation = {
+        taskId: profile.lockedByTaskId,
+        claimId: profile.lockedByClaimId,
+        claimGeneration: profile.lockedByClaimGeneration
+      };
+      const task = currentTasks.get(profile.lockedByTaskId);
+      if (task?.profileId !== profile.id || !this.matchesActiveClaim(task, reservation)) {
+        await this.repository.releaseProfileLease(profile.id, reservation);
+      }
+    }
   }
 
   private async authorizedTask(id: string, userId: string): Promise<Task> {
@@ -326,7 +375,14 @@ export class TaskService {
     const task = await this.repository.getTask(taskId);
     if (task === undefined) throw notFound('task not found');
     if (task.kind === 'testing') throw conflict('testing tasks require the Testing Executor API');
-    if (task.workerId !== workerId || task.leaseToken === undefined || !['claimed', 'running', 'needs_input', 'handoff', 'closing', 'cancelled'].includes(task.status)) throw unauthorized('worker does not own active lease');
+    if (
+      task.workerId !== workerId ||
+      task.leaseToken === undefined ||
+      task.claimId === undefined ||
+      task.claimGeneration === undefined ||
+      task.claimGeneration <= 0 ||
+      !['claimed', 'running', 'needs_input', 'handoff', 'closing', 'cancelled'].includes(task.status)
+    ) throw unauthorized('worker does not own active lease');
     const expected = Buffer.from(task.leaseToken);
     const actual = Buffer.from(leaseToken);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized('invalid lease token');
@@ -369,12 +425,90 @@ export class TaskService {
     return this.getWorkerTask(taskId, workerId, leaseToken);
   }
 
-  private async releaseLease(task: Task): Promise<void> {
-    if (task.machineId !== undefined) {
-      const machine = await this.repository.getMachine(task.machineId);
-      if (machine !== undefined) await this.repository.saveMachine({ ...machine, activeLeases: Math.max(0, machine.activeLeases - 1) });
+  private async replaceClaimedTask(current: Task, updated: Task): Promise<void> {
+    if (!await this.tryReplaceClaimedTask(current, updated)) throw unauthorized('lease generation is no longer active');
+  }
+
+  private async tryReplaceClaimedTask(current: Task, updated: Task): Promise<boolean> {
+    return this.repository.replaceTaskForClaim(updated, this.claimGuard(current));
+  }
+
+  private claimGuard(task: Task): TaskClaimGuard {
+    if (task.claimId === undefined || task.claimGeneration === undefined || task.claimGeneration <= 0) {
+      throw unauthorized('lease generation is no longer active');
     }
-    if (task.profileId !== undefined) await this.profiles.release(task.profileId, task.id);
+    return { claimId: task.claimId, claimGeneration: task.claimGeneration, status: task.status };
+  }
+
+  private reservation(task: Task): MachineLeaseReservation {
+    const guard = this.claimGuard(task);
+    if (task.leaseExpiresAt === undefined) throw unauthorized('lease generation is no longer active');
+    return {
+      taskId: task.id,
+      claimId: guard.claimId,
+      claimGeneration: guard.claimGeneration,
+      expiresAt: task.leaseExpiresAt
+    };
+  }
+
+  private async ensureClaimProjections(task: Task, now: number): Promise<boolean> {
+    if (task.machineId === undefined) return false;
+    const requested = this.reservation(task);
+    const authoritative = await this.repository.getTask(task.id);
+    if (authoritative === undefined || !this.matchesActiveClaim(authoritative, requested) || authoritative.machineId !== task.machineId) return false;
+    const reservation = this.reservation(authoritative);
+    if (!await this.repository.reserveMachineLease(task.machineId, reservation)) return false;
+    await this.repository.renewMachineLease(task.machineId, reservation);
+    if (task.profileId !== undefined) {
+      try {
+        await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation, now);
+      } catch (error) {
+        await this.repository.releaseMachineLease(task.machineId, reservation);
+        if (error instanceof TalosError && error.code === 'conflict') return false;
+        throw error;
+      }
+    }
+    const committed = await this.repository.getTask(task.id);
+    if (this.matchesActiveClaim(committed, reservation) && committed?.machineId === task.machineId) return true;
+    await this.repository.releaseMachineLease(task.machineId, reservation);
+    if (task.profileId !== undefined) await this.profiles.release(task.profileId, reservation);
+    return false;
+  }
+
+  private async abortClaim(task: Task, queuePriority: number | undefined, now = this.clock()): Promise<void> {
+    const requeued: Task = {
+      ...task,
+      status: 'submitted',
+      updatedAt: new Date(now).toISOString(),
+      leaseExpiresAt: undefined,
+      leaseToken: undefined,
+      workerId: undefined,
+      machineId: undefined,
+      queuePriority
+    };
+    if (!await this.tryReplaceClaimedTask(task, requeued)) return;
+    await this.releaseLease(task);
+  }
+
+  private isActiveClaim(task: Task): boolean {
+    return this.matchesActiveClaim(task, task.claimId === undefined || task.claimGeneration === undefined
+      ? undefined
+      : { taskId: task.id, claimId: task.claimId, claimGeneration: task.claimGeneration });
+  }
+
+  private matchesActiveClaim(task: Task | undefined, reservation: Omit<MachineLeaseReservation, 'expiresAt'> | undefined): boolean {
+    return task !== undefined &&
+      reservation !== undefined &&
+      ['claimed', 'running', 'needs_input', 'handoff', 'closing'].includes(task.status) &&
+      task.claimId === reservation.claimId &&
+      task.claimGeneration === reservation.claimGeneration;
+  }
+
+  private async releaseLease(task: Task): Promise<void> {
+    if (task.claimId === undefined || task.claimGeneration === undefined) return;
+    const reservation = { taskId: task.id, claimId: task.claimId, claimGeneration: task.claimGeneration };
+    if (task.machineId !== undefined) await this.repository.releaseMachineLease(task.machineId, reservation);
+    if (task.profileId !== undefined) await this.profiles.release(task.profileId, reservation);
   }
 
   private async emit(task: Task, type: WebhookEvent['type'], payload: Record<string, unknown>): Promise<SignedWebhook> {
@@ -403,6 +537,8 @@ export class TaskService {
   public toPublicTask(task: Task): PublicTask {
     const hidden = new Set([
       'leaseToken',
+      'claimId',
+      'claimGeneration',
       'queuePriority',
       'workerId',
       'machineId',
