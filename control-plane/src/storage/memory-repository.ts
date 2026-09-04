@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -7,6 +7,17 @@ const isFutureTimestamp = (value: string | undefined, observedNow: number): bool
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && parsed > observedNow;
 };
+
+const isValidClaim = (task: Task, expectedClaimGeneration: number): boolean =>
+  task.kind !== 'testing' &&
+  task.status === 'claimed' &&
+  task.claimId !== undefined &&
+  task.claimGeneration === expectedClaimGeneration + 1 &&
+  task.claimGeneration > 0 &&
+  task.workerId !== undefined &&
+  task.machineId !== undefined &&
+  task.leaseToken !== undefined &&
+  task.leaseExpiresAt !== undefined;
 
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
@@ -32,6 +43,34 @@ export class MemoryRepository implements Repository {
 
   public async saveTask(task: Task): Promise<void> {
     this.tasks.set(task.id, task);
+  }
+
+  public async claimTask(task: Task, expectedClaimGeneration: number): Promise<Task | undefined> {
+    if (!isValidClaim(task, expectedClaimGeneration)) return undefined;
+    const current = this.tasks.get(task.id);
+    if (current?.status !== 'submitted' || (current.claimGeneration ?? 0) !== expectedClaimGeneration) return undefined;
+    this.tasks.set(task.id, task);
+    return task;
+  }
+
+  public async replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean> {
+    if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
+    const current = this.tasks.get(task.id);
+    if (
+      current?.claimId !== guard.claimId ||
+      current.claimGeneration !== guard.claimGeneration ||
+      current.status !== guard.status
+    ) return false;
+    this.tasks.set(task.id, task);
+    return true;
+  }
+
+  public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number): Promise<boolean> {
+    if ((task.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
+    const current = this.tasks.get(task.id);
+    if (current?.status !== 'submitted' || (current.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
+    this.tasks.set(task.id, task);
+    return true;
   }
 
   public async listQueuedTasks(): Promise<readonly Task[]> {
@@ -72,12 +111,90 @@ export class MemoryRepository implements Repository {
     this.machines.set(machine.id, machine);
   }
 
+  public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    if (reservations.some((entry) => entry.claimId === reservation.claimId && entry.claimGeneration === reservation.claimGeneration)) return true;
+    if (!machine.online || machine.activeLeases >= machine.capacity) return false;
+    this.machines.set(machineId, {
+      ...machine,
+      activeLeases: machine.activeLeases + 1,
+      leaseReservations: [...reservations, reservation]
+    });
+    return true;
+  }
+
+  public async renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    const index = reservations.findIndex((entry) => entry.claimId === reservation.claimId && entry.claimGeneration === reservation.claimGeneration && entry.taskId === reservation.taskId);
+    if (index < 0) return false;
+    const next = [...reservations];
+    next[index] = reservation;
+    this.machines.set(machineId, { ...machine, leaseReservations: next });
+    return true;
+  }
+
+  public async releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    const next = reservations.filter((entry) => !(
+      entry.claimId === reservation.claimId &&
+      entry.claimGeneration === reservation.claimGeneration &&
+      entry.taskId === reservation.taskId
+    ));
+    if (next.length === reservations.length) return false;
+    this.machines.set(machineId, { ...machine, activeLeases: machine.activeLeases - 1, leaseReservations: next });
+    return true;
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     return this.profiles.get(id);
   }
 
   public async saveProfile(profile: Profile): Promise<void> {
     this.profiles.set(profile.id, profile);
+  }
+
+  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined> {
+    const profile = this.profiles.get(profileId);
+    if (profile === undefined || profile.userId !== userId) return undefined;
+    const sameClaim = profile.lockedByClaimId === reservation.claimId && profile.lockedByClaimGeneration === reservation.claimGeneration;
+    const expired = profile.lockExpiresAt === undefined || Date.parse(profile.lockExpiresAt) <= observedNow;
+    if (!sameClaim && profile.lockedByTaskId !== undefined && !expired) return undefined;
+    const updated: Profile = {
+      ...profile,
+      machineId,
+      lockedByTaskId: reservation.taskId,
+      lockedByClaimId: reservation.claimId,
+      lockedByClaimGeneration: reservation.claimGeneration,
+      lockExpiresAt: reservation.expiresAt
+    };
+    this.profiles.set(profileId, updated);
+    return updated;
+  }
+
+
+  public async releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const profile = this.profiles.get(profileId);
+    if (
+      profile?.lockedByTaskId !== reservation.taskId ||
+      profile.lockedByClaimId !== reservation.claimId ||
+      profile.lockedByClaimGeneration !== reservation.claimGeneration
+    ) return false;
+    this.profiles.set(profileId, {
+      id: profile.id,
+      userId: profile.userId,
+      ...(profile.machineId === undefined ? {} : { machineId: profile.machineId })
+    });
+    return true;
+  }
+
+  public async listProfiles(): Promise<readonly Profile[]> {
+    return [...this.profiles.values()];
   }
 
   public async listProfilesByUser(userId: string): Promise<readonly Profile[]> {
