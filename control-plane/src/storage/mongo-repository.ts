@@ -144,7 +144,18 @@ export class MongoRepository implements Repository {
   }
 
   public async saveMachine(machine: Machine): Promise<void> {
-    await this.machines.replaceOne({ _id: machine.id }, { ...machine, _id: machine.id }, { upsert: true });
+    const { activeLeases, leaseReservations, ...metadata } = machine;
+    await this.machines.updateOne(
+      { _id: machine.id },
+      {
+        $set: metadata,
+        $setOnInsert: {
+          activeLeases,
+          ...(leaseReservations === undefined ? {} : { leaseReservations })
+        }
+      },
+      { upsert: true }
+    );
   }
 
   public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {

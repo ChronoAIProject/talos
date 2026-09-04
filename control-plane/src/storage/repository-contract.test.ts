@@ -200,6 +200,28 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('preserves machine lease accounting across stale metadata saves', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveMachine({ id: 'machine-accounting', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'old-hash' });
+      const staleMachine = (await repository.getMachine('machine-accounting'))!;
+      const firstReservation = { taskId: 'task-a', claimId: 'claim-a', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
+      const secondReservation = { taskId: 'task-b', claimId: 'claim-b', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
+
+      expect(await repository.reserveMachineLease(staleMachine.id, firstReservation)).toBe(true);
+      await repository.saveMachine({ ...staleMachine, workerTokenHash: 'rotated-hash' });
+
+      expect(await repository.getMachine(staleMachine.id)).toMatchObject({
+        activeLeases: 1,
+        workerTokenHash: 'rotated-hash',
+        leaseReservations: [firstReservation]
+      });
+      expect(await repository.reserveMachineLease(staleMachine.id, secondReservation)).toBe(false);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('reconciles interrupted projections and fences a requeued generation', async () => {
     const { repository, close } = await makeHarness();
     try {

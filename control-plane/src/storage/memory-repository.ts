@@ -108,7 +108,16 @@ export class MemoryRepository implements Repository {
   }
 
   public async saveMachine(machine: Machine): Promise<void> {
-    this.machines.set(machine.id, machine);
+    const current = this.machines.get(machine.id);
+    if (current === undefined) {
+      this.machines.set(machine.id, machine);
+      return;
+    }
+    this.machines.set(machine.id, {
+      ...machine,
+      activeLeases: current.activeLeases,
+      leaseReservations: current.leaseReservations
+    });
   }
 
   public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
