@@ -261,6 +261,62 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('rejects a heartbeat mutation that reaches the claim CAS after lease expiry', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const admittedAt = Date.parse('1999-12-31T23:59:59.999Z');
+      const expiredAt = Date.parse('2000-01-01T00:00:00.000Z');
+      const submitted = baseTask({ id: 'expired-heartbeat-task' });
+      await repository.saveTask(submitted);
+      const claimed = await repository.claimTask({
+        ...submitted,
+        status: 'claimed',
+        workerId: 'worker-a',
+        machineId: 'machine-a',
+        leaseToken: 'lease-a',
+        leaseExpiresAt: '2000-01-01T00:00:00.000Z',
+        claimId: 'claim-a',
+        claimGeneration: 1,
+        taskVersion: 1,
+        claimCommitted: true,
+        claimedAt: '1999-12-31T23:59:50.000Z',
+        updatedAt: '1999-12-31T23:59:50.000Z'
+      }, 0, 0);
+      expect(claimed).toBeDefined();
+
+      const heartbeatRead = deferred();
+      const expiryBarrier = deferred();
+      const renewal = (async () => {
+        const current = (await repository.getTask('expired-heartbeat-task'))!;
+        expect(Date.parse(current.leaseExpiresAt!)).toBeGreaterThan(admittedAt);
+        heartbeatRead.resolve();
+        await expiryBarrier.promise;
+        return repository.replaceTaskForActiveClaim(
+          { ...current, status: 'running', leaseExpiresAt: '2000-01-01T00:01:00.000Z' },
+          {
+            claimId: current.claimId!,
+            claimGeneration: current.claimGeneration!,
+            taskVersion: current.taskVersion!,
+            status: current.status,
+            leaseExpiresAt: current.leaseExpiresAt!
+          },
+          expiredAt
+        );
+      })();
+
+      await heartbeatRead.promise;
+      expiryBarrier.resolve();
+      expect(await renewal).toBe(false);
+      expect(await repository.getTask('expired-heartbeat-task')).toMatchObject({
+        status: 'claimed',
+        leaseExpiresAt: '2000-01-01T00:00:00.000Z',
+        taskVersion: 1
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('reconciles interrupted projections and fences a requeued generation', async () => {
     const { repository, close } = await makeHarness();
     try {

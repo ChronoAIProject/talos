@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -70,6 +70,12 @@ export class MemoryRepository implements Repository {
     ) return false;
     this.tasks.set(task.id, { ...task, taskVersion: guard.taskVersion + 1 });
     return true;
+  }
+
+  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard, observedNow: number): Promise<boolean> {
+    const current = this.tasks.get(task.id);
+    if (current?.leaseExpiresAt !== guard.leaseExpiresAt || !isFutureTimestamp(current.leaseExpiresAt, observedNow)) return false;
+    return this.replaceTaskForClaim(task, guard);
   }
 
   public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean> {

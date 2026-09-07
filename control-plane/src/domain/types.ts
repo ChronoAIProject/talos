@@ -170,6 +170,10 @@ export interface TaskClaimGuard {
   status: TaskStatus;
 }
 
+export interface TaskActiveClaimGuard extends TaskClaimGuard {
+  leaseExpiresAt: string;
+}
+
 export interface MachineLeaseReservation {
   claimId: string;
   claimGeneration: number;

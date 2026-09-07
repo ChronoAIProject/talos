@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -23,6 +23,7 @@ export interface Repository {
   saveTask(task: Task): Promise<void>;
   claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined>;
   replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean>;
+  replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard, observedNow: number): Promise<boolean>;
   replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean>;
   replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean>;
   listClaimReconciliationTasks(limit: number): Promise<readonly Task[]>;

@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -107,6 +107,23 @@ export class MongoRepository implements Repository {
     if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
     const result = await this.tasks.replaceOne(
       { _id: task.id, status: guard.status, claimId: guard.claimId, claimGeneration: guard.claimGeneration, ...taskVersionFilter(guard.taskVersion) },
+      { ...task, taskVersion: guard.taskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+    );
+    return result.matchedCount === 1;
+  }
+
+  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard, _observedNow: number): Promise<boolean> {
+    if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
+    const result = await this.tasks.replaceOne(
+      {
+        _id: task.id,
+        status: guard.status,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        leaseExpiresAt: guard.leaseExpiresAt,
+        ...taskVersionFilter(guard.taskVersion),
+        $expr: afterDatabaseNow('$leaseExpiresAt')
+      },
       { ...task, taskVersion: guard.taskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
     );
     return result.matchedCount === 1;
