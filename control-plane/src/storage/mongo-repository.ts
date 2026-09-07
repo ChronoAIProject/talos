@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
-import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -53,6 +53,9 @@ export class MongoRepository implements Repository {
     await this.client.connect();
     await Promise.all([
       this.tasks.createIndex({ status: 1, queuePriority: 1, createdAt: 1 }),
+      this.tasks.createIndex({ kind: 1, claimId: 1, status: 1, updatedAt: 1 }),
+      this.tasks.createIndex({ kind: 1, status: 1, leaseExpiresAt: 1, updatedAt: 1 }),
+      this.tasks.createIndex({ kind: 1, status: 1, 'constraints.deadline': 1, updatedAt: 1 }),
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
@@ -84,13 +87,81 @@ export class MongoRepository implements Repository {
     await this.tasks.replaceOne({ _id: task.id }, { ...task, _id: task.id, queuePriority: task.queuePriority ?? 0 }, { upsert: true });
   }
 
+  public async claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined> {
+    if (!isValidClaim(task, expectedClaimGeneration, expectedTaskVersion)) return undefined;
+    const document = await this.tasks.findOneAndReplace(
+      {
+        _id: task.id,
+        status: 'submitted',
+        ...claimGenerationFilter(expectedClaimGeneration),
+        ...taskVersionFilter(expectedTaskVersion),
+        $or: [{ claimId: { $exists: false } }, { claimReleased: true }]
+      },
+      { ...task, _id: task.id, queuePriority: task.queuePriority ?? 0 },
+      { returnDocument: 'after' }
+    );
+    return document === null ? undefined : taskFromDocument(document);
+  }
+
+  public async replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean> {
+    if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
+    const result = await this.tasks.replaceOne(
+      { _id: task.id, status: guard.status, claimId: guard.claimId, claimGeneration: guard.claimGeneration, ...taskVersionFilter(guard.taskVersion) },
+      { ...task, taskVersion: guard.taskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+    );
+    return result.matchedCount === 1;
+  }
+
+  public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean> {
+    if ((task.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
+    const result = await this.tasks.replaceOne(
+      { _id: task.id, status: 'submitted', ...claimGenerationFilter(expectedClaimGeneration), ...taskVersionFilter(expectedTaskVersion) },
+      { ...task, taskVersion: expectedTaskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean> {
+    const result = await this.tasks.replaceOne(
+      { _id: task.id, status: expectedStatus, updatedAt: expectedUpdatedAt, claimId: { $exists: false } },
+      { ...task, taskVersion: (task.taskVersion ?? 0) + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+    );
+    return result.matchedCount === 1;
+  }
+
   public async listQueuedTasks(): Promise<readonly Task[]> {
-    const documents = await this.tasks.find({ status: 'submitted' }).sort({ queuePriority: 1, createdAt: 1 }).toArray();
+    const documents = await this.tasks.find({
+      status: 'submitted',
+      $or: [{ claimId: { $exists: false } }, { claimReleased: true }]
+    }).sort({ queuePriority: 1, createdAt: 1 }).toArray();
     return documents.map(taskFromDocument);
   }
 
   public async listTasks(): Promise<readonly Task[]> {
     return (await this.tasks.find({}).toArray()).map(taskFromDocument);
+  }
+
+  public async listExpirableTasks(now: number, limit: number): Promise<readonly Task[]> {
+    const timestamp = new Date(now).toISOString();
+    const documents = await this.tasks.find({
+      kind: { $ne: 'testing' },
+      $or: [
+        { status: 'submitted', 'constraints.deadline': { $lte: timestamp } },
+        { status: { $in: ['claimed', 'running', 'closing'] }, leaseExpiresAt: { $lte: timestamp } }
+      ]
+    }).sort({ updatedAt: 1, _id: 1 }).limit(limit).toArray();
+    return documents.map(taskFromDocument);
+  }
+
+  public async listClaimReconciliationTasks(limit: number): Promise<readonly Task[]> {
+    const documents = await this.tasks.find({
+      kind: { $ne: 'testing' },
+      $or: [
+        { claimId: { $exists: true }, claimReleased: { $ne: true } },
+        { status: { $in: ['claimed', 'running', 'needs_input', 'handoff', 'closing'] } }
+      ]
+    }).sort({ updatedAt: 1, _id: 1 }).limit(limit).toArray();
+    return documents.map(taskFromDocument);
   }
 
   public async getPool(id: string): Promise<Pool | undefined> {
@@ -119,13 +190,99 @@ export class MongoRepository implements Repository {
     await this.machines.replaceOne({ _id: machine.id }, { ...machine, _id: machine.id }, { upsert: true });
   }
 
+  public async rotateMachineToken(machineId: string, expectedTokenHash: string, tokenHash: string): Promise<boolean> {
+    const result = await this.machines.updateOne(
+      { _id: machineId, workerTokenHash: expectedTokenHash },
+      { $set: { workerTokenHash: tokenHash } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const existing = await this.machines.findOne({
+      _id: machineId,
+      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
+    });
+    if (existing !== null) return true;
+    const document = await this.machines.findOneAndUpdate(
+      {
+        _id: machineId,
+        online: true,
+        $expr: { $lt: ['$activeLeases', '$capacity'] },
+        leaseReservations: { $not: { $elemMatch: { claimId: reservation.claimId } } }
+      },
+      { $inc: { activeLeases: 1 }, $push: { leaseReservations: reservation } },
+      { returnDocument: 'after' }
+    );
+    if (document !== null) return true;
+    return await this.machines.findOne({
+      _id: machineId,
+      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
+    }) !== null;
+  }
+
+  public async renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const result = await this.machines.updateOne(
+      { _id: machineId, leaseReservations: { $elemMatch: claimReservationFilter(reservation) } },
+      { $max: { 'leaseReservations.$.expiresAt': reservation.expiresAt } }
+    );
+    return result.matchedCount === 1;
+  }
+
+  public async releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const result = await this.machines.updateOne(
+      { _id: machineId, leaseReservations: { $elemMatch: claimReservationFilter(reservation) } },
+      { $inc: { activeLeases: -1 }, $pull: { leaseReservations: claimReservationFilter(reservation) } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     const document = await this.profiles.findOne({ _id: id });
     return document === null ? undefined : profileFromDocument(document);
   }
 
   public async saveProfile(profile: Profile): Promise<void> {
-    await this.profiles.replaceOne({ _id: profile.id }, { ...profile, _id: profile.id }, { upsert: true });
+    await this.profiles.updateOne({ _id: profile.id }, { $setOnInsert: { ...profile, _id: profile.id } }, { upsert: true });
+  }
+
+  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined> {
+    const document = await this.profiles.findOneAndUpdate(
+      {
+        _id: profileId,
+        userId,
+        $or: [
+          { lockedByClaimId: reservation.claimId, lockedByClaimGeneration: reservation.claimGeneration },
+          { lockedByTaskId: { $exists: false } },
+          { lockExpiresAt: { $exists: false } },
+          { lockExpiresAt: { $lte: new Date(observedNow).toISOString() } }
+        ]
+      },
+      {
+        $set: {
+          machineId,
+          lockedByTaskId: reservation.taskId,
+          lockedByClaimId: reservation.claimId,
+          lockedByClaimGeneration: reservation.claimGeneration
+        },
+        $max: { lockExpiresAt: reservation.expiresAt }
+      },
+      { returnDocument: 'after' }
+    );
+    return document === null ? undefined : profileFromDocument(document);
+  }
+
+
+  public async releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const result = await this.profiles.updateOne(
+      { _id: profileId, lockedByTaskId: reservation.taskId, lockedByClaimId: reservation.claimId, lockedByClaimGeneration: reservation.claimGeneration },
+      { $unset: { lockedByTaskId: '', lockedByClaimId: '', lockedByClaimGeneration: '', lockExpiresAt: '' } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async listProfiles(): Promise<readonly Profile[]> {
+    return (await this.profiles.find({}).toArray()).map(profileFromDocument);
   }
 
   public async listProfilesByUser(userId: string): Promise<readonly Profile[]> {
@@ -387,6 +544,34 @@ export class MongoRepository implements Repository {
     return result.deletedCount === 1;
   }
 }
+
+const isValidClaim = (task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): boolean =>
+  task.kind !== 'testing' &&
+  task.status === 'claimed' &&
+  task.claimId !== undefined &&
+  task.claimGeneration === expectedClaimGeneration + 1 &&
+  task.taskVersion === expectedTaskVersion + 1 &&
+  task.claimGeneration > 0 &&
+  task.workerId !== undefined &&
+  task.machineId !== undefined &&
+  task.leaseToken !== undefined &&
+  task.leaseExpiresAt !== undefined;
+
+const claimGenerationFilter = (expectedClaimGeneration: number) =>
+  expectedClaimGeneration === 0
+    ? { $or: [{ claimGeneration: 0 }, { claimGeneration: { $exists: false } }] }
+    : { claimGeneration: expectedClaimGeneration };
+
+const taskVersionFilter = (expectedTaskVersion: number) =>
+  expectedTaskVersion === 0
+    ? { $or: [{ taskVersion: 0 }, { taskVersion: { $exists: false } }] }
+    : { taskVersion: expectedTaskVersion };
+
+const claimReservationFilter = (reservation: Omit<MachineLeaseReservation, 'expiresAt'>) => ({
+  claimId: reservation.claimId,
+  claimGeneration: reservation.claimGeneration,
+  taskId: reservation.taskId
+});
 
 const withoutId = (document: Document): Record<string, unknown> => {
   return Object.fromEntries(Object.entries(document).filter(([key, value]) => key !== '_id' && value !== null));

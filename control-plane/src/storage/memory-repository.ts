@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -7,6 +7,18 @@ const isFutureTimestamp = (value: string | undefined, observedNow: number): bool
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && parsed > observedNow;
 };
+
+const isValidClaim = (task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): boolean =>
+  task.kind !== 'testing' &&
+  task.status === 'claimed' &&
+  task.claimId !== undefined &&
+  task.claimGeneration === expectedClaimGeneration + 1 &&
+  task.taskVersion === expectedTaskVersion + 1 &&
+  task.claimGeneration > 0 &&
+  task.workerId !== undefined &&
+  task.machineId !== undefined &&
+  task.leaseToken !== undefined &&
+  task.leaseExpiresAt !== undefined;
 
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
@@ -34,9 +46,50 @@ export class MemoryRepository implements Repository {
     this.tasks.set(task.id, task);
   }
 
+  public async claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined> {
+    if (!isValidClaim(task, expectedClaimGeneration, expectedTaskVersion)) return undefined;
+    const current = this.tasks.get(task.id);
+    if (
+      current?.status !== 'submitted' ||
+      (current.claimGeneration ?? 0) !== expectedClaimGeneration ||
+      (current.taskVersion ?? 0) !== expectedTaskVersion ||
+      (current.claimId !== undefined && current.claimReleased !== true)
+    ) return undefined;
+    this.tasks.set(task.id, task);
+    return task;
+  }
+
+  public async replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean> {
+    if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
+    const current = this.tasks.get(task.id);
+    if (
+      current?.claimId !== guard.claimId ||
+      current.claimGeneration !== guard.claimGeneration ||
+      (current.taskVersion ?? 0) !== guard.taskVersion ||
+      current.status !== guard.status
+    ) return false;
+    this.tasks.set(task.id, { ...task, taskVersion: guard.taskVersion + 1 });
+    return true;
+  }
+
+  public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean> {
+    if ((task.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
+    const current = this.tasks.get(task.id);
+    if (current?.status !== 'submitted' || (current.claimGeneration ?? 0) !== expectedClaimGeneration || (current.taskVersion ?? 0) !== expectedTaskVersion) return false;
+    this.tasks.set(task.id, { ...task, taskVersion: expectedTaskVersion + 1 });
+    return true;
+  }
+
+  public async replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean> {
+    const current = this.tasks.get(task.id);
+    if (current?.status !== expectedStatus || current.updatedAt !== expectedUpdatedAt || current.claimId !== undefined) return false;
+    this.tasks.set(task.id, { ...task, taskVersion: (current.taskVersion ?? 0) + 1 });
+    return true;
+  }
+
   public async listQueuedTasks(): Promise<readonly Task[]> {
     return [...this.tasks.values()]
-      .filter((task) => task.status === 'submitted')
+      .filter((task) => task.status === 'submitted' && (task.claimId === undefined || task.claimReleased === true))
       .sort(
         (a, b) =>
           (a.queuePriority ?? 0) - (b.queuePriority ?? 0) ||
@@ -45,6 +98,23 @@ export class MemoryRepository implements Repository {
   }
   public async listTasks(): Promise<readonly Task[]> {
     return [...this.tasks.values()];
+  }
+
+  public async listExpirableTasks(now: number, limit: number): Promise<readonly Task[]> {
+    return [...this.tasks.values()]
+      .filter((task) => task.kind !== 'testing' && (
+        (task.status === 'submitted' && task.constraints.deadline !== undefined && Date.parse(task.constraints.deadline) <= now) ||
+        (['claimed', 'running', 'closing'].includes(task.status) && task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= now)
+      ))
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .slice(0, limit);
+  }
+
+  public async listClaimReconciliationTasks(limit: number): Promise<readonly Task[]> {
+    return [...this.tasks.values()]
+      .filter((task) => task.kind !== 'testing' && ((task.claimId !== undefined && task.claimReleased !== true) || ['claimed', 'running', 'needs_input', 'handoff', 'closing'].includes(task.status)))
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .slice(0, limit);
   }
 
   public async getPool(id: string): Promise<Pool | undefined> {
@@ -72,12 +142,100 @@ export class MemoryRepository implements Repository {
     this.machines.set(machine.id, machine);
   }
 
+  public async rotateMachineToken(machineId: string, expectedTokenHash: string, tokenHash: string): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined || machine.workerTokenHash !== expectedTokenHash) return false;
+    this.machines.set(machineId, { ...machine, workerTokenHash: tokenHash });
+    return true;
+  }
+
+  public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    if (reservations.some((entry) => entry.claimId === reservation.claimId && entry.claimGeneration === reservation.claimGeneration)) return true;
+    if (!machine.online || machine.activeLeases >= machine.capacity) return false;
+    this.machines.set(machineId, {
+      ...machine,
+      activeLeases: machine.activeLeases + 1,
+      leaseReservations: [...reservations, reservation]
+    });
+    return true;
+  }
+
+  public async renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    const index = reservations.findIndex((entry) => entry.claimId === reservation.claimId && entry.claimGeneration === reservation.claimGeneration && entry.taskId === reservation.taskId);
+    if (index < 0) return false;
+    const next = [...reservations];
+    const current = next[index]!;
+    next[index] = Date.parse(current.expiresAt) >= Date.parse(reservation.expiresAt) ? current : reservation;
+    this.machines.set(machineId, { ...machine, leaseReservations: next });
+    return true;
+  }
+
+  public async releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const reservations = machine.leaseReservations ?? [];
+    const next = reservations.filter((entry) => !(
+      entry.claimId === reservation.claimId &&
+      entry.claimGeneration === reservation.claimGeneration &&
+      entry.taskId === reservation.taskId
+    ));
+    if (next.length === reservations.length) return false;
+    this.machines.set(machineId, { ...machine, activeLeases: machine.activeLeases - 1, leaseReservations: next });
+    return true;
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     return this.profiles.get(id);
   }
 
   public async saveProfile(profile: Profile): Promise<void> {
-    this.profiles.set(profile.id, profile);
+    if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+  }
+
+  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined> {
+    const profile = this.profiles.get(profileId);
+    if (profile === undefined || profile.userId !== userId) return undefined;
+    const sameClaim = profile.lockedByClaimId === reservation.claimId && profile.lockedByClaimGeneration === reservation.claimGeneration;
+    const expired = profile.lockExpiresAt === undefined || Date.parse(profile.lockExpiresAt) <= observedNow;
+    if (!sameClaim && profile.lockedByTaskId !== undefined && !expired) return undefined;
+    const updated: Profile = {
+      ...profile,
+      machineId,
+      lockedByTaskId: reservation.taskId,
+      lockedByClaimId: reservation.claimId,
+      lockedByClaimGeneration: reservation.claimGeneration,
+      lockExpiresAt: sameClaim && Date.parse(profile.lockExpiresAt ?? '') >= Date.parse(reservation.expiresAt)
+        ? profile.lockExpiresAt
+        : reservation.expiresAt
+    };
+    this.profiles.set(profileId, updated);
+    return updated;
+  }
+
+
+  public async releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const profile = this.profiles.get(profileId);
+    if (
+      profile?.lockedByTaskId !== reservation.taskId ||
+      profile.lockedByClaimId !== reservation.claimId ||
+      profile.lockedByClaimGeneration !== reservation.claimGeneration
+    ) return false;
+    this.profiles.set(profileId, {
+      id: profile.id,
+      userId: profile.userId,
+      ...(profile.machineId === undefined ? {} : { machineId: profile.machineId })
+    });
+    return true;
+  }
+
+  public async listProfiles(): Promise<readonly Profile[]> {
+    return [...this.profiles.values()];
   }
 
   public async listProfilesByUser(userId: string): Promise<readonly Profile[]> {

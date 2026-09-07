@@ -65,6 +65,12 @@ interface TaskBase {
   claimedAt?: string;
   leaseExpiresAt?: string;
   leaseToken?: string;
+  claimId?: string;
+  claimGeneration?: number;
+  taskVersion?: number;
+  claimCommitted?: boolean;
+  claimReleased?: boolean;
+  claimQueuePriority?: number;
   workerId?: string;
   machineId?: string;
   findings: readonly TaskFinding[];
@@ -142,6 +148,7 @@ export interface Machine {
   tags: Readonly<Record<string, string | boolean>>;
   capacity: number;
   activeLeases: number;
+  leaseReservations?: readonly MachineLeaseReservation[];
   online: boolean;
   workerTokenHash: string;
 }
@@ -151,7 +158,23 @@ export interface Profile {
   userId: string;
   machineId?: string;
   lockedByTaskId?: string;
+  lockedByClaimId?: string;
+  lockedByClaimGeneration?: number;
   lockExpiresAt?: string;
+}
+
+export interface TaskClaimGuard {
+  claimId: string;
+  claimGeneration: number;
+  taskVersion: number;
+  status: TaskStatus;
+}
+
+export interface MachineLeaseReservation {
+  claimId: string;
+  claimGeneration: number;
+  taskId: string;
+  expiresAt: string;
 }
 
 export interface HandoffLink {

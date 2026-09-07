@@ -41,6 +41,8 @@ describe('task service', () => {
     const publicTask = service.toPublicTask((await repository.getTask(task.id))!);
     expect(publicTask).not.toHaveProperty('input');
     expect(publicTask).not.toHaveProperty('leaseToken');
+    expect(publicTask).not.toHaveProperty('claimId');
+    expect(publicTask).not.toHaveProperty('claimGeneration');
     expect(publicTask).not.toHaveProperty('workerId');
     expect(publicTask).not.toHaveProperty('machineId');
     expect(publicTask).not.toHaveProperty('leaseExpiresAt');

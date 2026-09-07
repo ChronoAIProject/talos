@@ -217,7 +217,9 @@ const route = async (
     await assertPoolOwner(repository, machine.poolId, userId);
     selfRotateMachineSchema.parse(await readBody(request, options.maxBodyBytes));
     const workerToken = issueWorkerToken();
-    await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(workerToken) });
+    if (!await repository.rotateMachineToken(machine.id, machine.workerTokenHash, hashWorkerToken(workerToken))) {
+      throw conflict('machine token changed concurrently');
+    }
     return send(response, 200, { id: machine.id, rotated: true, worker_token: workerToken });
   }
   if (parts[1] === 'profiles' && parts.length === 2 && method === 'POST') {
@@ -385,7 +387,9 @@ const adminRoute = async (
     const machine = await repository.getMachine(parts[3]);
     if (machine === undefined) throw notFound('machine not found');
     const workerToken = input.worker_token ?? issueWorkerToken();
-    await repository.saveMachine({ ...machine, workerTokenHash: hashWorkerToken(workerToken) });
+    if (!await repository.rotateMachineToken(machine.id, machine.workerTokenHash, hashWorkerToken(workerToken))) {
+      throw conflict('machine token changed concurrently');
+    }
     return send(response, 200, { id: machine.id, rotated: true, worker_token: workerToken });
   }
   if (parts[2] === 'machines') {
