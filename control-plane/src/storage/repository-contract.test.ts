@@ -227,12 +227,34 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     try {
       await repository.saveProfile({ id: 'profile-insert', userId: 'user-1' });
       const reservation = { taskId: 'task-a', claimId: 'claim-a', claimGeneration: 1, expiresAt: '2026-09-07T12:01:00.000Z' };
-      expect(await repository.acquireProfileLease('profile-insert', 'user-1', 'machine-a', reservation, 0)).toBeDefined();
+      expect(await repository.acquireProfileLease('profile-insert', 'user-1', 'machine-a', reservation)).toBeDefined();
       await repository.saveProfile({ id: 'profile-insert', userId: 'user-1', machineId: 'machine-b' });
       expect(await repository.getProfile('profile-insert')).toMatchObject({
         machineId: 'machine-a',
         lockedByTaskId: 'task-a',
         lockedByClaimId: 'claim-a'
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('uses repository time for profile lease takeover', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const now = Date.now();
+      await repository.saveProfile({ id: 'profile-active', userId: 'user-1' });
+      await repository.saveProfile({ id: 'profile-expired', userId: 'user-1' });
+      const active = { taskId: 'task-active', claimId: 'claim-active', claimGeneration: 1, expiresAt: new Date(now + 60_000).toISOString() };
+      const expired = { taskId: 'task-expired', claimId: 'claim-expired', claimGeneration: 1, expiresAt: new Date(now - 60_000).toISOString() };
+      const takeover = { taskId: 'task-new', claimId: 'claim-new', claimGeneration: 1, expiresAt: new Date(now + 120_000).toISOString() };
+
+      expect(await repository.acquireProfileLease('profile-active', 'user-1', 'machine-a', active)).toBeDefined();
+      expect(await repository.acquireProfileLease('profile-active', 'user-1', 'machine-b', takeover)).toBeUndefined();
+      expect(await repository.acquireProfileLease('profile-expired', 'user-1', 'machine-a', expired)).toBeDefined();
+      expect(await repository.acquireProfileLease('profile-expired', 'user-1', 'machine-b', takeover)).toMatchObject({
+        machineId: 'machine-b',
+        lockedByClaimId: 'claim-new'
       });
     } finally {
       await close();

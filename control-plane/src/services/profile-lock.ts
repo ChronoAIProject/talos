@@ -16,10 +16,9 @@ export class ProfileLockService {
     profileId: string,
     userId: string,
     machineId: string,
-    reservation: MachineLeaseReservation,
-    now = Date.now()
+    reservation: MachineLeaseReservation
   ): Promise<Profile> {
-    const profile = await this.repository.acquireProfileLease(profileId, userId, machineId, reservation, now);
+    const profile = await this.repository.acquireProfileLease(profileId, userId, machineId, reservation);
     if (profile === undefined) throw conflict('profile already has an active session');
     return profile;
   }

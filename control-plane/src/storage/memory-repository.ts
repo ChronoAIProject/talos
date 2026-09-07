@@ -206,11 +206,11 @@ export class MemoryRepository implements Repository {
     if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
   }
 
-  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined> {
+  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined> {
     const profile = this.profiles.get(profileId);
     if (profile === undefined || profile.userId !== userId) return undefined;
     const sameClaim = profile.lockedByClaimId === reservation.claimId && profile.lockedByClaimGeneration === reservation.claimGeneration;
-    const expired = profile.lockExpiresAt === undefined || Date.parse(profile.lockExpiresAt) <= observedNow;
+    const expired = profile.lockExpiresAt === undefined || Date.parse(profile.lockExpiresAt) <= this.clock();
     if (!sameClaim && profile.lockedByTaskId !== undefined && !expired) return undefined;
     const updated: Profile = {
       ...profile,

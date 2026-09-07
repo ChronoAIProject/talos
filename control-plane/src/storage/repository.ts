@@ -42,7 +42,7 @@ export interface Repository {
   releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
   getProfile(id: string): Promise<Profile | undefined>;
   saveProfile(profile: Profile): Promise<void>;
-  acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined>;
+  acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined>;
   releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
   listProfiles(): Promise<readonly Profile[]>;
   listProfilesByUser(userId: string): Promise<readonly Profile[]>;

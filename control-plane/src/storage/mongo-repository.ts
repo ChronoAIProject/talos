@@ -13,6 +13,10 @@ const afterDatabaseNow = (input: unknown): Readonly<Record<string, unknown>> => 
   $gt: [mongoDate(input), '$$NOW']
 });
 
+const atOrBeforeDatabaseNow = (input: unknown): Readonly<Record<string, unknown>> => ({
+  $lte: [mongoDate(input), '$$NOW']
+});
+
 export interface MongoRepositoryOptions {
   client?: MongoClient;
   clientOptions?: MongoClientOptions;
@@ -263,7 +267,7 @@ export class MongoRepository implements Repository {
     await this.profiles.updateOne({ _id: profile.id }, { $setOnInsert: { ...profile, _id: profile.id } }, { upsert: true });
   }
 
-  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation, observedNow: number): Promise<Profile | undefined> {
+  public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined> {
     const document = await this.profiles.findOneAndUpdate(
       {
         _id: profileId,
@@ -272,7 +276,7 @@ export class MongoRepository implements Repository {
           { lockedByClaimId: reservation.claimId, lockedByClaimGeneration: reservation.claimGeneration },
           { lockedByTaskId: { $exists: false } },
           { lockExpiresAt: { $exists: false } },
-          { lockExpiresAt: { $lte: new Date(observedNow).toISOString() } }
+          { $expr: atOrBeforeDatabaseNow('$lockExpiresAt') }
         ]
       },
       {

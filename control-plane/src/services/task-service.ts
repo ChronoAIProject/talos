@@ -119,7 +119,7 @@ export class TaskService {
         };
         const claimed = await this.repository.claimTask(task, candidate.claimGeneration ?? 0, candidate.taskVersion ?? 0);
         if (claimed === undefined) continue;
-        if (!await this.ensureClaimProjections(claimed, now)) {
+        if (!await this.ensureClaimProjections(claimed)) {
           await this.abortClaim(claimed, now);
           continue;
         }
@@ -148,7 +148,7 @@ export class TaskService {
       leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString()
     };
     const persisted = await this.replaceActiveClaimedTask(task, updated);
-    if (!await this.ensureClaimProjections(persisted, now)) {
+    if (!await this.ensureClaimProjections(persisted)) {
       if (persisted.claimCommitted !== true) await this.abortClaim(persisted, now);
       throw conflict('lease accounting could not be renewed');
     }
@@ -197,7 +197,7 @@ export class TaskService {
     };
     if (task.workerId !== undefined) {
       await this.replaceClaimedTask(task, updated);
-      if (!await this.ensureClaimProjections(updated, now)) throw conflict('lease accounting could not be renewed');
+      if (!await this.ensureClaimProjections(updated)) throw conflict('lease accounting could not be renewed');
     } else if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0, task.taskVersion ?? 0)) {
       throw conflict('task state changed concurrently');
     }
@@ -350,7 +350,7 @@ export class TaskService {
         if (task.claimId === undefined || task.claimGeneration === undefined) {
           await this.requeueLegacyClaim(task, now);
         } else if (this.isActiveClaim(task)) {
-          const projectionsReady = await this.ensureClaimProjections(task, now);
+          const projectionsReady = await this.ensureClaimProjections(task);
           if (!projectionsReady && task.claimCommitted !== true) await this.abortClaim(task, now);
           else if (projectionsReady && task.claimCommitted !== true) await this.replaceClaimedTask(task, { ...task, claimCommitted: true });
         } else {
@@ -468,7 +468,7 @@ export class TaskService {
     };
   }
 
-  private async ensureClaimProjections(task: Task, now: number): Promise<boolean> {
+  private async ensureClaimProjections(task: Task): Promise<boolean> {
     if (task.machineId === undefined) return false;
     const requested = this.reservation(task);
     const authoritative = await this.repository.getTask(task.id);
@@ -478,7 +478,7 @@ export class TaskService {
     await this.repository.renewMachineLease(task.machineId, reservation);
     if (task.profileId !== undefined) {
       try {
-        await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation, now);
+        await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation);
       } catch (error) {
         await this.repository.releaseMachineLease(task.machineId, reservation);
         if (error instanceof TalosError && error.code === 'conflict') return false;
