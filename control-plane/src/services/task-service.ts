@@ -477,12 +477,9 @@ export class TaskService {
     if (!await this.repository.reserveMachineLease(task.machineId, reservation)) return false;
     await this.repository.renewMachineLease(task.machineId, reservation);
     if (task.profileId !== undefined) {
-      try {
-        await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation);
-      } catch (error) {
+      if (!await this.acquireProfileProjection(task, reservation)) {
         await this.repository.releaseMachineLease(task.machineId, reservation);
-        if (error instanceof TalosError && error.code === 'conflict') return false;
-        throw error;
+        return false;
       }
     }
     const committed = await this.repository.getTask(task.id);
@@ -490,6 +487,55 @@ export class TaskService {
     await this.repository.releaseMachineLease(task.machineId, reservation);
     if (task.profileId !== undefined) await this.profiles.release(task.profileId, reservation);
     return false;
+  }
+
+  private async acquireProfileProjection(task: Task, reservation: MachineLeaseReservation): Promise<boolean> {
+    if (task.profileId === undefined || task.machineId === undefined) return false;
+    try {
+      await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation);
+      return true;
+    } catch (error) {
+      if (!(error instanceof TalosError) || error.code !== 'conflict') throw error;
+    }
+
+    const profile = await this.repository.getProfile(task.profileId);
+    if (
+      profile?.lockedByTaskId === undefined ||
+      profile.lockedByClaimId === undefined ||
+      profile.lockedByClaimGeneration === undefined
+    ) return false;
+    const previous = await this.repository.getTask(profile.lockedByTaskId);
+    if (
+      previous === undefined ||
+      previous.kind === 'testing' ||
+      previous.profileId !== task.profileId ||
+      previous.claimId !== profile.lockedByClaimId ||
+      previous.claimGeneration !== profile.lockedByClaimGeneration ||
+      previous.leaseExpiresAt === undefined ||
+      !['claimed', 'running'].includes(previous.status)
+    ) return false;
+    const requeued: Task = {
+      ...previous,
+      status: 'submitted',
+      updatedAt: new Date(this.clock()).toISOString(),
+      leaseExpiresAt: undefined,
+      leaseToken: undefined,
+      workerId: undefined,
+      queuePriority: -1
+    };
+    if (!await this.repository.replaceTaskForExpiredClaim(requeued, {
+      ...this.claimGuard(previous),
+      leaseExpiresAt: previous.leaseExpiresAt
+    })) return false;
+    if (previous.interaction === 'interactive') await this.repository.requeueSessionAction(previous.id);
+    await this.releaseLease(previous);
+    try {
+      await this.profiles.acquire(task.profileId, task.userId, task.machineId, reservation);
+      return true;
+    } catch (error) {
+      if (error instanceof TalosError && error.code === 'conflict') return false;
+      throw error;
+    }
   }
 
   private async verifyClaimProjections(task: Task): Promise<boolean> {

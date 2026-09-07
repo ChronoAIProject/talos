@@ -80,6 +80,12 @@ export class MemoryRepository implements Repository {
     return this.replaceTaskForClaim(task, guard);
   }
 
+  public async replaceTaskForExpiredClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean> {
+    const current = this.tasks.get(task.id);
+    if (current?.leaseExpiresAt !== guard.leaseExpiresAt || isFutureTimestamp(current.leaseExpiresAt, this.clock())) return false;
+    return this.replaceTaskForClaim(task, guard);
+  }
+
   public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean> {
     if ((task.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
     const current = this.tasks.get(task.id);
@@ -210,8 +216,7 @@ export class MemoryRepository implements Repository {
     const profile = this.profiles.get(profileId);
     if (profile === undefined || profile.userId !== userId) return undefined;
     const sameClaim = profile.lockedByClaimId === reservation.claimId && profile.lockedByClaimGeneration === reservation.claimGeneration;
-    const expired = profile.lockExpiresAt === undefined || Date.parse(profile.lockExpiresAt) <= this.clock();
-    if (!sameClaim && profile.lockedByTaskId !== undefined && !expired) return undefined;
+    if (!sameClaim && profile.lockedByTaskId !== undefined) return undefined;
     const updated: Profile = {
       ...profile,
       machineId,

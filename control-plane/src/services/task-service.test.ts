@@ -76,6 +76,56 @@ describe('task service', () => {
     });
   });
 
+  it('does not take over a stale profile projection while its task renewal is authoritative', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    let renewalCommitted!: () => void;
+    let resumeHeartbeat!: () => void;
+    const renewalCommit = new Promise<void>((resolve) => { renewalCommitted = resolve; });
+    const heartbeatResume = new Promise<void>((resolve) => { resumeHeartbeat = resolve; });
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (task: Parameters<Repository['replaceTaskForActiveClaim']>[0], guard: Parameters<Repository['replaceTaskForActiveClaim']>[1]) => {
+            const replaced = await target.replaceTaskForActiveClaim(task, guard);
+            renewalCommitted();
+            await heartbeatResume;
+            return replaced;
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await repository.saveProfile({ id: 'renewal-profile', userId: 'user-a' });
+    await repository.savePool({ id: 'renewal-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'renewal-machine', poolId: 'renewal-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const first = await service.createTask('user-a', { kind: 'browse', goal: 'first', profile_id: 'renewal-profile' });
+    await service.createTask('user-a', { kind: 'browse', goal: 'second', profile_id: 'renewal-profile' });
+    const claim = await service.claim('worker-a', 'renewal-machine');
+
+    const heartbeat = service.heartbeat(first.id, 'worker-a', claim.leaseToken, 30);
+    await renewalCommit;
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    try {
+      await expect(service.claim('worker-b', 'renewal-machine')).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      resumeHeartbeat();
+    }
+    await expect(heartbeat).resolves.toMatchObject({ status: 'running' });
+    expect(await repository.getProfile('renewal-profile')).toMatchObject({
+      lockedByTaskId: first.id,
+      lockedByClaimId: claim.task.claimId
+    });
+  });
+
   it('redacts private input and scheduling fields from public tasks', async () => {
     const { repository, service } = setup();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });

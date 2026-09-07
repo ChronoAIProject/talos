@@ -133,6 +133,23 @@ export class MongoRepository implements Repository {
     return result.matchedCount === 1;
   }
 
+  public async replaceTaskForExpiredClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean> {
+    if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
+    const result = await this.tasks.replaceOne(
+      {
+        _id: task.id,
+        status: guard.status,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        leaseExpiresAt: guard.leaseExpiresAt,
+        ...taskVersionFilter(guard.taskVersion),
+        $expr: atOrBeforeDatabaseNow('$leaseExpiresAt')
+      },
+      { ...task, taskVersion: guard.taskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+    );
+    return result.matchedCount === 1;
+  }
+
   public async replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean> {
     if ((task.claimGeneration ?? 0) !== expectedClaimGeneration) return false;
     const result = await this.tasks.replaceOne(
@@ -274,9 +291,7 @@ export class MongoRepository implements Repository {
         userId,
         $or: [
           { lockedByClaimId: reservation.claimId, lockedByClaimGeneration: reservation.claimGeneration },
-          { lockedByTaskId: { $exists: false } },
-          { lockExpiresAt: { $exists: false } },
-          { $expr: atOrBeforeDatabaseNow('$lockExpiresAt') }
+          { lockedByTaskId: { $exists: false } }
         ]
       },
       {

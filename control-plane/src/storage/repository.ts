@@ -24,6 +24,7 @@ export interface Repository {
   claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined>;
   replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean>;
   replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean>;
+  replaceTaskForExpiredClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean>;
   replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean>;
   replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean>;
   listClaimReconciliationTasks(limit: number): Promise<readonly Task[]>;

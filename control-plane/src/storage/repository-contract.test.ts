@@ -239,22 +239,131 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
-  it('uses repository time for profile lease takeover', async () => {
+  it('serializes profile takeover after authoritative task expiry', async () => {
     const { repository, close } = await makeHarness();
     try {
       const now = Date.now();
-      await repository.saveProfile({ id: 'profile-active', userId: 'user-1' });
-      await repository.saveProfile({ id: 'profile-expired', userId: 'user-1' });
-      const active = { taskId: 'task-active', claimId: 'claim-active', claimGeneration: 1, expiresAt: new Date(now + 60_000).toISOString() };
-      const expired = { taskId: 'task-expired', claimId: 'claim-expired', claimGeneration: 1, expiresAt: new Date(now - 60_000).toISOString() };
+      await repository.saveProfile({ id: 'profile-renewing', userId: 'user-1' });
+      const submitted = baseTask({ id: 'task-renewing', profileId: 'profile-renewing' });
+      await repository.saveTask(submitted);
+      const active = (await repository.claimTask({
+        ...submitted,
+        status: 'claimed',
+        workerId: 'worker-active',
+        machineId: 'machine-a',
+        leaseToken: 'lease-active',
+        leaseExpiresAt: new Date(now + 60_000).toISOString(),
+        claimId: 'claim-active',
+        claimGeneration: 1,
+        taskVersion: 1,
+        claimCommitted: true,
+        claimedAt: new Date(now - 60_000).toISOString(),
+        updatedAt: new Date(now - 60_000).toISOString()
+      }, 0, 0))!;
+      const staleProjection = {
+        taskId: active.id,
+        claimId: active.claimId!,
+        claimGeneration: active.claimGeneration!,
+        expiresAt: new Date(now - 60_000).toISOString()
+      };
       const takeover = { taskId: 'task-new', claimId: 'claim-new', claimGeneration: 1, expiresAt: new Date(now + 120_000).toISOString() };
+      expect(await repository.acquireProfileLease('profile-renewing', 'user-1', 'machine-a', staleProjection)).toBeDefined();
 
-      expect(await repository.acquireProfileLease('profile-active', 'user-1', 'machine-a', active)).toBeDefined();
-      expect(await repository.acquireProfileLease('profile-active', 'user-1', 'machine-b', takeover)).toBeUndefined();
-      expect(await repository.acquireProfileLease('profile-expired', 'user-1', 'machine-a', expired)).toBeDefined();
-      expect(await repository.acquireProfileLease('profile-expired', 'user-1', 'machine-b', takeover)).toMatchObject({
-        machineId: 'machine-b',
-        lockedByClaimId: 'claim-new'
+      const renewedDeadline = new Date(now + 180_000).toISOString();
+      const renewalCommitted = deferred();
+      const releaseRenewal = deferred();
+      const renewal = (async () => {
+        const result = await repository.replaceTaskForActiveClaim(
+          { ...active, status: 'running', leaseExpiresAt: renewedDeadline },
+          {
+            claimId: active.claimId!,
+            claimGeneration: active.claimGeneration!,
+            taskVersion: active.taskVersion!,
+            status: active.status,
+            leaseExpiresAt: active.leaseExpiresAt!
+          }
+        );
+        renewalCommitted.resolve();
+        await releaseRenewal.promise;
+        return result;
+      })();
+
+      await renewalCommitted.promise;
+      try {
+        expect(await repository.acquireProfileLease('profile-renewing', 'user-1', 'machine-b', takeover)).toBeUndefined();
+        const renewed = (await repository.getTask(active.id))!;
+        expect(await repository.replaceTaskForExpiredClaim({
+          ...renewed,
+          status: 'submitted',
+          leaseExpiresAt: undefined,
+          leaseToken: undefined,
+          workerId: undefined,
+          queuePriority: -1
+        }, {
+          claimId: renewed.claimId!,
+          claimGeneration: renewed.claimGeneration!,
+          taskVersion: renewed.taskVersion!,
+          status: renewed.status,
+          leaseExpiresAt: renewed.leaseExpiresAt!
+        })).toBe(false);
+        expect(await repository.getProfile('profile-renewing')).toMatchObject({
+          lockedByTaskId: active.id,
+          lockedByClaimId: active.claimId
+        });
+      } finally {
+        releaseRenewal.resolve();
+      }
+      expect(await renewal).toBe(true);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('takes over a profile only after requeueing its expired task generation', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'takeover-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'takeover-machine', poolId: 'takeover-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+      await repository.saveProfile({ id: 'takeover-profile', userId: 'user-1' });
+      const previous = baseTask({ id: 'takeover-previous', profileId: 'takeover-profile' });
+      await repository.saveTask(previous);
+      const expired = (await repository.claimTask({
+        ...previous,
+        status: 'claimed',
+        workerId: 'worker-previous',
+        machineId: 'takeover-machine',
+        leaseToken: 'lease-previous',
+        leaseExpiresAt: '2000-01-01T00:00:00.000Z',
+        claimId: 'claim-previous',
+        claimGeneration: 1,
+        taskVersion: 1,
+        claimCommitted: true,
+        claimedAt: '1999-12-31T23:59:00.000Z',
+        updatedAt: '1999-12-31T23:59:00.000Z'
+      }, 0, 0))!;
+      const expiredReservation = {
+        taskId: expired.id,
+        claimId: expired.claimId!,
+        claimGeneration: expired.claimGeneration!,
+        expiresAt: expired.leaseExpiresAt!
+      };
+      expect(await repository.reserveMachineLease('takeover-machine', expiredReservation)).toBe(true);
+      expect(await repository.acquireProfileLease('takeover-profile', 'user-1', 'takeover-machine', expiredReservation)).toBeDefined();
+      await repository.saveTask(baseTask({ id: 'takeover-next', profileId: 'takeover-profile', createdAt: new Date(clock.value).toISOString(), updatedAt: new Date(clock.value).toISOString() }));
+
+      const claimed = await taskService(repository, clock).claim('worker-next', 'takeover-machine', clock.value);
+      expect(claimed.task.id).toBe('takeover-next');
+      expect(await repository.getTask(expired.id)).toMatchObject({
+        status: 'submitted',
+        claimReleased: true,
+        workerId: undefined,
+        leaseExpiresAt: undefined
+      });
+      expect(await repository.getMachine('takeover-machine')).toMatchObject({ activeLeases: 1 });
+      expect(await repository.getProfile('takeover-profile')).toMatchObject({
+        lockedByTaskId: claimed.task.id,
+        lockedByClaimId: claimed.task.claimId
       });
     } finally {
       await close();
