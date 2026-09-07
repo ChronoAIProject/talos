@@ -326,7 +326,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       await repository.savePool({ id: 'takeover-pool', visibility: 'platform', tags: {} });
       await repository.saveMachine({ id: 'takeover-machine', poolId: 'takeover-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
       await repository.saveProfile({ id: 'takeover-profile', userId: 'user-1' });
-      const previous = baseTask({ id: 'takeover-previous', profileId: 'takeover-profile' });
+      const previous = baseTask({ id: 'takeover-previous', profileId: 'takeover-profile', queuePriority: 7 });
       await repository.saveTask(previous);
       const expired = (await repository.claimTask({
         ...previous,
@@ -339,6 +339,8 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         claimGeneration: 1,
         taskVersion: 1,
         claimCommitted: true,
+        claimQueuePriority: previous.queuePriority,
+        queuePriority: undefined,
         claimedAt: '1999-12-31T23:59:00.000Z',
         updatedAt: '1999-12-31T23:59:00.000Z'
       }, 0, 0))!;
@@ -358,7 +360,9 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         status: 'submitted',
         claimReleased: true,
         workerId: undefined,
-        leaseExpiresAt: undefined
+        leaseExpiresAt: undefined,
+        queuePriority: previous.queuePriority,
+        claimQueuePriority: undefined
       });
       expect(await repository.getMachine('takeover-machine')).toMatchObject({ activeLeases: 1 });
       expect(await repository.getProfile('takeover-profile')).toMatchObject({

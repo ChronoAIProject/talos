@@ -521,7 +521,8 @@ export class TaskService {
       leaseExpiresAt: undefined,
       leaseToken: undefined,
       workerId: undefined,
-      queuePriority: -1
+      queuePriority: previous.claimQueuePriority,
+      claimQueuePriority: undefined
     };
     if (!await this.repository.replaceTaskForExpiredClaim(requeued, {
       ...this.claimGuard(previous),
