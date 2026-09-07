@@ -6,10 +6,11 @@ import { Scheduler } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { WebhookSigner } from './webhook-signer.js';
 import type { Task } from '../domain/types.js';
+import type { Repository } from '../storage/repository.js';
 import { computeTestingTaskPayloadDigest, testingTaskSchema } from '@talos/testing-protocol';
 
 const setup = (clock: { value: number } = { value: Date.now() }) => {
-  const repository = new MemoryRepository();
+  const repository = new MemoryRepository(() => clock.value);
   const profiles = new ProfileLockService(repository);
   const scheduler = new Scheduler(repository);
   const service = new TaskService(repository, scheduler, profiles, new WebhookSigner('test-webhook-secret'), { clock: () => clock.value, leaseSeconds: 10 });
@@ -28,6 +29,51 @@ describe('task service', () => {
     const completed = await service.complete(task.id, 'worker-a', claim.leaseToken, 'completed', [{ key: 'count', value: 2 }]);
     expect(completed.status).toBe('completed');
     await expect(service.getTask(task.id, 'user-b')).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('rejects heartbeat when its claim CAS resumes after lease expiry', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    let reachClaimCas!: () => void;
+    let resumeClaimCas!: () => void;
+    const claimCasReached = new Promise<void>((resolve) => { reachClaimCas = resolve; });
+    const claimCasResume = new Promise<void>((resolve) => { resumeClaimCas = resolve; });
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (task: Parameters<Repository['replaceTaskForActiveClaim']>[0], guard: Parameters<Repository['replaceTaskForActiveClaim']>[1]) => {
+            reachClaimCas();
+            await claimCasResume;
+            return target.replaceTaskForActiveClaim(task, guard);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await repository.savePool({ id: 'expiry-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'expiry-machine', poolId: 'expiry-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'expiry race' });
+    const claim = await service.claim('worker-a', 'expiry-machine');
+
+    const heartbeat = service.heartbeat(task.id, 'worker-a', claim.leaseToken, 30);
+    await claimCasReached;
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    resumeClaimCas();
+
+    await expect(heartbeat).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(await repository.getTask(task.id)).toMatchObject({
+      status: 'claimed',
+      leaseExpiresAt: claim.task.leaseExpiresAt,
+      taskVersion: claim.task.taskVersion
+    });
   });
 
   it('redacts private input and scheduling fields from public tasks', async () => {

@@ -265,7 +265,6 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     const { repository, close } = await makeHarness();
     try {
       const admittedAt = Date.parse('1999-12-31T23:59:59.999Z');
-      const expiredAt = Date.parse('2000-01-01T00:00:00.000Z');
       const submitted = baseTask({ id: 'expired-heartbeat-task' });
       await repository.saveTask(submitted);
       const claimed = await repository.claimTask({
@@ -299,8 +298,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
             taskVersion: current.taskVersion!,
             status: current.status,
             leaseExpiresAt: current.leaseExpiresAt!
-          },
-          expiredAt
+          }
         );
       })();
 

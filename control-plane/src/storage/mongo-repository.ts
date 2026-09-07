@@ -112,7 +112,7 @@ export class MongoRepository implements Repository {
     return result.matchedCount === 1;
   }
 
-  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard, _observedNow: number): Promise<boolean> {
+  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean> {
     if (task.claimId !== guard.claimId || task.claimGeneration !== guard.claimGeneration) return false;
     const result = await this.tasks.replaceOne(
       {

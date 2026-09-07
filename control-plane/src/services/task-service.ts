@@ -147,7 +147,7 @@ export class TaskService {
       updatedAt: new Date(now).toISOString(),
       leaseExpiresAt: new Date(now + extendSeconds * 1000).toISOString()
     };
-    const persisted = await this.replaceActiveClaimedTask(task, updated, now);
+    const persisted = await this.replaceActiveClaimedTask(task, updated);
     if (!await this.ensureClaimProjections(persisted, now)) {
       if (persisted.claimCommitted !== true) await this.abortClaim(persisted, now);
       throw conflict('lease accounting could not be renewed');
@@ -435,10 +435,10 @@ export class TaskService {
     return persisted;
   }
 
-  private async replaceActiveClaimedTask(current: Task, updated: Task, observedNow: number): Promise<Task> {
+  private async replaceActiveClaimedTask(current: Task, updated: Task): Promise<Task> {
     const guard = this.claimGuard(current);
     if (current.leaseExpiresAt === undefined) throw unauthorized('lease generation is no longer active');
-    if (!await this.repository.replaceTaskForActiveClaim(updated, { ...guard, leaseExpiresAt: current.leaseExpiresAt }, observedNow)) {
+    if (!await this.repository.replaceTaskForActiveClaim(updated, { ...guard, leaseExpiresAt: current.leaseExpiresAt })) {
       throw unauthorized('lease generation is no longer active');
     }
     const persisted = await this.repository.getTask(current.id);

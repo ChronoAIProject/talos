@@ -34,6 +34,8 @@ export class MemoryRepository implements Repository {
   private readonly testingRunIdempotency = new Map<string, string>();
   private readonly testingMachineReservations = new Map<string, TestingMachineReservationRecord>();
 
+  public constructor(private readonly clock: () => number = () => Date.now()) {}
+
   public async ping(): Promise<void> {}
 
   public async close(): Promise<void> {}
@@ -72,9 +74,9 @@ export class MemoryRepository implements Repository {
     return true;
   }
 
-  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard, observedNow: number): Promise<boolean> {
+  public async replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean> {
     const current = this.tasks.get(task.id);
-    if (current?.leaseExpiresAt !== guard.leaseExpiresAt || !isFutureTimestamp(current.leaseExpiresAt, observedNow)) return false;
+    if (current?.leaseExpiresAt !== guard.leaseExpiresAt || !isFutureTimestamp(current.leaseExpiresAt, this.clock())) return false;
     return this.replaceTaskForClaim(task, guard);
   }
 
