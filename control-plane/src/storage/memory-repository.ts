@@ -20,6 +20,15 @@ const isValidClaim = (task: Task, expectedClaimGeneration: number, expectedTaskV
   task.leaseToken !== undefined &&
   task.leaseExpiresAt !== undefined;
 
+const expirableTaskTimestamp = (task: Task): string => {
+  const value = task.status === 'submitted' ? task.constraints.deadline : task.leaseExpiresAt;
+  return typeof value === 'string' ? value : '';
+};
+
+const assertPositivePageLimit = (limit: number): void => {
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
+};
+
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
   private readonly pools = new Map<string, Pool>();
@@ -129,12 +138,28 @@ export class MemoryRepository implements Repository {
   }
 
   public async listExpirableTasks(now: number, limit: number): Promise<readonly Task[]> {
-    return [...this.tasks.values()]
-      .filter((task) => task.kind !== 'testing' && (
-        (task.status === 'submitted' && task.constraints.deadline !== undefined && Date.parse(task.constraints.deadline) <= now) ||
-        (['claimed', 'running', 'closing'].includes(task.status) && task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= now)
-      ))
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    assertPositivePageLimit(limit);
+    const timestamp = new Date(now).toISOString();
+    const deadlineTasks = [...this.tasks.values()]
+      .filter((task) =>
+        task.kind !== 'testing' &&
+        task.status === 'submitted' &&
+        task.constraints.deadline !== undefined &&
+        task.constraints.deadline <= timestamp
+      )
+      .sort((left, right) => expirableTaskTimestamp(left).localeCompare(expirableTaskTimestamp(right)) || left.id.localeCompare(right.id))
+      .slice(0, limit);
+    const leaseTasks = [...this.tasks.values()]
+      .filter((task) =>
+        task.kind !== 'testing' &&
+        ['claimed', 'running', 'closing'].includes(task.status) &&
+        task.leaseExpiresAt !== undefined &&
+        task.leaseExpiresAt <= timestamp
+      )
+      .sort((left, right) => expirableTaskTimestamp(left).localeCompare(expirableTaskTimestamp(right)) || left.id.localeCompare(right.id))
+      .slice(0, limit);
+    return [...deadlineTasks, ...leaseTasks]
+      .sort((left, right) => expirableTaskTimestamp(left).localeCompare(expirableTaskTimestamp(right)) || left.id.localeCompare(right.id))
       .slice(0, limit);
   }
 

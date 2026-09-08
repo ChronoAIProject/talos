@@ -23,6 +23,23 @@ const atOrBeforeDatabaseNow = (input: unknown): Readonly<Record<string, unknown>
   $lte: [mongoDate(input), '$$NOW']
 });
 
+const NON_TESTING_TASK_KINDS = ['browse', 'computer_use'] as const;
+const ACTIVE_TASK_STATUSES = ['claimed', 'running', 'closing'] as const;
+const TASK_LEASE_EXPIRY_INDEX = 'task-lease-expiry-v1';
+const TASK_DEADLINE_EXPIRY_INDEX = 'task-deadline-expiry-v1';
+
+const assertPositivePageLimit = (limit: number): void => {
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
+};
+
+const expirableTaskTimestamp = (task: Task): string => {
+  const value = task.status === 'submitted' ? task.constraints.deadline : task.leaseExpiresAt;
+  return typeof value === 'string' ? value : '';
+};
+
+const compareExpirableTasks = (left: Task, right: Task): number =>
+  expirableTaskTimestamp(left).localeCompare(expirableTaskTimestamp(right)) || left.id.localeCompare(right.id);
+
 export interface MongoRepositoryOptions {
   client?: MongoClient;
   clientOptions?: MongoClientOptions;
@@ -66,8 +83,14 @@ export class MongoRepository implements Repository {
     await Promise.all([
       this.tasks.createIndex({ status: 1, queuePriority: 1, createdAt: 1 }),
       this.tasks.createIndex({ kind: 1, claimId: 1, status: 1, updatedAt: 1 }),
-      this.tasks.createIndex({ kind: 1, status: 1, leaseExpiresAt: 1, updatedAt: 1 }),
-      this.tasks.createIndex({ kind: 1, status: 1, 'constraints.deadline': 1, updatedAt: 1 }),
+      this.tasks.createIndex(
+        { kind: 1, status: 1, leaseExpiresAt: 1, _id: 1 },
+        { name: TASK_LEASE_EXPIRY_INDEX }
+      ),
+      this.tasks.createIndex(
+        { kind: 1, status: 1, 'constraints.deadline': 1, _id: 1 },
+        { name: TASK_DEADLINE_EXPIRY_INDEX }
+      ),
       this.tasks.createIndex({ createdAt: 1, _id: 1 }),
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
@@ -210,15 +233,24 @@ export class MongoRepository implements Repository {
   }
 
   public async listExpirableTasks(now: number, limit: number): Promise<readonly Task[]> {
+    assertPositivePageLimit(limit);
     const timestamp = new Date(now).toISOString();
-    const documents = await this.tasks.find({
-      kind: { $ne: 'testing' },
-      $or: [
-        { status: 'submitted', 'constraints.deadline': { $lte: timestamp } },
-        { status: { $in: ['claimed', 'running', 'closing'] }, leaseExpiresAt: { $lte: timestamp } }
-      ]
-    }).sort({ updatedAt: 1, _id: 1 }).limit(limit).toArray();
-    return documents.map(taskFromDocument);
+    const [deadlineDocuments, leaseDocuments] = await Promise.all([
+      this.tasks.find({
+        kind: { $in: NON_TESTING_TASK_KINDS },
+        status: 'submitted',
+        'constraints.deadline': { $lte: timestamp }
+      }).sort({ 'constraints.deadline': 1, _id: 1 }).limit(limit).toArray(),
+      this.tasks.find({
+        kind: { $in: NON_TESTING_TASK_KINDS },
+        status: { $in: ACTIVE_TASK_STATUSES },
+        leaseExpiresAt: { $lte: timestamp }
+      }).sort({ leaseExpiresAt: 1, _id: 1 }).limit(limit).toArray()
+    ]);
+    return [...deadlineDocuments, ...leaseDocuments]
+      .map(taskFromDocument)
+      .sort(compareExpirableTasks)
+      .slice(0, limit);
   }
 
   public async listTaskMaintenancePage(cursor: TaskMaintenanceCursor, limit: number): Promise<readonly Task[]> {

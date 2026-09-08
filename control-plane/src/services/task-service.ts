@@ -75,7 +75,9 @@ export class TaskService {
       ...(data.profile_id === undefined ? {} : { profileId: data.profile_id }),
       ...(data.pool_id === undefined ? {} : { poolId: data.pool_id }),
       ...(requesterGroups.length === 0 ? {} : { requesterGroups: [...requesterGroups] }),
-      constraints: data.constraints,
+      constraints: data.constraints.deadline === undefined
+        ? data.constraints
+        : { ...data.constraints, deadline: new Date(data.constraints.deadline).toISOString() },
       mode: data.mode,
       interaction,
       ...(data.callback === undefined ? {} : { callback: data.callback }),
@@ -305,6 +307,7 @@ export class TaskService {
   private async expireTaskCandidate(candidate: Task, now: number): Promise<Task | undefined> {
       const current = await this.repository.getTask(candidate.id);
       if (current?.kind === 'testing' || current === undefined) return undefined;
+      if (await this.normalizeSubmittedDeadline(current, now)) return undefined;
       const malformedReason = this.malformedClaimReason(current);
       if (
         current.claimRecovery !== undefined ||
@@ -420,6 +423,7 @@ export class TaskService {
 
   private async processTaskClaimMaintenance(task: Task, now: number, knownMalformedReason?: TaskClaimRecoveryReason): Promise<void> {
     if (task.kind === 'testing') return;
+    if (await this.normalizeSubmittedDeadline(task, now)) return;
     if (task.claimRecovery !== undefined) {
       if (task.claimRecovery.kind === 'legacy' && task.claimRecovery.phase !== 'quarantined') {
         await this.continueLegacyClaimRecovery(task, now);
@@ -446,6 +450,32 @@ export class TaskService {
       return;
     }
     if (task.claimId !== undefined && task.claimGeneration !== undefined) await this.releaseLease(task);
+  }
+
+  private async normalizeSubmittedDeadline(task: Task, now: number): Promise<boolean> {
+    const deadline = task.status === 'submitted' ? task.constraints.deadline : undefined;
+    if (deadline === undefined) return false;
+    const deadlineAt = Date.parse(deadline);
+    if (!Number.isFinite(deadlineAt)) {
+      const failed: Task = {
+        ...task,
+        status: 'failed',
+        updatedAt: new Date(now).toISOString(),
+        error: { code: 'invalid_deadline', message: 'task deadline is invalid' }
+      };
+      if (await this.repository.replaceSubmittedTask(failed, task.claimGeneration ?? 0, task.taskVersion ?? 0)) {
+        await this.emit(failed, 'task.state_changed', { status: failed.status, error: failed.error });
+      }
+      return true;
+    }
+    const canonicalDeadline = new Date(deadlineAt).toISOString();
+    if (canonicalDeadline === deadline) return false;
+    await this.repository.replaceSubmittedTask({
+      ...task,
+      constraints: { ...task.constraints, deadline: canonicalDeadline },
+      updatedAt: new Date(now).toISOString()
+    }, task.claimGeneration ?? 0, task.taskVersion ?? 0);
+    return true;
   }
 
   private malformedClaimReason(task: Task): TaskClaimRecoveryReason | undefined {

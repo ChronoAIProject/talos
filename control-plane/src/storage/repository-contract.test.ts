@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { MongoClient } from 'mongodb';
+import { MongoClient, type Document as MongoDocument } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
@@ -212,6 +212,8 @@ const faultAfterBoundary = (
 const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
 const MONGODB_CONNECT_TIMEOUT_MS = 5_000;
 const MONGODB_CONTRACT_TEST_TIMEOUT_MS = 30_000;
+const EXPIRY_QUERY_BATCH_SIZE = 100;
+const EXPIRY_QUERY_BACKLOG_SIZE = 2_000;
 const mongodbClientOptions = {
   connectTimeoutMS: MONGODB_CONNECT_TIMEOUT_MS,
   serverSelectionTimeoutMS: MONGODB_CONNECT_TIMEOUT_MS
@@ -300,7 +302,100 @@ const taskService = (repository: Repository, clock = { value: 1_000 }): TaskServ
   { clock: () => clock.value, leaseSeconds: 10 }
 );
 
+const executionPlanContainsStage = (value: unknown, stage: string): boolean => {
+  if (Array.isArray(value)) return value.some((entry) => executionPlanContainsStage(entry, stage));
+  if (typeof value !== 'object' || value === null) return false;
+  const document = value as Readonly<Record<string, unknown>>;
+  return typeof document.stage === 'string' && document.stage.toUpperCase() === stage.toUpperCase() ||
+    Object.values(document).some((entry) => executionPlanContainsStage(entry, stage));
+};
+
+const executionPlanContainsValue = (value: unknown, expected: string): boolean => {
+  if (value === expected) return true;
+  if (Array.isArray(value)) return value.some((entry) => executionPlanContainsValue(entry, expected));
+  if (typeof value !== 'object' || value === null) return false;
+  return Object.values(value).some((entry) => executionPlanContainsValue(entry, expected));
+};
+
+const normalizedMongoSort = (value: unknown): Readonly<Record<string, unknown>> => {
+  if (value instanceof Map) return Object.fromEntries(value);
+  return typeof value === 'object' && value !== null ? value as Readonly<Record<string, unknown>> : {};
+};
+
 const contractTests = (makeHarness: () => Promise<Harness>): void => {
+  it('returns one stable bounded page across deadline and lease expiry sources', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const now = Date.parse('2025-01-01T00:00:10.000Z');
+      await repository.saveTask(baseTask({
+        id: 'expiry-deadline-b',
+        constraints: { deadline: '2025-01-01T00:00:01.000Z' }
+      }));
+      await repository.saveTask(baseTask({
+        id: 'expiry-deadline-a',
+        constraints: { deadline: '2025-01-01T00:00:01.000Z' }
+      }));
+      await repository.saveTask(baseTask({
+        id: 'expiry-lease',
+        status: 'running',
+        leaseExpiresAt: '2025-01-01T00:00:02.000Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'expiry-future',
+        status: 'claimed',
+        leaseExpiresAt: '2025-01-01T00:01:00.000Z'
+      }));
+
+      expect((await repository.listExpirableTasks(now, 3)).map((task) => task.id)).toEqual([
+        'expiry-deadline-a',
+        'expiry-deadline-b',
+        'expiry-lease'
+      ]);
+      for (const invalidLimit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        await expect(repository.listExpirableTasks(now, invalidLimit))
+          .rejects.toThrow('page limit must be a positive safe integer');
+      }
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('drains malformed deadline pages without starving a later valid expiry', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const now = Date.parse('2025-01-01T00:01:00.000Z');
+      const service = taskService(repository, { value: now });
+      for (let index = 0; index <= EXPIRY_QUERY_BATCH_SIZE; index += 1) {
+        await repository.saveTask(baseTask({
+          id: `malformed-deadline-${String(index).padStart(3, '0')}`,
+          constraints: { deadline: '' }
+        }));
+      }
+      await repository.saveTask(baseTask({
+        id: 'valid-deadline-after-malformed-page',
+        constraints: { deadline: '2025-01-01T00:00:01.000Z' },
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+
+      await service.expireLeases(now);
+
+      expect(await repository.getTask('valid-deadline-after-malformed-page')).toMatchObject({
+        status: 'failed',
+        error: { code: 'deadline_exceeded' }
+      });
+      expect((await repository.listTasks()).filter((task) => task.error?.code === 'invalid_deadline'))
+        .toHaveLength(EXPIRY_QUERY_BATCH_SIZE + 1);
+      const canonical = await service.createTask('user-1', {
+        kind: 'browse',
+        goal: 'canonical deadline',
+        constraints: { deadline: '2025-01-01T08:02:00.000+08:00' }
+      });
+      expect(canonical.constraints.deadline).toBe('2025-01-01T00:02:00.000Z');
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('linearizes task claim, machine admission, and profile ownership', async () => {
     const { repository, close } = await makeHarness();
     try {
@@ -2071,6 +2166,81 @@ describe('Repository contract: mongo', () => {
         } finally {
           await second?.close();
         }
+      }
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('bounds expiry query work to the requested pages instead of the expired backlog', async () => {
+    if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
+    const databaseName = `talos_expiry_plan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const client = new MongoClient(mongoUrl, { ...mongodbClientOptions, monitorCommands: true });
+    const repository = new MongoRepository(mongoUrl, databaseName, { client });
+    const findCommands: MongoDocument[] = [];
+    client.on('commandStarted', (event) => {
+      if (event.commandName === 'find' && event.command.find === 'tasks') {
+        findCommands.push({
+          find: event.command.find,
+          filter: event.command.filter,
+          sort: event.command.sort,
+          limit: event.command.limit
+        });
+      }
+    });
+    try {
+      await repository.initialize();
+      const expiryBase = Date.parse('2025-01-01T00:00:00.000Z');
+      const documents = Array.from({ length: EXPIRY_QUERY_BACKLOG_SIZE }, (_, index) => {
+        const submitted = index % 2 === 0;
+        const id = `expiry-plan-${String(index).padStart(4, '0')}`;
+        const expiredAt = new Date(expiryBase + (EXPIRY_QUERY_BACKLOG_SIZE - index) * 1_000).toISOString();
+        return {
+          ...baseTask({
+            id,
+            kind: index % 4 < 2 ? 'browse' : 'computer_use',
+            status: submitted ? 'submitted' : (['claimed', 'running', 'closing'] as const)[index % 3],
+            constraints: submitted ? { deadline: expiredAt } : {},
+            ...(submitted ? {} : { leaseExpiresAt: expiredAt })
+          }),
+          _id: id
+        };
+      });
+      await client.db(databaseName).collection<{ _id: string; [key: string]: unknown }>('tasks').insertMany(documents);
+
+      expect(await repository.listExpirableTasks(Date.parse('2026-01-01T00:00:00.000Z'), EXPIRY_QUERY_BATCH_SIZE))
+        .toHaveLength(EXPIRY_QUERY_BATCH_SIZE);
+      expect(findCommands).toHaveLength(2);
+
+      const expectedQueries = [
+        { sortField: 'constraints.deadline', indexName: 'task-deadline-expiry-v1' },
+        { sortField: 'leaseExpiresAt', indexName: 'task-lease-expiry-v1' }
+      ] as const;
+      for (const expected of expectedQueries) {
+        const command = findCommands.find((candidate) => {
+          const filter = candidate.filter;
+          return typeof filter === 'object' && filter !== null && Object.hasOwn(filter, expected.sortField);
+        });
+        if (command === undefined) throw new Error(`missing captured ${expected.sortField} expiry query`);
+        expect(command).toMatchObject({ find: 'tasks', limit: EXPIRY_QUERY_BATCH_SIZE });
+        expect(normalizedMongoSort(command.sort)).toEqual({ [expected.sortField]: 1, _id: 1 });
+        const explanation = await client.db(databaseName).command({ explain: command, verbosity: 'executionStats' });
+        const executionStats = explanation.executionStats as {
+          nReturned: number;
+          totalDocsExamined: number;
+          totalKeysExamined: number;
+          executionStages: unknown;
+        };
+        expect(executionStats.nReturned).toBe(EXPIRY_QUERY_BATCH_SIZE);
+        expect(executionStats.totalDocsExamined).toBeLessThanOrEqual(EXPIRY_QUERY_BATCH_SIZE * 8);
+        expect(executionStats.totalKeysExamined).toBeLessThanOrEqual(EXPIRY_QUERY_BATCH_SIZE * 8);
+        expect(executionPlanContainsStage(executionStats.executionStages, 'SORT')).toBe(false);
+        expect(executionPlanContainsStage(executionStats.executionStages, 'COLLSCAN')).toBe(false);
+        expect(executionPlanContainsValue(executionStats.executionStages, expected.indexName)).toBe(true);
+      }
+    } finally {
+      try {
+        await client.db(databaseName).dropDatabase();
+      } finally {
+        await repository.close();
       }
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
