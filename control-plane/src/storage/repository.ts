@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -16,21 +16,53 @@ export interface TestingAttemptDispatchGuard extends TestingAttemptMutationGuard
   readonly dispatchAuthorizationExpiresAt: string;
 }
 
+export interface TaskMaintenanceCursor {
+  readonly id: 'task-claim-reconciliation';
+  readonly version: number;
+  readonly cycleCutoffAt: string;
+  readonly afterCreatedAt?: string;
+  readonly afterTaskId?: string;
+  readonly updatedAt: string;
+}
+
 export interface Repository {
   ping(): Promise<void>;
   close(): Promise<void>;
   getTask(id: string): Promise<Task | undefined>;
   saveTask(task: Task): Promise<void>;
+  claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined>;
+  replaceTaskForClaim(task: Task, guard: TaskClaimGuard): Promise<boolean>;
+  replaceTaskForActiveClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean>;
+  replaceTaskForExpiredClaim(task: Task, guard: TaskActiveClaimGuard): Promise<boolean>;
+  replaceSubmittedTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<boolean>;
+  replaceTaskForRecovery(task: Task, guard: TaskRecoveryGuard): Promise<boolean>;
+  getTaskMaintenanceHighWatermark(): Promise<string | undefined>;
+  listTaskMaintenancePage(cursor: TaskMaintenanceCursor, limit: number): Promise<readonly Task[]>;
+  createTaskMaintenanceCursor(cursor: TaskMaintenanceCursor): Promise<boolean>;
+  getTaskMaintenanceCursor(id: TaskMaintenanceCursor['id']): Promise<TaskMaintenanceCursor | undefined>;
+  replaceTaskMaintenanceCursor(cursor: TaskMaintenanceCursor, expectedVersion: number): Promise<boolean>;
   listQueuedTasks(): Promise<readonly Task[]>;
   listTasks(): Promise<readonly Task[]>;
+  listExpirableTasks(now: number, limit: number): Promise<readonly Task[]>;
   getPool(id: string): Promise<Pool | undefined>;
   savePool(pool: Pool): Promise<void>;
   listPoolsByOwner(ownerUserId: string): Promise<readonly Pool[]>;
   listMachines(poolId?: string): Promise<readonly Machine[]>;
   getMachine(id: string): Promise<Machine | undefined>;
   saveMachine(machine: Machine): Promise<void>;
+  rotateMachineToken(machineId: string, expectedTokenHash: string, tokenHash: string): Promise<boolean>;
+  reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean>;
+  renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean>;
+  releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
+  releaseMachineLeaseReservation(reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
+  releaseLegacyMachineLease(machineId: string, recoveryId: string, taskId: string): Promise<boolean>;
+  clearLegacyMachineLeaseMarker(machineId: string, recoveryId: string): Promise<boolean>;
   getProfile(id: string): Promise<Profile | undefined>;
-  saveProfile(profile: Profile): Promise<void>;
+  createProfile(profile: Profile): Promise<boolean>;
+  acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined>;
+  releaseProfileLease(profileId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean>;
+  releaseLegacyProfileLease(profileId: string, taskId: string): Promise<boolean>;
+  listProfiles(): Promise<readonly Profile[]>;
   listProfilesByUser(userId: string): Promise<readonly Profile[]>;
   saveHandoff(link: HandoffLink): Promise<void>;
   getHandoff(id: string): Promise<HandoffLink | undefined>;

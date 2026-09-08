@@ -5,6 +5,7 @@ import { Scheduler } from '../services/scheduler.js';
 import { TaskService } from '../services/task-service.js';
 import { WebhookSigner } from '../services/webhook-signer.js';
 import { MemoryRepository } from '../storage/memory-repository.js';
+import type { Repository } from '../storage/repository.js';
 import { createApiServer } from './server.js';
 import { loadOpenApiDocument } from '../openapi.js';
 
@@ -58,6 +59,114 @@ describe('control-plane HTTP API', () => {
     server.close();
   });
 
+  it('maps repository failures to an opaque public error', async () => {
+    const repository = new MemoryRepository();
+    repository.getTask = async () => { throw new Error('claim-secret-sentinel lease-token-sentinel'); };
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/tasks/task`, {
+      headers: { 'x-nyxid-identity-token': 'user:user-a' }
+    });
+    expect(response.status).toBe(500);
+    const body = JSON.stringify(await response.json());
+    expect(body).toContain('internal_error');
+    expect(body).not.toContain('claim-secret-sentinel');
+    expect(body).not.toContain('lease-token-sentinel');
+    server.close();
+  });
+
+  it('returns a retryable public conflict after authorized task CAS exhaustion', async () => {
+    const storage = new MemoryRepository();
+    let attempts = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceSubmittedTask') {
+          return async (...args: Parameters<Repository['replaceSubmittedTask']>): Promise<boolean> => {
+            if (args[0].status === 'cancelled') {
+              attempts += 1;
+              return false;
+            }
+            return target.replaceSubmittedTask(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234')
+    );
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' };
+    const created = await fetch(`${base}/v1/tasks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'browse', goal: 'public CAS exhaustion' })
+    });
+    const task = await created.json() as { id: string };
+
+    const response = await fetch(`${base}/v1/tasks/${task.id}/cancel`, { method: 'POST', headers });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'concurrent_update',
+        message: 'task state changed concurrently',
+        retryable: true
+      }
+    });
+    expect(attempts).toBe(3);
+    server.close();
+  });
+
+  it('reports an expired handoff claim as a non-retryable public conflict', async () => {
+    const clock = { value: Date.now() };
+    const repository = new MemoryRepository(() => clock.value);
+    await repository.savePool({ id: 'expired-handoff-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'expired-handoff-machine', poolId: 'expired-handoff-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'expired handoff' });
+    const claim = await service.claim('worker-a', 'expired-handoff-machine', clock.value);
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    const server = createApiServer(service, repository, { clock: () => clock.value });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${base}/v1/tasks/${task.id}/handoff`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' },
+      body: '{}'
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'conflict',
+        message: 'task claim is not active',
+        retryable: false
+      }
+    });
+    expect(await repository.getTask(task.id)).not.toHaveProperty('handoff');
+    server.close();
+  });
+
   it('enforces NyxID and worker authentication across lifecycle routes', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
@@ -77,8 +186,30 @@ describe('control-plane HTTP API', () => {
     expect(badWorker.status).toBe(401);
     const claimResponse = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'machine', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'w', machine_id: 'machine' }) });
     expect(claimResponse.status).toBe(200);
-    const claim = await claimResponse.json() as { task: { id: string }; leaseToken: string };
+    const claim = await claimResponse.json() as { task: Record<string, unknown> & { id: string }; leaseToken: string };
     expect(claim.task.id).toBe(created.id);
+    const internalAuthorityFields = [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ];
+    for (const field of internalAuthorityFields) expect(claim.task).not.toHaveProperty(field);
+    const publicTaskResponse = await fetch(`${base}/v1/tasks/${created.id}`, {
+      headers: { 'x-nyxid-identity-token': 'user:user-a' }
+    });
+    expect(publicTaskResponse.status).toBe(200);
+    const publicTask = await publicTaskResponse.json() as Record<string, unknown>;
+    for (const field of internalAuthorityFields) expect(publicTask).not.toHaveProperty(field);
+    expect(JSON.stringify(publicTask)).not.toContain(claim.leaseToken);
     const heartbeat = await fetch(`${base}/v1/worker/tasks/${created.id}/heartbeat`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'machine', 'content-type': 'application/json' }, body: JSON.stringify({ lease_token: claim.leaseToken }) });
     expect(heartbeat.status).toBe(200);
     server.close();
@@ -218,6 +349,7 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-pool' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/pools/bob-pool/machines`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-machine' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-profile', machine_id: 'bob-machine' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-profile' }) })).status).toBe(409);
     const bobPools = await fetch(`${base}/v1/pools`, { headers: user('bob') });
     expect(bobPools.status).toBe(200);
     expect((await bobPools.json() as Array<{ id: string }>).map((pool) => pool.id)).toEqual(['bob-pool']);
@@ -290,7 +422,7 @@ describe('control-plane HTTP API', () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
-    await repository.saveProfile({ id: 'p', userId: 'u' });
+    await repository.createProfile({ id: 'p', userId: 'u' });
     const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
     const server = createApiServer(service, repository);
     await new Promise<void>((resolve) => server.listen(0, resolve));

@@ -40,10 +40,19 @@ describe('WebhookDispatcher', () => {
     const event = { id: 'evt2', type: 'task.state_changed' as const, taskId: 'task', userId: 'u', timestamp: new Date().toISOString(), payload: {}, delivery: { status: 'pending' as const, attempts: 0 } };
     await repository.saveWebhook(event);
     let attempts = 0;
-    const dispatcher = new (await import('./webhook-dispatcher.js')).WebhookDispatcher(repository, signer, { fetchImpl: async () => { attempts += 1; return new Response('', { status: 500 }); }, backoffMs: 0 });
+    const dispatcher = new (await import('./webhook-dispatcher.js')).WebhookDispatcher(repository, signer, {
+      fetchImpl: async () => {
+        attempts += 1;
+        throw new Error('claim-secret-sentinel lease-token-sentinel');
+      },
+      backoffMs: 0
+    });
     await dispatcher.dispatch(event, 'http://localhost/hook');
     expect(attempts).toBe(3);
     expect((await repository.getWebhook('evt2'))?.delivery.status).toBe('failed');
+    expect((await repository.getWebhook('evt2'))?.delivery.lastError).toBe('webhook_delivery_failed');
+    expect(JSON.stringify(await repository.getWebhook('evt2'))).not.toContain('claim-secret-sentinel');
+    expect(JSON.stringify(await repository.getWebhook('evt2'))).not.toContain('lease-token-sentinel');
     await expect(dispatcher.dispatch(event, 'file:///tmp/hook')).rejects.toThrow('scheme');
   });
 
@@ -81,12 +90,16 @@ describe('WebhookDispatcher', () => {
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
     const signer = new WebhookSigner('webhook-secret-1234');
     const received: string[] = [];
+    const receivedBodies: string[] = [];
     const server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       request.on('end', () => {
         const body = Buffer.concat(chunks).toString();
-        if (signer.verify({ id: 'unused', timestamp: String(request.headers['x-talos-webhook-timestamp']), signature: String(request.headers['x-talos-webhook-signature']), body })) received.push(JSON.parse(body).type as string);
+        if (signer.verify({ id: 'unused', timestamp: String(request.headers['x-talos-webhook-timestamp']), signature: String(request.headers['x-talos-webhook-signature']), body })) {
+          received.push(JSON.parse(body).type as string);
+          receivedBodies.push(body);
+        }
         response.end();
       });
     });
@@ -104,6 +117,25 @@ describe('WebhookDispatcher', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(received).toContain('task.completed');
+    const stored = await repository.getTask(task.id);
+    for (const body of receivedBodies) {
+      for (const field of [
+        'claimId',
+        'claimGeneration',
+        'taskVersion',
+        'claimCommitted',
+        'claimReleased',
+        'claimQueuePriority',
+        'queuePriority',
+        'workerId',
+        'machineId',
+        'leaseExpiresAt',
+        'leaseToken',
+        'claimRecovery'
+      ]) expect(body).not.toContain(`\"${field}\"`);
+      expect(body).not.toContain(claim.leaseToken);
+      expect(body).not.toContain(stored?.claimId);
+    }
     server.close();
   });
 });

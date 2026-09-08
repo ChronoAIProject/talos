@@ -6,14 +6,73 @@ import { Scheduler } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { WebhookSigner } from './webhook-signer.js';
 import type { Task } from '../domain/types.js';
+import type { Repository } from '../storage/repository.js';
 import { computeTestingTaskPayloadDigest, testingTaskSchema } from '@talos/testing-protocol';
 
 const setup = (clock: { value: number } = { value: Date.now() }) => {
-  const repository = new MemoryRepository();
+  const repository = new MemoryRepository(() => clock.value);
   const profiles = new ProfileLockService(repository);
   const scheduler = new Scheduler(repository);
   const service = new TaskService(repository, scheduler, profiles, new WebhookSigner('test-webhook-secret'), { clock: () => clock.value, leaseSeconds: 10 });
   return { repository, profiles, service, clock };
+};
+
+const advanceClaimGeneration = async (
+  repository: Repository,
+  taskId: string,
+  status: 'running' | 'needs_input'
+): Promise<Task> => {
+  const current = await repository.getTask(taskId);
+  if (
+    current === undefined ||
+    current.claimId === undefined ||
+    current.claimGeneration === undefined
+  ) throw new Error('test task does not have an active claim');
+  const requeued = {
+    ...current,
+    status: 'submitted' as const,
+    workerId: undefined,
+    leaseToken: undefined,
+    leaseExpiresAt: undefined,
+    claimCommitted: false,
+    claimReleased: true,
+    queuePriority: current.claimQueuePriority,
+    claimQueuePriority: undefined
+  };
+  if (!await repository.replaceTaskForClaim(requeued, {
+    claimId: current.claimId,
+    claimGeneration: current.claimGeneration,
+    taskVersion: current.taskVersion ?? 0,
+    status: current.status
+  })) throw new Error('test could not requeue the current claim');
+  const submitted = await repository.getTask(taskId);
+  if (submitted === undefined) throw new Error('test task disappeared while requeueing');
+  const nextGeneration = current.claimGeneration + 1;
+  const reclaimed = await repository.claimTask({
+    ...submitted,
+    status: 'claimed',
+    workerId: 'worker-next',
+    machineId: current.machineId ?? 'machine',
+    leaseToken: 'lease-next',
+    leaseExpiresAt: '2100-01-01T00:00:00.000Z',
+    claimId: 'claim-next',
+    claimGeneration: nextGeneration,
+    taskVersion: (submitted.taskVersion ?? 0) + 1,
+    claimCommitted: true,
+    claimReleased: false,
+    claimQueuePriority: submitted.queuePriority,
+    queuePriority: undefined
+  }, current.claimGeneration, submitted.taskVersion ?? 0);
+  if (reclaimed === undefined) throw new Error('test could not claim the next generation');
+  if (!await repository.replaceTaskForClaim({ ...reclaimed, status }, {
+    claimId: reclaimed.claimId!,
+    claimGeneration: reclaimed.claimGeneration!,
+    taskVersion: reclaimed.taskVersion ?? 0,
+    status: reclaimed.status
+  })) throw new Error('test could not advance the next generation status');
+  const persisted = await repository.getTask(taskId);
+  if (persisted === undefined) throw new Error('test task disappeared after reclaim');
+  return persisted;
 };
 
 describe('task service', () => {
@@ -30,6 +89,101 @@ describe('task service', () => {
     await expect(service.getTask(task.id, 'user-b')).rejects.toMatchObject({ code: 'forbidden' });
   });
 
+  it('rejects heartbeat when its claim CAS resumes after lease expiry', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    let reachClaimCas!: () => void;
+    let resumeClaimCas!: () => void;
+    const claimCasReached = new Promise<void>((resolve) => { reachClaimCas = resolve; });
+    const claimCasResume = new Promise<void>((resolve) => { resumeClaimCas = resolve; });
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (task: Parameters<Repository['replaceTaskForActiveClaim']>[0], guard: Parameters<Repository['replaceTaskForActiveClaim']>[1]) => {
+            reachClaimCas();
+            await claimCasResume;
+            return target.replaceTaskForActiveClaim(task, guard);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await repository.savePool({ id: 'expiry-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'expiry-machine', poolId: 'expiry-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'expiry race' });
+    const claim = await service.claim('worker-a', 'expiry-machine');
+
+    const heartbeat = service.heartbeat(task.id, 'worker-a', claim.leaseToken, 30);
+    await claimCasReached;
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    resumeClaimCas();
+
+    await expect(heartbeat).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(await repository.getTask(task.id)).toMatchObject({
+      status: 'claimed',
+      leaseExpiresAt: claim.task.leaseExpiresAt,
+      taskVersion: claim.task.taskVersion
+    });
+  });
+
+  it('does not take over a stale profile projection while its task renewal is authoritative', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    let renewalCommitted!: () => void;
+    let resumeHeartbeat!: () => void;
+    const renewalCommit = new Promise<void>((resolve) => { renewalCommitted = resolve; });
+    const heartbeatResume = new Promise<void>((resolve) => { resumeHeartbeat = resolve; });
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (task: Parameters<Repository['replaceTaskForActiveClaim']>[0], guard: Parameters<Repository['replaceTaskForActiveClaim']>[1]) => {
+            const replaced = await target.replaceTaskForActiveClaim(task, guard);
+            renewalCommitted();
+            await heartbeatResume;
+            return replaced;
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await repository.createProfile({ id: 'renewal-profile', userId: 'user-a' });
+    await repository.savePool({ id: 'renewal-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'renewal-machine', poolId: 'renewal-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const first = await service.createTask('user-a', { kind: 'browse', goal: 'first', profile_id: 'renewal-profile' });
+    await service.createTask('user-a', { kind: 'browse', goal: 'second', profile_id: 'renewal-profile' });
+    const claim = await service.claim('worker-a', 'renewal-machine');
+
+    const heartbeat = service.heartbeat(first.id, 'worker-a', claim.leaseToken, 30);
+    await renewalCommit;
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    try {
+      await expect(service.claim('worker-b', 'renewal-machine')).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      resumeHeartbeat();
+    }
+    await expect(heartbeat).resolves.toMatchObject({ status: 'running' });
+    expect(await repository.getProfile('renewal-profile')).toMatchObject({
+      lockedByTaskId: first.id,
+      lockedByClaimId: claim.task.claimId
+    });
+  });
+
   it('redacts private input and scheduling fields from public tasks', async () => {
     const { repository, service } = setup();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
@@ -41,10 +195,98 @@ describe('task service', () => {
     const publicTask = service.toPublicTask((await repository.getTask(task.id))!);
     expect(publicTask).not.toHaveProperty('input');
     expect(publicTask).not.toHaveProperty('leaseToken');
+    expect(publicTask).not.toHaveProperty('claimId');
+    expect(publicTask).not.toHaveProperty('claimGeneration');
     expect(publicTask).not.toHaveProperty('workerId');
     expect(publicTask).not.toHaveProperty('machineId');
     expect(publicTask).not.toHaveProperty('leaseExpiresAt');
     expect(publicTask).not.toHaveProperty('queuePriority');
+    const publicInteractiveTask = service.toPublicTask({
+      ...(await repository.getTask(task.id))!,
+      pendingActionId: 'pending-action-secret',
+      lastActionId: 'last-action-secret',
+      claimRecovery: {
+        schemaVersion: 'talos.task-claim-recovery/v1',
+        recoveryId: 'recovery-secret',
+        kind: 'malformed',
+        phase: 'quarantined',
+        sourceStatus: 'running',
+        sourceMachineId: 'machine-secret',
+        restoredQueuePriority: 0,
+        reasonCode: 'partial_claim_identity',
+        startedAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z'
+      }
+    });
+    expect(publicInteractiveTask).not.toHaveProperty('pendingActionId');
+    expect(publicInteractiveTask).not.toHaveProperty('lastActionId');
+    expect(publicInteractiveTask).not.toHaveProperty('claimRecovery');
+  });
+
+  it('never includes internal claim authority in webhook payloads', async () => {
+    const { repository, service } = setup();
+    await repository.savePool({ id: 'webhook-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({
+      id: 'webhook-machine',
+      poolId: 'webhook-pool',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'hash'
+    });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'webhook disclosure' });
+    const claim = await service.claim('webhook-worker', 'webhook-machine');
+    await service.complete(task.id, 'webhook-worker', claim.leaseToken, 'completed', []);
+
+    const serialized = JSON.stringify(await repository.listWebhooks());
+    const stored = await repository.getTask(task.id);
+    for (const field of [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ]) expect(serialized).not.toContain(`\"${field}\"`);
+    expect(serialized).not.toContain(claim.leaseToken);
+    expect(serialized).not.toContain(stored?.claimId);
+  });
+
+  it('logs a stable code when webhook delivery rejects with internal authority', async () => {
+    const repository = new MemoryRepository();
+    const warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      {
+        onWebhook: async () => { throw new Error('claim-secret-sentinel lease-token-sentinel'); },
+        logger: { warn: (message, fields) => warnings.push({ message, fields }) }
+      }
+    );
+
+    await service.createTask('user-a', {
+      kind: 'browse',
+      goal: 'webhook failure disclosure',
+      callback: 'https://example.invalid/webhook'
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(warnings).toContainEqual({
+      message: 'webhook delivery failed',
+      fields: expect.objectContaining({ error: 'webhook_delivery_failed' })
+    });
+    const serialized = JSON.stringify(warnings);
+    expect(serialized).not.toContain('claim-secret-sentinel');
+    expect(serialized).not.toContain('lease-token-sentinel');
   });
 
   it('uses a unique artifact id and injected clock', async () => {
@@ -75,7 +317,7 @@ describe('task service', () => {
 
   it('enforces profile ownership and one concurrent lock', async () => {
     const { repository, service } = setup();
-    await repository.saveProfile({ id: 'profile', userId: 'user-a' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a' });
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
     await expect(service.createTask('user-b', { kind: 'browse', goal: 'x', profile_id: 'profile' })).rejects.toMatchObject({ code: 'forbidden' });
@@ -98,7 +340,7 @@ describe('task service', () => {
       online: true,
       workerTokenHash: 'x'
     });
-    await repository.saveProfile({ id: 'profile', userId: 'user-a', machineId: 'remote-machine' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a', machineId: 'remote-machine' });
 
     await expect(service.createTask('user-a', {
       kind: 'browse',
@@ -113,7 +355,7 @@ describe('task service', () => {
 
   it('keeps a profile lock renewed and resumes late input without requeue', async () => {
     const { repository, service, clock } = setup({ value: 1000 });
-    await repository.saveProfile({ id: 'profile', userId: 'user-a' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a' });
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
     const task = await service.createTask('user-a', { kind: 'browse', goal: 'input', profile_id: 'profile' });
@@ -128,6 +370,287 @@ describe('task service', () => {
     await expect(service.claim('worker-a', 'machine')).rejects.toMatchObject({ code: 'not_found' });
     await service.provideInput(task.id, 'user-a', { kind: 'otp', value: '123456' });
     expect((await service.getWorkerInput(task.id, 'worker-a', claim.leaseToken))?.value).toBe('123456');
+  });
+
+  it('returns a retryable conflict after three cancellation CAS misses without side effects', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    const authority = new TaskService(
+      storage,
+      new Scheduler(storage),
+      new ProfileLockService(storage),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await storage.savePool({ id: 'cancel-pool', visibility: 'platform', tags: {} });
+    await storage.saveMachine({ id: 'cancel-machine', poolId: 'cancel-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const task = await authority.createTask('user-a', { kind: 'browse', goal: 'cancel CAS exhaustion' });
+    await authority.claim('worker-a', 'cancel-machine');
+    let attempts = 0;
+    let releases = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+            if (args[0].status === 'cancelled' && args[0].claimReleased !== true) {
+              attempts += 1;
+              return false;
+            }
+            return target.replaceTaskForClaim(...args);
+          };
+        }
+        if (property === 'releaseMachineLease') {
+          return async (...args: Parameters<Repository['releaseMachineLease']>): Promise<boolean> => {
+            releases += 1;
+            return target.releaseMachineLease(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+
+    await expect(service.cancel(task.id, task.userId)).rejects.toMatchObject({
+      code: 'concurrent_update',
+      status: 409
+    });
+    expect(attempts).toBe(3);
+    expect(releases).toBe(0);
+    expect((await storage.getTask(task.id))?.status).toBe('claimed');
+    expect((await storage.listWebhooks()).filter((event) => event.payload.status === 'cancelled')).toHaveLength(0);
+  });
+
+  it('does not persist input or handoff side effects when their CAS retries are exhausted', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    const authority = new TaskService(
+      storage,
+      new Scheduler(storage),
+      new ProfileLockService(storage),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await storage.savePool({ id: 'side-effect-pool', visibility: 'platform', tags: {} });
+    await storage.saveMachine({ id: 'side-effect-machine', poolId: 'side-effect-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const inputTask = await authority.createTask('user-a', { kind: 'browse', goal: 'input CAS exhaustion' });
+    const inputClaim = await authority.claim('worker-input', 'side-effect-machine');
+    await authority.needsInput(inputTask.id, 'worker-input', inputClaim.leaseToken);
+    const handoffTask = await authority.createTask('user-a', { kind: 'browse', goal: 'handoff CAS exhaustion' });
+    await authority.claim('worker-handoff', 'side-effect-machine');
+    let inputAttempts = 0;
+    let handoffAttempts = 0;
+    let pendingInputWrites = 0;
+    let handoffWrites = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+            if (args[0].id === inputTask.id && args[0].status === 'running' && args[1].status === 'needs_input') {
+              inputAttempts += 1;
+              return false;
+            }
+            return target.replaceTaskForClaim(...args);
+          };
+        }
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForActiveClaim']>): Promise<boolean> => {
+            if (args[0].id === handoffTask.id && args[0].status === 'handoff') {
+              handoffAttempts += 1;
+              await authority.heartbeat(
+                handoffTask.id,
+                'worker-handoff',
+                (await storage.getTask(handoffTask.id))?.leaseToken ?? '',
+                30 + handoffAttempts
+              );
+              return false;
+            }
+            return target.replaceTaskForActiveClaim(...args);
+          };
+        }
+        if (property === 'savePendingInput') {
+          return async (...args: Parameters<Repository['savePendingInput']>): Promise<void> => {
+            pendingInputWrites += 1;
+            return target.savePendingInput(...args);
+          };
+        }
+        if (property === 'saveHandoff') {
+          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+            handoffWrites += 1;
+            return target.saveHandoff(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+
+    await expect(service.provideInput(inputTask.id, inputTask.userId, { kind: 'text', value: 'secret' }))
+      .rejects.toMatchObject({ code: 'concurrent_update', status: 409 });
+    await expect(service.requestHandoff(handoffTask.id, handoffTask.userId, 60))
+      .rejects.toMatchObject({ code: 'concurrent_update', status: 409 });
+    expect(inputAttempts).toBe(3);
+    expect(handoffAttempts).toBe(3);
+    expect(pendingInputWrites).toBe(0);
+    expect(handoffWrites).toBe(0);
+    expect(await storage.takePendingInput(inputTask.id)).toBeUndefined();
+    expect(await storage.getTask(handoffTask.id)).not.toHaveProperty('handoff');
+  });
+
+  it('rejects handoff while a claim is provisional and writes no handoff record', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    let provisionalClaimReached!: () => void;
+    let resumeClaim!: () => void;
+    const claimReached = new Promise<void>((resolve) => { provisionalClaimReached = resolve; });
+    const claimResume = new Promise<void>((resolve) => { resumeClaim = resolve; });
+    let handoffWrites = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'claimTask') {
+          return async (...args: Parameters<Repository['claimTask']>): Promise<Awaited<ReturnType<Repository['claimTask']>>> => {
+            const claimed = await target.claimTask(...args);
+            if (claimed !== undefined) {
+              provisionalClaimReached();
+              await claimResume;
+            }
+            return claimed;
+          };
+        }
+        if (property === 'saveHandoff') {
+          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+            handoffWrites += 1;
+            return target.saveHandoff(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await storage.savePool({ id: 'provisional-pool', visibility: 'platform', tags: {} });
+    await storage.saveMachine({ id: 'provisional-machine', poolId: 'provisional-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'provisional handoff' });
+
+    const claiming = service.claim('worker-a', 'provisional-machine', clock.value);
+    await claimReached;
+    try {
+      await expect(service.requestHandoff(task.id, task.userId, 60)).rejects.toMatchObject({
+        code: 'conflict',
+        status: 409,
+        message: 'task claim is not active'
+      });
+      expect(handoffWrites).toBe(0);
+      expect(await storage.getTask(task.id)).toMatchObject({ status: 'claimed', claimCommitted: false });
+      expect(await storage.getTask(task.id)).not.toHaveProperty('handoff');
+    } finally {
+      resumeClaim();
+    }
+    await expect(claiming).resolves.toMatchObject({ task: { id: task.id, claimCommitted: true } });
+  });
+
+  it('fences input and handoff intent from a reclaimed generation', async () => {
+    const clock = { value: 1_000 };
+    const storage = new MemoryRepository(() => clock.value);
+    const authority = new TaskService(
+      storage,
+      new Scheduler(storage),
+      new ProfileLockService(storage),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    await storage.savePool({ id: 'generation-pool', visibility: 'platform', tags: {} });
+    await storage.saveMachine({ id: 'generation-machine', poolId: 'generation-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const inputTask = await authority.createTask('user-a', { kind: 'browse', goal: 'generation-bound input' });
+    const inputClaim = await authority.claim('worker-input', 'generation-machine');
+    await authority.needsInput(inputTask.id, 'worker-input', inputClaim.leaseToken);
+    const handoffTask = await authority.createTask('user-a', { kind: 'browse', goal: 'generation-bound handoff' });
+    const handoffClaim = await authority.claim('worker-handoff', 'generation-machine');
+    await authority.heartbeat(handoffTask.id, 'worker-handoff', handoffClaim.leaseToken, 30);
+    let inputReclaimed = false;
+    let handoffReclaimed = false;
+    let pendingInputWrites = 0;
+    let handoffWrites = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceTaskForClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+            if (!inputReclaimed && args[0].id === inputTask.id && args[0].status === 'running' && args[1].status === 'needs_input') {
+              inputReclaimed = true;
+              await advanceClaimGeneration(target, inputTask.id, 'needs_input');
+              return false;
+            }
+            return target.replaceTaskForClaim(...args);
+          };
+        }
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForActiveClaim']>): Promise<boolean> => {
+            if (!handoffReclaimed && args[0].id === handoffTask.id && args[0].status === 'handoff') {
+              handoffReclaimed = true;
+              await advanceClaimGeneration(target, handoffTask.id, 'running');
+              return false;
+            }
+            return target.replaceTaskForActiveClaim(...args);
+          };
+        }
+        if (property === 'savePendingInput') {
+          return async (...args: Parameters<Repository['savePendingInput']>): Promise<void> => {
+            pendingInputWrites += 1;
+            return target.savePendingInput(...args);
+          };
+        }
+        if (property === 'saveHandoff') {
+          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+            handoffWrites += 1;
+            return target.saveHandoff(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+
+    const expectedConflict = {
+      code: 'conflict',
+      status: 409,
+      message: 'task claim generation changed concurrently'
+    };
+    await expect(service.provideInput(inputTask.id, inputTask.userId, { kind: 'text', value: 'stale input' }))
+      .rejects.toMatchObject(expectedConflict);
+    await expect(service.requestHandoff(handoffTask.id, handoffTask.userId, 60))
+      .rejects.toMatchObject(expectedConflict);
+    expect((await storage.getTask(inputTask.id))?.claimGeneration).toBe((inputClaim.task.claimGeneration ?? 0) + 1);
+    expect((await storage.getTask(handoffTask.id))?.claimGeneration).toBe((handoffClaim.task.claimGeneration ?? 0) + 1);
+    expect(pendingInputWrites).toBe(0);
+    expect(handoffWrites).toBe(0);
+    expect(await storage.takePendingInput(inputTask.id)).toBeUndefined();
+    expect(await storage.getTask(handoffTask.id)).not.toHaveProperty('handoff');
   });
 
   it('lets either eligible machine claim queued work', async () => {

@@ -70,6 +70,39 @@ describe('OpenAPI loader', () => {
     }
     const schema = (name: string): Record<string, unknown> => asObject(parsed.components.schemas[name]);
     const properties = (name: string): Record<string, unknown> => asObject(schema(name).properties);
+    const internalTaskAuthorityFields = [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ];
+    for (const publicSchema of ['Task', 'Session']) {
+      const publicProperties = properties(publicSchema);
+      expect(schema(publicSchema).additionalProperties, publicSchema).toBe(false);
+      for (const field of internalTaskAuthorityFields) {
+        expect(publicProperties, `${publicSchema}.${field}`).not.toHaveProperty(field);
+      }
+    }
+    expect(schema('ClaimResponse').additionalProperties).toBe(false);
+    expect(schema('Lease').additionalProperties).toBe(false);
+    for (const closedSchema of [
+      'PublicErrorDetail',
+      'WebhookEvent',
+      'StateChangedPayload',
+      'NeedsInputPayload',
+      'HandoffRequestedPayload',
+      'CompletedPayload',
+      'WebhookDelivery',
+      'TaskError'
+    ]) expect(schema(closedSchema).additionalProperties, closedSchema).toBe(false);
     for (const strictSchema of [
       'TestingToolRequest',
       'TestingCapabilities',

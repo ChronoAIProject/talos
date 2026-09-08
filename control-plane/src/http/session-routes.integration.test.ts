@@ -87,6 +87,22 @@ describe('interactive session HTTP API', () => {
       })
     });
     const claim = await claimResponse.json() as { leaseToken: string };
+    const publicSession = await (await fetch(`${base}/v1/sessions/${session.id}`, { headers: alice })).json() as Record<string, unknown>;
+    for (const field of [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ]) expect(publicSession).not.toHaveProperty(field);
+    expect(JSON.stringify(publicSession)).not.toContain(claim.leaseToken);
     const forbiddenAction = await fetch(`${base}/v1/sessions/${session.id}/actions?wait_seconds=0`, {
       method: 'POST',
       headers: alice,

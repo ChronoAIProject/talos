@@ -37,7 +37,7 @@ jobs:
         run: git diff --exit-code -- specs/testing-contract-fixtures.json
 
   test:
-    name: Test
+    name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
