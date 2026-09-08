@@ -211,11 +211,11 @@ describe('control-plane factory', () => {
     vi.useFakeTimers();
     const repository = new MemoryRepository();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const listClaimReconciliationTasks = vi.spyOn(repository, 'listClaimReconciliationTasks')
-      .mockRejectedValueOnce(new Error('task sweep unavailable'))
+    const listTaskMaintenancePage = vi.spyOn(repository, 'listTaskMaintenancePage')
+      .mockRejectedValueOnce(new Error('claim-secret-sentinel lease-token-sentinel'))
       .mockResolvedValue([]);
     const listTestingRuns = vi.spyOn(repository, 'listTestingRuns')
-      .mockRejectedValueOnce(new Error('testing sweep unavailable'))
+      .mockRejectedValueOnce(new Error('testing-fence-secret-sentinel'))
       .mockResolvedValue([]);
     const server = createControlPlane(repository, 'webhook-secret-1234', {
       sweepIntervalMs: 10,
@@ -224,10 +224,16 @@ describe('control-plane factory', () => {
 
     await vi.advanceTimersByTimeAsync(11);
     await vi.advanceTimersByTimeAsync(11);
-    expect(listClaimReconciliationTasks.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(listTaskMaintenancePage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(listTestingRuns.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(stderr.mock.calls.flat().join('\n')).toContain('task lease sweep failed');
-    expect(stderr.mock.calls.flat().join('\n')).toContain('testing attempt sweep failed');
+    const output = stderr.mock.calls.flat().join('\n');
+    expect(output).toContain('task lease sweep failed');
+    expect(output).toContain('task_lease_sweep_failed');
+    expect(output).toContain('testing attempt sweep failed');
+    expect(output).toContain('testing_attempt_sweep_failed');
+    expect(output).not.toContain('claim-secret-sentinel');
+    expect(output).not.toContain('lease-token-sentinel');
+    expect(output).not.toContain('testing-fence-secret-sentinel');
     server.stopSweep();
   });
 });

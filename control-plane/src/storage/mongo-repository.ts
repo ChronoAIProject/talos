@@ -1,13 +1,14 @@
-import { MongoClient, type Collection, type Db, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
+import { MongoClient, type Collection, type Db, type Document as MongoDriverDocument, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+import type { Repository, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
 
 type MachineDocument = Omit<Machine, 'leaseReservations'> & {
   _id: string;
   leaseReservations?: MachineLeaseReservation[];
+  legacyLeaseRecoveryMarkers?: Array<{ recoveryId: string; taskId: string }>;
 };
 
 const mongoDate = (input: unknown): Readonly<Record<string, unknown>> => ({
@@ -41,6 +42,7 @@ export class MongoRepository implements Repository {
   private readonly actionResults: Collection<Document>;
   private readonly testingRuns: Collection<Document>;
   private readonly testingMachineReservations: Collection<Document>;
+  private readonly maintenance: Collection<Document>;
 
   public constructor(url: string, databaseName = 'talos', options: MongoRepositoryOptions = {}) {
     this.client = options.client ?? new MongoClient(url, { ...options.clientOptions, ignoreUndefined: true });
@@ -56,6 +58,7 @@ export class MongoRepository implements Repository {
     this.actionResults = this.database.collection('action_results');
     this.testingRuns = this.database.collection('testing_runs');
     this.testingMachineReservations = this.database.collection('testing_machine_reservations');
+    this.maintenance = this.database.collection('maintenance');
   }
 
   public async initialize(): Promise<void> {
@@ -65,6 +68,7 @@ export class MongoRepository implements Repository {
       this.tasks.createIndex({ kind: 1, claimId: 1, status: 1, updatedAt: 1 }),
       this.tasks.createIndex({ kind: 1, status: 1, leaseExpiresAt: 1, updatedAt: 1 }),
       this.tasks.createIndex({ kind: 1, status: 1, 'constraints.deadline': 1, updatedAt: 1 }),
+      this.tasks.createIndex({ createdAt: 1, _id: 1 }),
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
@@ -172,10 +176,22 @@ export class MongoRepository implements Repository {
     return result.modifiedCount === 1;
   }
 
-  public async replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean> {
+  public async replaceTaskForRecovery(task: Task, guard: TaskRecoveryGuard): Promise<boolean> {
+    const filter = {
+      _id: task.id,
+      status: guard.status,
+      updatedAt: guard.updatedAt,
+      $and: [
+        taskVersionFilter(guard.taskVersion),
+        optionalFieldFilter('claimId', guard.claimId),
+        optionalFieldFilter('claimGeneration', guard.claimGeneration),
+        optionalFieldFilter('claimRecovery.recoveryId', guard.recoveryId),
+        optionalFieldFilter('claimRecovery.phase', guard.recoveryPhase)
+      ]
+    } satisfies Filter<Document>;
     const result = await this.tasks.replaceOne(
-      { _id: task.id, status: expectedStatus, updatedAt: expectedUpdatedAt, claimId: { $exists: false } },
-      { ...task, taskVersion: (task.taskVersion ?? 0) + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
+      filter,
+      { ...task, taskVersion: guard.taskVersion + 1, _id: task.id, queuePriority: task.queuePriority ?? 0 }
     );
     return result.matchedCount === 1;
   }
@@ -183,6 +199,7 @@ export class MongoRepository implements Repository {
   public async listQueuedTasks(): Promise<readonly Task[]> {
     const documents = await this.tasks.find({
       status: 'submitted',
+      claimRecovery: { $exists: false },
       $or: [{ claimId: { $exists: false } }, { claimReleased: true }]
     }).sort({ queuePriority: 1, createdAt: 1 }).toArray();
     return documents.map(taskFromDocument);
@@ -204,15 +221,50 @@ export class MongoRepository implements Repository {
     return documents.map(taskFromDocument);
   }
 
-  public async listClaimReconciliationTasks(limit: number): Promise<readonly Task[]> {
+  public async listTaskMaintenancePage(cursor: TaskMaintenanceCursor, limit: number): Promise<readonly Task[]> {
+    const after = cursor.afterCreatedAt === undefined
+      ? {}
+      : {
+          $or: [
+            { createdAt: { $gt: cursor.afterCreatedAt } },
+            { createdAt: cursor.afterCreatedAt, _id: { $gt: cursor.afterTaskId ?? '' } }
+          ]
+        };
     const documents = await this.tasks.find({
-      kind: { $ne: 'testing' },
-      $or: [
-        { claimId: { $exists: true }, claimReleased: { $ne: true } },
-        { status: { $in: ['claimed', 'running', 'needs_input', 'handoff', 'closing'] } }
-      ]
-    }).sort({ updatedAt: 1, _id: 1 }).limit(limit).toArray();
+      createdAt: { $lte: cursor.cycleCutoffAt },
+      ...after
+    }).sort({ createdAt: 1, _id: 1 }).limit(limit).toArray();
     return documents.map(taskFromDocument);
+  }
+
+  public async getTaskMaintenanceHighWatermark(): Promise<string | undefined> {
+    const document = await this.tasks.find({}).sort({ createdAt: -1, _id: -1 }).limit(1).toArray();
+    const createdAt = document[0]?.createdAt;
+    return typeof createdAt === 'string' ? createdAt : undefined;
+  }
+
+  public async createTaskMaintenanceCursor(cursor: TaskMaintenanceCursor): Promise<boolean> {
+    try {
+      await this.maintenance.insertOne({ ...cursor, _id: cursor.id });
+      return true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  public async getTaskMaintenanceCursor(id: TaskMaintenanceCursor['id']): Promise<TaskMaintenanceCursor | undefined> {
+    const document = await this.maintenance.findOne({ _id: id });
+    return document === null ? undefined : taskMaintenanceCursorFromDocument(document);
+  }
+
+  public async replaceTaskMaintenanceCursor(cursor: TaskMaintenanceCursor, expectedVersion: number): Promise<boolean> {
+    if (cursor.version !== expectedVersion + 1) return false;
+    const result = await this.maintenance.replaceOne(
+      { _id: cursor.id, version: expectedVersion },
+      { ...cursor, _id: cursor.id }
+    );
+    return result.matchedCount === 1;
   }
 
   public async getPool(id: string): Promise<Pool | undefined> {
@@ -238,7 +290,11 @@ export class MongoRepository implements Repository {
   }
 
   public async saveMachine(machine: Machine): Promise<void> {
-    await this.machines.replaceOne({ _id: machine.id }, machineToDocument(machine), { upsert: true });
+    const { leaseReservations, ...fields } = machine;
+    const update: UpdateFilter<MachineDocument> = leaseReservations === undefined
+      ? { $set: fields, $unset: { leaseReservations: '' } }
+      : { $set: { ...fields, leaseReservations: [...leaseReservations] } };
+    await this.machines.updateOne({ _id: machine.id }, update, { upsert: true });
   }
 
   public async rotateMachineToken(machineId: string, expectedTokenHash: string, tokenHash: string): Promise<boolean> {
@@ -308,6 +364,47 @@ export class MongoRepository implements Repository {
     return result.modifiedCount === 1;
   }
 
+  public async releaseLegacyMachineLease(machineId: string, recoveryId: string, taskId: string): Promise<boolean> {
+    const filter = {
+      _id: machineId,
+      legacyLeaseRecoveryMarkers: { $not: { $elemMatch: { recoveryId } } }
+    } satisfies Filter<MachineDocument>;
+    const pipeline: MongoDriverDocument[] = [{
+      $set: {
+        activeLeases: {
+          $max: [
+            { $size: { $ifNull: ['$leaseReservations', []] } },
+            { $subtract: ['$activeLeases', 1] }
+          ]
+        },
+        legacyLeaseRecoveryMarkers: {
+          $concatArrays: [
+            { $ifNull: ['$legacyLeaseRecoveryMarkers', []] },
+            [{ recoveryId, taskId }]
+          ]
+        }
+      }
+    }];
+    const result = await this.machines.updateOne(filter, pipeline);
+    if (result.modifiedCount === 1) return true;
+    return await this.machines.findOne({
+      _id: machineId,
+      legacyLeaseRecoveryMarkers: { $elemMatch: { recoveryId, taskId } }
+    }) !== null;
+  }
+
+  public async clearLegacyMachineLeaseMarker(machineId: string, recoveryId: string): Promise<boolean> {
+    const filter = {
+      _id: machineId,
+      legacyLeaseRecoveryMarkers: { $elemMatch: { recoveryId } }
+    } satisfies Filter<MachineDocument>;
+    const update = {
+      $pull: { legacyLeaseRecoveryMarkers: { recoveryId } }
+    } satisfies UpdateFilter<MachineDocument>;
+    const result = await this.machines.updateOne(filter, update);
+    return result.modifiedCount === 1;
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     const document = await this.profiles.findOne({ _id: id });
     return document === null ? undefined : profileFromDocument(document);
@@ -352,6 +449,19 @@ export class MongoRepository implements Repository {
     const result = await this.profiles.updateOne(
       { _id: profileId, lockedByTaskId: reservation.taskId, lockedByClaimId: reservation.claimId, lockedByClaimGeneration: reservation.claimGeneration },
       { $unset: { lockedByTaskId: '', lockedByClaimId: '', lockedByClaimGeneration: '', lockExpiresAt: '' } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  public async releaseLegacyProfileLease(profileId: string, taskId: string): Promise<boolean> {
+    const result = await this.profiles.updateOne(
+      {
+        _id: profileId,
+        lockedByTaskId: taskId,
+        lockedByClaimId: { $exists: false },
+        lockedByClaimGeneration: { $exists: false }
+      },
+      { $unset: { lockedByTaskId: '', lockExpiresAt: '' } }
     );
     return result.modifiedCount === 1;
   }
@@ -642,18 +752,14 @@ const taskVersionFilter = (expectedTaskVersion: number) =>
     ? { $or: [{ taskVersion: 0 }, { taskVersion: { $exists: false } }] }
     : { taskVersion: expectedTaskVersion };
 
+const optionalFieldFilter = (field: string, value: unknown): Filter<Document> =>
+  value === undefined ? { [field]: { $exists: false } } : { [field]: value };
+
 const claimReservationFilter = (reservation: Omit<MachineLeaseReservation, 'expiresAt'>) => ({
   claimId: reservation.claimId,
   claimGeneration: reservation.claimGeneration,
   taskId: reservation.taskId
 }) satisfies Filter<MachineLeaseReservation>;
-
-const machineToDocument = (machine: Machine): MachineDocument => {
-  const { leaseReservations, ...fields } = machine;
-  return leaseReservations === undefined
-    ? { ...fields, _id: machine.id }
-    : { ...fields, _id: machine.id, leaseReservations: [...leaseReservations] };
-};
 
 const withoutId = (document: Document): Record<string, unknown> => {
   return Object.fromEntries(Object.entries(document).filter(([key, value]) => key !== '_id' && value !== null));
@@ -667,7 +773,12 @@ const taskFromDocument = (document: Document): Task => ({
   ...withoutId(document)
 }) as unknown as Task;
 const poolFromDocument = (document: Document): Pool => withoutId(document) as unknown as Pool;
-const machineFromDocument = ({ _id: _documentId, leaseReservations, ...machine }: MachineDocument): Machine =>
+const machineFromDocument = ({
+  _id: _documentId,
+  leaseReservations,
+  legacyLeaseRecoveryMarkers: _recoveryMarkers,
+  ...machine
+}: MachineDocument): Machine =>
   leaseReservations == null
     ? machine
     : { ...machine, leaseReservations };
@@ -685,6 +796,8 @@ const completedSessionActionResultFromDocument = (document: Document): SessionAc
 const testingRunFromDocument = (document: Document): TestingRunRecord => withoutId(document) as unknown as TestingRunRecord;
 const testingMachineReservationFromDocument = (document: Document): TestingMachineReservationRecord =>
   withoutId(document) as unknown as TestingMachineReservationRecord;
+const taskMaintenanceCursorFromDocument = (document: Document): TaskMaintenanceCursor =>
+  withoutId(document) as unknown as TaskMaintenanceCursor;
 
 const isDuplicateKeyError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;

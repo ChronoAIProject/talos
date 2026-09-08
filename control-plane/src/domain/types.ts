@@ -14,6 +14,29 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
+export type TaskClaimRecoveryReason =
+  | 'partial_claim_identity'
+  | 'invalid_claim_generation'
+  | 'invalid_claim_credentials'
+  | 'invalid_lease_expiry'
+  | 'active_claim_missing_credentials'
+  | 'active_claim_marked_released'
+  | 'legacy_profile_identity_conflict';
+
+export interface TaskClaimRecovery {
+  schemaVersion: 'talos.task-claim-recovery/v1';
+  recoveryId: string;
+  kind: 'legacy' | 'malformed';
+  phase: 'draining' | 'finalizing' | 'quarantined';
+  sourceStatus: TaskStatus;
+  sourceMachineId?: string;
+  sourceProfileId?: string;
+  restoredQueuePriority: number;
+  reasonCode?: TaskClaimRecoveryReason;
+  startedAt: string;
+  updatedAt: string;
+}
+
 export type CapabilityTag =
   | 'os'
   | 'region'
@@ -80,6 +103,7 @@ interface TaskBase {
   handoff?: { url: string; expiresAt: string };
   pendingActionId?: string;
   lastActionId?: string;
+  claimRecovery?: TaskClaimRecovery;
 }
 
 export interface BrowserTask extends TaskBase {
@@ -172,6 +196,16 @@ export interface TaskClaimGuard {
 
 export interface TaskActiveClaimGuard extends TaskClaimGuard {
   leaseExpiresAt: string;
+}
+
+export interface TaskRecoveryGuard {
+  status: TaskStatus;
+  taskVersion: number;
+  updatedAt: string;
+  claimId?: string;
+  claimGeneration?: number;
+  recoveryId?: string;
+  recoveryPhase?: TaskClaimRecovery['phase'];
 }
 
 export interface MachineLeaseReservation {

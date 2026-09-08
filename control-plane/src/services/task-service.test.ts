@@ -143,6 +143,21 @@ describe('task service', () => {
     expect(publicTask).not.toHaveProperty('machineId');
     expect(publicTask).not.toHaveProperty('leaseExpiresAt');
     expect(publicTask).not.toHaveProperty('queuePriority');
+    expect(service.toPublicTask({
+      ...(await repository.getTask(task.id))!,
+      claimRecovery: {
+        schemaVersion: 'talos.task-claim-recovery/v1',
+        recoveryId: 'recovery-secret',
+        kind: 'malformed',
+        phase: 'quarantined',
+        sourceStatus: 'running',
+        sourceMachineId: 'machine-secret',
+        restoredQueuePriority: 0,
+        reasonCode: 'partial_claim_identity',
+        startedAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z'
+      }
+    })).not.toHaveProperty('claimRecovery');
   });
 
   it('uses a unique artifact id and injected clock', async () => {

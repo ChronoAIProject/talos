@@ -115,13 +115,13 @@ export const createControlPlane = (
     try {
       try {
         await service.expireLeases();
-      } catch (error) {
-        logger.error('task lease sweep failed', { error: errorMessage(error) });
+      } catch {
+        logger.error('task lease sweep failed', { error: 'task_lease_sweep_failed' });
       }
       try {
         await testingAttempts.sweep();
-      } catch (error) {
-        logger.error('testing attempt sweep failed', { error: errorMessage(error) });
+      } catch {
+        logger.error('testing attempt sweep failed', { error: 'testing_attempt_sweep_failed' });
       }
     } finally {
       sweepInFlight = false;
@@ -193,5 +193,3 @@ export * from './http/server.js';
 export * from './http/testing-run-routes.js';
 export * from './identity.js';
 export * from './openapi.js';
-
-const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);

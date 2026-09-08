@@ -1,6 +1,6 @@
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
+import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+import type { Repository, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 const isFutureTimestamp = (value: string | undefined, observedNow: number): boolean => {
   if (value === undefined) return false;
@@ -33,6 +33,8 @@ export class MemoryRepository implements Repository {
   private readonly testingRuns = new Map<string, TestingRunRecord>();
   private readonly testingRunIdempotency = new Map<string, string>();
   private readonly testingMachineReservations = new Map<string, TestingMachineReservationRecord>();
+  private readonly taskMaintenanceCursors = new Map<TaskMaintenanceCursor['id'], TaskMaintenanceCursor>();
+  private readonly legacyMachineRecoveryMarkers = new Map<string, Map<string, string>>();
 
   public constructor(private readonly clock: () => number = () => Date.now()) {}
 
@@ -94,16 +96,28 @@ export class MemoryRepository implements Repository {
     return true;
   }
 
-  public async replaceLegacyClaimTask(task: Task, expectedStatus: Task['status'], expectedUpdatedAt: string): Promise<boolean> {
+  public async replaceTaskForRecovery(task: Task, guard: TaskRecoveryGuard): Promise<boolean> {
     const current = this.tasks.get(task.id);
-    if (current?.status !== expectedStatus || current.updatedAt !== expectedUpdatedAt || current.claimId !== undefined) return false;
-    this.tasks.set(task.id, { ...task, taskVersion: (current.taskVersion ?? 0) + 1 });
+    if (
+      current?.status !== guard.status ||
+      (current.taskVersion ?? 0) !== guard.taskVersion ||
+      current.updatedAt !== guard.updatedAt ||
+      current.claimId !== guard.claimId ||
+      current.claimGeneration !== guard.claimGeneration ||
+      current.claimRecovery?.recoveryId !== guard.recoveryId ||
+      current.claimRecovery?.phase !== guard.recoveryPhase
+    ) return false;
+    this.tasks.set(task.id, { ...task, taskVersion: guard.taskVersion + 1 });
     return true;
   }
 
   public async listQueuedTasks(): Promise<readonly Task[]> {
     return [...this.tasks.values()]
-      .filter((task) => task.status === 'submitted' && (task.claimId === undefined || task.claimReleased === true))
+      .filter((task) =>
+        task.status === 'submitted' &&
+        task.claimRecovery === undefined &&
+        (task.claimId === undefined || task.claimReleased === true)
+      )
       .sort(
         (a, b) =>
           (a.queuePriority ?? 0) - (b.queuePriority ?? 0) ||
@@ -124,11 +138,41 @@ export class MemoryRepository implements Repository {
       .slice(0, limit);
   }
 
-  public async listClaimReconciliationTasks(limit: number): Promise<readonly Task[]> {
+  public async listTaskMaintenancePage(cursor: TaskMaintenanceCursor, limit: number): Promise<readonly Task[]> {
     return [...this.tasks.values()]
-      .filter((task) => task.kind !== 'testing' && ((task.claimId !== undefined && task.claimReleased !== true) || ['claimed', 'running', 'needs_input', 'handoff', 'closing'].includes(task.status)))
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+      .filter((task) =>
+        task.createdAt <= cursor.cycleCutoffAt &&
+        (
+          cursor.afterCreatedAt === undefined ||
+          task.createdAt > cursor.afterCreatedAt ||
+          (task.createdAt === cursor.afterCreatedAt && task.id > (cursor.afterTaskId ?? ''))
+        )
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
       .slice(0, limit);
+  }
+
+  public async getTaskMaintenanceHighWatermark(): Promise<string | undefined> {
+    return [...this.tasks.values()]
+      .map((task) => task.createdAt)
+      .sort((left, right) => right.localeCompare(left))[0];
+  }
+
+  public async createTaskMaintenanceCursor(cursor: TaskMaintenanceCursor): Promise<boolean> {
+    if (this.taskMaintenanceCursors.has(cursor.id)) return false;
+    this.taskMaintenanceCursors.set(cursor.id, cursor);
+    return true;
+  }
+
+  public async getTaskMaintenanceCursor(id: TaskMaintenanceCursor['id']): Promise<TaskMaintenanceCursor | undefined> {
+    return this.taskMaintenanceCursors.get(id);
+  }
+
+  public async replaceTaskMaintenanceCursor(cursor: TaskMaintenanceCursor, expectedVersion: number): Promise<boolean> {
+    const current = this.taskMaintenanceCursors.get(cursor.id);
+    if (current?.version !== expectedVersion || cursor.version !== expectedVersion + 1) return false;
+    this.taskMaintenanceCursors.set(cursor.id, cursor);
+    return true;
   }
 
   public async getPool(id: string): Promise<Pool | undefined> {
@@ -220,6 +264,30 @@ export class MemoryRepository implements Repository {
     return machine === undefined ? false : this.releaseMachineLease(machine.id, reservation);
   }
 
+  public async releaseLegacyMachineLease(machineId: string, recoveryId: string, taskId: string): Promise<boolean> {
+    const machine = this.machines.get(machineId);
+    if (machine === undefined) return false;
+    const markers = this.legacyMachineRecoveryMarkers.get(machineId) ?? new Map<string, string>();
+    const markedTaskId = markers.get(recoveryId);
+    if (markedTaskId !== undefined) return markedTaskId === taskId;
+    const reservationCount = machine.leaseReservations?.length ?? 0;
+    this.machines.set(machineId, {
+      ...machine,
+      activeLeases: Math.max(reservationCount, machine.activeLeases - 1)
+    });
+    markers.set(recoveryId, taskId);
+    this.legacyMachineRecoveryMarkers.set(machineId, markers);
+    return true;
+  }
+
+  public async clearLegacyMachineLeaseMarker(machineId: string, recoveryId: string): Promise<boolean> {
+    const markers = this.legacyMachineRecoveryMarkers.get(machineId);
+    if (markers === undefined) return false;
+    const removed = markers.delete(recoveryId);
+    if (markers.size === 0) this.legacyMachineRecoveryMarkers.delete(machineId);
+    return removed;
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     return this.profiles.get(id);
   }
@@ -261,6 +329,21 @@ export class MemoryRepository implements Repository {
       id: profile.id,
       userId: profile.userId,
       ...(profile.machineId === undefined ? {} : { machineId: profile.machineId })
+    });
+    return true;
+  }
+
+  public async releaseLegacyProfileLease(profileId: string, taskId: string): Promise<boolean> {
+    const profile = this.profiles.get(profileId);
+    if (
+      profile?.lockedByTaskId !== taskId ||
+      profile.lockedByClaimId !== undefined ||
+      profile.lockedByClaimGeneration !== undefined
+    ) return false;
+    this.profiles.set(profileId, {
+      ...profile,
+      lockedByTaskId: undefined,
+      lockExpiresAt: undefined
     });
     return true;
   }

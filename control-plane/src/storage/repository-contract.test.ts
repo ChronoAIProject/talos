@@ -636,6 +636,291 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('recovers legacy machine and profile accounting without changing modern reservations', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const modernReservation = {
+        taskId: 'modern-task',
+        claimId: 'modern-claim',
+        claimGeneration: 3,
+        expiresAt: '2026-09-08T12:10:00.000Z'
+      };
+      await repository.saveMachine({
+        id: 'legacy-machine',
+        poolId: 'pool',
+        tags: {},
+        capacity: 2,
+        activeLeases: 2,
+        leaseReservations: [modernReservation],
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({
+        id: 'legacy-profile',
+        userId: 'user-1',
+        machineId: 'legacy-machine',
+        lockedByTaskId: 'legacy-task',
+        lockExpiresAt: '2026-09-08T12:10:00.000Z'
+      });
+      await repository.saveTask(baseTask({
+        id: 'legacy-task',
+        status: 'running',
+        machineId: 'legacy-machine',
+        profileId: 'legacy-profile',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        leaseExpiresAt: '2026-09-08T12:10:00.000Z',
+        queuePriority: 7
+      }));
+
+      const service = taskService(repository);
+      await service.reconcileClaims();
+      expect(await repository.getTask('legacy-task')).toMatchObject({
+        status: 'submitted',
+        queuePriority: 7
+      });
+      expect((await repository.getTask('legacy-task'))?.claimRecovery).toBeUndefined();
+      expect((await repository.getTask('legacy-task'))?.machineId).toBeUndefined();
+      expect(await repository.getMachine('legacy-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [modernReservation]
+      });
+      expect(await repository.getProfile('legacy-profile')).toMatchObject({
+        machineId: 'legacy-machine'
+      });
+      expect((await repository.getProfile('legacy-profile'))?.lockedByTaskId).toBeUndefined();
+
+      await service.reconcileClaims();
+      expect(await repository.getMachine('legacy-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [modernReservation]
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('requeues legacy interactive actions but terminalizes legacy closing actions', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveTask(baseTask({
+        id: 'legacy-interactive',
+        interaction: 'interactive',
+        status: 'running',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        pendingActionId: 'action-requeue',
+        createdAt: '2025-01-01T00:00:00.000Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'legacy-closing',
+        interaction: 'interactive',
+        status: 'closing',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        pendingActionId: 'action-close',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+      await repository.enqueueSessionAction({
+        id: 'action-requeue',
+        taskId: 'legacy-interactive',
+        action: { type: 'navigate', url: 'https://example.com/requeue' },
+        state: 'pending',
+        createdAt: '2025-01-01T00:00:00.000Z'
+      });
+      await repository.enqueueSessionAction({
+        id: 'action-close',
+        taskId: 'legacy-closing',
+        action: { type: 'navigate', url: 'https://example.com/close' },
+        state: 'pending',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      });
+      await repository.takePendingSessionAction('legacy-interactive');
+      await repository.takePendingSessionAction('legacy-closing');
+
+      await taskService(repository).reconcileClaims();
+      expect(await repository.getTask('legacy-interactive')).toMatchObject({ status: 'submitted' });
+      expect(await repository.getPendingSessionAction('legacy-interactive')).toMatchObject({
+        id: 'action-requeue',
+        state: 'pending'
+      });
+      expect(await repository.getTask('legacy-closing')).toMatchObject({ status: 'completed' });
+      expect((await repository.getTask('legacy-closing'))?.pendingActionId).toBeUndefined();
+      expect(await repository.getPendingSessionAction('legacy-closing')).toBeUndefined();
+      expect(await repository.getSessionActionResult('action-close')).toMatchObject({
+        taskId: 'legacy-closing',
+        result: { error: { code: 'session_closed' } }
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('quarantines malformed claims without preventing later legacy recovery', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveTask(baseTask({
+        id: 'malformed-claim',
+        status: 'claimed',
+        claimId: 'malformed-id',
+        claimGeneration: 0,
+        machineId: 'unknown-machine',
+        workerId: 'malformed-worker',
+        leaseToken: 'malformed-token',
+        leaseExpiresAt: '1970-01-01T00:00:00.000Z',
+        createdAt: '2025-01-01T00:00:00.000Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'invalid-expiry',
+        status: 'claimed',
+        claimId: 'invalid-expiry-claim',
+        claimGeneration: 1,
+        machineId: 'unknown-machine',
+        workerId: 'invalid-expiry-worker',
+        leaseToken: 'invalid-expiry-token',
+        leaseExpiresAt: 'not-a-timestamp',
+        createdAt: '2025-01-01T00:00:00.500Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'invalid-credentials',
+        status: 'claimed',
+        claimId: '',
+        claimGeneration: 1,
+        machineId: 'unknown-machine',
+        workerId: 'invalid-credentials-worker',
+        leaseToken: 'invalid-credentials-token',
+        leaseExpiresAt: '2026-09-08T12:10:00.000Z',
+        createdAt: '2025-01-01T00:00:00.750Z'
+      }));
+      await repository.saveTask(baseTask({
+        id: 'later-legacy',
+        status: 'running',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+
+      await taskService(repository).reconcileClaims();
+      expect(await repository.getTask('malformed-claim')).toMatchObject({
+        status: 'failed',
+        error: { code: 'claim_state_malformed' },
+        claimRecovery: {
+          kind: 'malformed',
+          phase: 'quarantined',
+          reasonCode: 'invalid_claim_generation'
+        }
+      });
+      expect(await repository.getTask('invalid-expiry')).toMatchObject({
+        status: 'failed',
+        claimRecovery: { reasonCode: 'invalid_lease_expiry', phase: 'quarantined' }
+      });
+      expect(await repository.getTask('invalid-credentials')).toMatchObject({
+        status: 'failed',
+        claimRecovery: { reasonCode: 'invalid_claim_credentials', phase: 'quarantined' }
+      });
+      expect(await repository.getTask('later-legacy')).toMatchObject({ status: 'submitted' });
+      expect((await repository.getTask('later-legacy'))?.claimRecovery).toBeUndefined();
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('drains exact projections even when a malformed active claim says it was released', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const reservation = {
+        taskId: 'false-released-task',
+        claimId: 'false-released-claim',
+        claimGeneration: 4,
+        expiresAt: '2026-09-08T12:10:00.000Z'
+      };
+      await repository.saveMachine({
+        id: 'false-released-machine',
+        poolId: 'pool',
+        tags: {},
+        capacity: 1,
+        activeLeases: 1,
+        leaseReservations: [reservation],
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({
+        id: 'false-released-profile',
+        userId: 'user-1',
+        machineId: 'false-released-machine',
+        lockedByTaskId: reservation.taskId,
+        lockedByClaimId: reservation.claimId,
+        lockedByClaimGeneration: reservation.claimGeneration,
+        lockExpiresAt: reservation.expiresAt
+      });
+      await repository.saveTask(baseTask({
+        id: reservation.taskId,
+        status: 'claimed',
+        profileId: 'false-released-profile',
+        machineId: 'false-released-machine',
+        workerId: 'false-released-worker',
+        leaseToken: 'false-released-token',
+        leaseExpiresAt: reservation.expiresAt,
+        claimId: reservation.claimId,
+        claimGeneration: reservation.claimGeneration,
+        claimCommitted: true,
+        claimReleased: true
+      }));
+
+      const service = taskService(repository);
+      await service.reconcileClaims();
+      expect(await repository.getTask(reservation.taskId)).toMatchObject({
+        status: 'failed',
+        claimRecovery: {
+          kind: 'malformed',
+          phase: 'quarantined',
+          reasonCode: 'active_claim_marked_released'
+        }
+      });
+      expect(await repository.getMachine('false-released-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+      expect((await repository.getProfile('false-released-profile'))?.lockedByTaskId).toBeUndefined();
+
+      await service.reconcileClaims();
+      expect(await repository.getMachine('false-released-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('advances durable maintenance past one full batch', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        await repository.saveTask(baseTask({
+          id: `healthy-${String(index).padStart(3, '0')}`,
+          createdAt: '2025-01-01T00:00:00.000Z'
+        }));
+      }
+      await repository.saveTask(baseTask({
+        id: 'legacy-after-full-batch',
+        status: 'running',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+      const service = taskService(repository);
+
+      await service.reconcileClaims();
+      expect(await repository.getTask('legacy-after-full-batch')).toMatchObject({ status: 'running' });
+      await service.reconcileClaims();
+      expect(await repository.getTask('legacy-after-full-batch')).toMatchObject({ status: 'submitted' });
+      expect((await repository.getTask('legacy-after-full-batch'))?.claimRecovery).toBeUndefined();
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('reconciles a reservation when the task machine pointer is stale', async () => {
     const { repository, close } = await makeHarness();
     try {
