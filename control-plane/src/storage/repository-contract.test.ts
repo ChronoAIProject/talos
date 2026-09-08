@@ -222,6 +222,59 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('keeps machine reservation mutations idempotent and monotonic', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveMachine({
+        id: 'machine-reservation-mutations',
+        poolId: 'pool',
+        tags: {},
+        capacity: 1,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      const initial = {
+        taskId: 'task-a',
+        claimId: 'claim-a',
+        claimGeneration: 1,
+        expiresAt: '2026-09-04T12:01:00.000Z'
+      };
+
+      expect(await repository.reserveMachineLease('machine-reservation-mutations', initial)).toBe(true);
+      expect(await repository.reserveMachineLease('machine-reservation-mutations', initial)).toBe(true);
+      expect(await repository.getMachine('machine-reservation-mutations')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [initial]
+      });
+
+      expect(await repository.renewMachineLease('machine-reservation-mutations', {
+        ...initial,
+        expiresAt: '2026-09-04T12:00:00.000Z'
+      })).toBe(true);
+      expect(await repository.getMachine('machine-reservation-mutations')).toMatchObject({
+        leaseReservations: [initial]
+      });
+
+      const extended = { ...initial, expiresAt: '2026-09-04T12:02:00.000Z' };
+      expect(await repository.renewMachineLease('machine-reservation-mutations', extended)).toBe(true);
+      expect(await repository.getMachine('machine-reservation-mutations')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [extended]
+      });
+
+      const identity = { taskId: initial.taskId, claimId: initial.claimId, claimGeneration: initial.claimGeneration };
+      expect(await repository.releaseMachineLease('machine-reservation-mutations', identity)).toBe(true);
+      expect(await repository.releaseMachineLease('machine-reservation-mutations', identity)).toBe(false);
+      expect(await repository.getMachine('machine-reservation-mutations')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('does not let profile creation clear an active claim lock', async () => {
     const { repository, close } = await makeHarness();
     try {

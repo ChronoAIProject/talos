@@ -1,9 +1,14 @@
-import { MongoClient, type Collection, type Db, type MongoClientOptions } from 'mongodb';
+import { MongoClient, type Collection, type Db, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
 import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
+
+type MachineDocument = Omit<Machine, 'leaseReservations'> & {
+  _id: string;
+  leaseReservations?: MachineLeaseReservation[];
+};
 
 const mongoDate = (input: unknown): Readonly<Record<string, unknown>> => ({
   $convert: { input, to: 'date', onError: null, onNull: null }
@@ -27,7 +32,7 @@ export class MongoRepository implements Repository {
   private readonly database: Db;
   private readonly tasks: Collection<Document>;
   private readonly pools: Collection<Document>;
-  private readonly machines: Collection<Document>;
+  private readonly machines: Collection<MachineDocument>;
   private readonly profiles: Collection<Document>;
   private readonly handoffs: Collection<Document>;
   private readonly webhooks: Collection<Document>;
@@ -42,7 +47,7 @@ export class MongoRepository implements Repository {
     this.database = this.client.db(databaseName);
     this.tasks = this.database.collection('tasks');
     this.pools = this.database.collection('pools');
-    this.machines = this.database.collection('machines');
+    this.machines = this.database.collection<MachineDocument>('machines');
     this.profiles = this.database.collection('profiles');
     this.handoffs = this.database.collection('handoffs');
     this.webhooks = this.database.collection('webhooks');
@@ -225,7 +230,7 @@ export class MongoRepository implements Repository {
   }
 
   public async saveMachine(machine: Machine): Promise<void> {
-    await this.machines.replaceOne({ _id: machine.id }, { ...machine, _id: machine.id }, { upsert: true });
+    await this.machines.replaceOne({ _id: machine.id }, machineToDocument(machine), { upsert: true });
   }
 
   public async rotateMachineToken(machineId: string, expectedTokenHash: string, tokenHash: string): Promise<boolean> {
@@ -237,41 +242,49 @@ export class MongoRepository implements Repository {
   }
 
   public async reserveMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
-    const existing = await this.machines.findOne({
+    const existingFilter = {
       _id: machineId,
       leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
-    });
+    } satisfies Filter<MachineDocument>;
+    const existing = await this.machines.findOne(existingFilter);
     if (existing !== null) return true;
-    const document = await this.machines.findOneAndUpdate(
-      {
-        _id: machineId,
-        online: true,
-        $expr: { $lt: ['$activeLeases', '$capacity'] },
-        leaseReservations: { $not: { $elemMatch: { claimId: reservation.claimId } } }
-      },
-      { $inc: { activeLeases: 1 }, $push: { leaseReservations: reservation } },
-      { returnDocument: 'after' }
-    );
-    if (document !== null) return true;
-    return await this.machines.findOne({
+    const filter = {
       _id: machineId,
-      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
-    }) !== null;
+      online: true,
+      $expr: { $lt: ['$activeLeases', '$capacity'] },
+      leaseReservations: { $not: { $elemMatch: { claimId: reservation.claimId } } }
+    } satisfies Filter<MachineDocument>;
+    const update = {
+      $inc: { activeLeases: 1 },
+      $push: { leaseReservations: reservation }
+    } satisfies UpdateFilter<MachineDocument>;
+    const document = await this.machines.findOneAndUpdate(filter, update, { returnDocument: 'after' });
+    if (document !== null) return true;
+    return await this.machines.findOne(existingFilter) !== null;
   }
 
   public async renewMachineLease(machineId: string, reservation: MachineLeaseReservation): Promise<boolean> {
-    const result = await this.machines.updateOne(
-      { _id: machineId, leaseReservations: { $elemMatch: claimReservationFilter(reservation) } },
-      { $max: { 'leaseReservations.$.expiresAt': reservation.expiresAt } }
-    );
+    const filter = {
+      _id: machineId,
+      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
+    } satisfies Filter<MachineDocument>;
+    const update = {
+      $max: { 'leaseReservations.$.expiresAt': reservation.expiresAt }
+    } satisfies UpdateFilter<MachineDocument>;
+    const result = await this.machines.updateOne(filter, update);
     return result.matchedCount === 1;
   }
 
   public async releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
-    const result = await this.machines.updateOne(
-      { _id: machineId, leaseReservations: { $elemMatch: claimReservationFilter(reservation) } },
-      { $inc: { activeLeases: -1 }, $pull: { leaseReservations: claimReservationFilter(reservation) } }
-    );
+    const filter = {
+      _id: machineId,
+      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
+    } satisfies Filter<MachineDocument>;
+    const update = {
+      $inc: { activeLeases: -1 },
+      $pull: { leaseReservations: claimReservationFilter(reservation) }
+    } satisfies UpdateFilter<MachineDocument>;
+    const result = await this.machines.updateOne(filter, update);
     return result.modifiedCount === 1;
   }
 
@@ -607,7 +620,14 @@ const claimReservationFilter = (reservation: Omit<MachineLeaseReservation, 'expi
   claimId: reservation.claimId,
   claimGeneration: reservation.claimGeneration,
   taskId: reservation.taskId
-});
+}) satisfies Filter<MachineLeaseReservation>;
+
+const machineToDocument = (machine: Machine): MachineDocument => {
+  const { leaseReservations, ...fields } = machine;
+  return leaseReservations === undefined
+    ? { ...fields, _id: machine.id }
+    : { ...fields, _id: machine.id, leaseReservations: [...leaseReservations] };
+};
 
 const withoutId = (document: Document): Record<string, unknown> => {
   return Object.fromEntries(Object.entries(document).filter(([key, value]) => key !== '_id' && value !== null));
@@ -618,7 +638,10 @@ const taskFromDocument = (document: Document): Task => ({
   ...withoutId(document)
 }) as unknown as Task;
 const poolFromDocument = (document: Document): Pool => withoutId(document) as unknown as Pool;
-const machineFromDocument = (document: Document): Machine => withoutId(document) as unknown as Machine;
+const machineFromDocument = ({ _id: _documentId, leaseReservations, ...machine }: MachineDocument): Machine =>
+  leaseReservations == null
+    ? machine
+    : { ...machine, leaseReservations };
 const profileFromDocument = (document: Document): Profile => withoutId(document) as unknown as Profile;
 const handoffFromDocument = (document: Document): HandoffLink => withoutId(document) as unknown as HandoffLink;
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;

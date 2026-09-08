@@ -133,6 +133,14 @@ class FakeMongoClient {
   public async close(): Promise<void> {}
 }
 
+const fakeMongoRepository = (): { client: FakeMongoClient; repository: MongoRepository } => {
+  const client = new FakeMongoClient();
+  const repository = new MongoRepository('mongodb://unused', 'talos-test', {
+    client: client as unknown as MongoClient
+  });
+  return { client, repository };
+};
+
 const makeTestingRun = async (): Promise<TestingRunRecord> => {
   const digest = `sha256:${'a'.repeat(64)}`;
   const reference = (schema: string, ref: string) => ({ schema, ref, digest });
@@ -209,11 +217,33 @@ const makeTestingRun = async (): Promise<TestingRunRecord> => {
 };
 
 describe('MongoRepository testing run persistence', () => {
-  it('creates the unique index, maps duplicate inserts, and rejects stale CAS writes', async () => {
-    const client = new FakeMongoClient();
-    const repository = new MongoRepository('mongodb://unused', 'talos-test', {
-      client: client as unknown as MongoClient
+  it('normalizes legacy null machine reservations as absent', async () => {
+    const { client, repository } = fakeMongoRepository();
+    await client.database.collection('machines').insertOne({
+      _id: 'legacy-machine',
+      id: 'legacy-machine',
+      poolId: 'pool-1',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'hash',
+      leaseReservations: null
     });
+
+    expect(await repository.getMachine('legacy-machine')).toEqual({
+      id: 'legacy-machine',
+      poolId: 'pool-1',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'hash'
+    });
+  });
+
+  it('creates the unique index, maps duplicate inserts, and rejects stale CAS writes', async () => {
+    const { client, repository } = fakeMongoRepository();
     await repository.initialize();
     expect(client.database.collection('testing_runs').indexes).toContainEqual({
       keys: { userId: 1, idempotencyKey: 1 },
