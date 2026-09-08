@@ -5,6 +5,7 @@ import { Scheduler } from '../services/scheduler.js';
 import { TaskService } from '../services/task-service.js';
 import { WebhookSigner } from '../services/webhook-signer.js';
 import { MemoryRepository } from '../storage/memory-repository.js';
+import type { Repository } from '../storage/repository.js';
 import { createApiServer } from './server.js';
 import { loadOpenApiDocument } from '../openapi.js';
 
@@ -75,6 +76,94 @@ describe('control-plane HTTP API', () => {
     expect(body).toContain('internal_error');
     expect(body).not.toContain('claim-secret-sentinel');
     expect(body).not.toContain('lease-token-sentinel');
+    server.close();
+  });
+
+  it('returns a retryable public conflict after authorized task CAS exhaustion', async () => {
+    const storage = new MemoryRepository();
+    let attempts = 0;
+    const repository = new Proxy<Repository>(storage, {
+      get(target, property) {
+        if (property === 'replaceSubmittedTask') {
+          return async (...args: Parameters<Repository['replaceSubmittedTask']>): Promise<boolean> => {
+            if (args[0].status === 'cancelled') {
+              attempts += 1;
+              return false;
+            }
+            return target.replaceSubmittedTask(...args);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234')
+    );
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' };
+    const created = await fetch(`${base}/v1/tasks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ kind: 'browse', goal: 'public CAS exhaustion' })
+    });
+    const task = await created.json() as { id: string };
+
+    const response = await fetch(`${base}/v1/tasks/${task.id}/cancel`, { method: 'POST', headers });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'concurrent_update',
+        message: 'task state changed concurrently',
+        retryable: true
+      }
+    });
+    expect(attempts).toBe(3);
+    server.close();
+  });
+
+  it('reports an expired handoff claim as a non-retryable public conflict', async () => {
+    const clock = { value: Date.now() };
+    const repository = new MemoryRepository(() => clock.value);
+    await repository.savePool({ id: 'expired-handoff-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'expired-handoff-machine', poolId: 'expired-handoff-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234'),
+      { clock: () => clock.value, leaseSeconds: 10 }
+    );
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'expired handoff' });
+    const claim = await service.claim('worker-a', 'expired-handoff-machine', clock.value);
+    clock.value = Date.parse(claim.task.leaseExpiresAt!);
+    const server = createApiServer(service, repository, { clock: () => clock.value });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${base}/v1/tasks/${task.id}/handoff`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' },
+      body: '{}'
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'conflict',
+        message: 'task claim is not active',
+        retryable: false
+      }
+    });
+    expect(await repository.getTask(task.id)).not.toHaveProperty('handoff');
     server.close();
   });
 

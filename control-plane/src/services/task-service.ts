@@ -1,4 +1,4 @@
-import { conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
+import { concurrentUpdate, conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
 import type { Lease, MachineLeaseReservation, PublicTask, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
@@ -19,6 +19,7 @@ export interface TaskServiceOptions {
 }
 
 const CLAIM_RECONCILIATION_BATCH_SIZE = 100;
+const USER_TASK_CAS_ATTEMPTS = 3;
 const TASK_MAINTENANCE_CURSOR_ID = 'task-claim-reconciliation' as const;
 const ACTIVE_CLAIM_STATUSES: readonly Task['status'][] = ['claimed', 'running', 'needs_input', 'handoff', 'closing'];
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -191,24 +192,27 @@ export class TaskService {
 
   public async provideInput(id: string, userId: string, input: NonNullable<Task['input']>): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
-    if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
-    if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
-    const now = this.clock();
+    this.assertTaskAcceptsInput(task);
+    const claimBinding = this.userClaimBinding(task);
+    const { persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
+      this.assertTaskAcceptsInput(current);
+      const now = this.clock();
+      const currentLeaseExpiry = Date.parse(current.leaseExpiresAt ?? '');
+      const extendedLeaseExpiry = now + this.leaseSeconds * 1000;
+      return {
+        ...current,
+        status: 'running',
+        updatedAt: new Date(now).toISOString(),
+        leaseExpiresAt: new Date(Math.max(
+          Number.isFinite(currentLeaseExpiry) ? currentLeaseExpiry : 0,
+          extendedLeaseExpiry
+        )).toISOString()
+      };
+    }, { claimBinding });
     await this.repository.savePendingInput(id, input);
-    const updated: Task = {
-      ...task,
-      status: 'running',
-      updatedAt: new Date(now).toISOString(),
-      leaseExpiresAt: task.workerId === undefined ? task.leaseExpiresAt : new Date(now + this.leaseSeconds * 1000).toISOString()
-    };
-    if (task.workerId !== undefined) {
-      await this.replaceClaimedTask(task, updated);
-      if (!await this.ensureClaimProjections(updated)) throw conflict('lease accounting could not be renewed');
-    } else if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0, task.taskVersion ?? 0)) {
-      throw conflict('task state changed concurrently');
-    }
-    await this.emit(updated, 'task.state_changed', { status: updated.status });
-    return updated;
+    if (!await this.ensureClaimProjections(persisted)) throw conflict('lease accounting could not be renewed');
+    await this.emit(persisted, 'task.state_changed', { status: persisted.status });
+    return persisted;
   }
 
   public async needsInput(taskId: string, workerId: string, leaseToken: string): Promise<Task> {
@@ -232,60 +236,56 @@ export class TaskService {
 
   public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
     const task = await this.authorizedTask(id, userId);
-    if (task.interaction === 'interactive') throw conflict('interactive sessions do not support handoff');
-    if (!['running', 'claimed'].includes(task.status)) throw conflict('task cannot request handoff in current state');
+    this.assertTaskCanRequestHandoff(task);
+    const claimBinding = this.userClaimBinding(task);
     const expires = new Date(this.clock() + expiresInSeconds * 1000).toISOString();
     const linkId = newId('handoff');
     const url = `/v1/handoffs/${linkId}`;
+    const { persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
+      this.assertTaskCanRequestHandoff(current);
+      return {
+        ...current,
+        status: 'handoff',
+        updatedAt: new Date(this.clock()).toISOString(),
+        handoff: { url, expiresAt: expires }
+      };
+    }, { claimBinding, requireActiveClaim: true });
     await this.repository.saveHandoff({ id: linkId, taskId: id, userId, url, expiresAt: expires, used: false });
-    const updated: Task = {
-      ...task,
-      status: 'handoff',
-      updatedAt: new Date(this.clock()).toISOString(),
-      handoff: { url, expiresAt: expires }
-    };
-    await this.replaceClaimedTask(task, updated);
-    await this.emit(updated, 'task.handoff_requested', { handoff_url: url, expires });
+    await this.emit(persisted, 'task.handoff_requested', { handoff_url: url, expires });
     return { handoff_url: url, expires };
   }
 
   public async cancel(id: string, userId: string): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
-    if (task.interaction === 'interactive') throw conflict('interactive sessions must be closed through the session API');
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('task is already terminal');
-    const updated: Task = {
-      ...task,
-      status: 'cancelled',
-      updatedAt: new Date(this.clock()).toISOString()
-    };
-    if (task.status === 'submitted') {
-      if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0, task.taskVersion ?? 0)) throw conflict('task state changed concurrently');
-    } else {
-      await this.replaceClaimedTask(task, updated);
-      await this.releaseLease(updated);
-    }
-    await this.emit(updated, 'task.state_changed', { status: updated.status });
-    return updated;
+    const { previous, persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
+      if (current.interaction === 'interactive') throw conflict('interactive sessions must be closed through the session API');
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) throw conflict('task is already terminal');
+      return {
+        ...current,
+        status: 'cancelled',
+        updatedAt: new Date(this.clock()).toISOString()
+      };
+    });
+    if (previous.status !== 'submitted') await this.releaseLease(persisted);
+    const result = await this.authorizedTask(id, userId);
+    await this.emit(result, 'task.state_changed', { status: result.status });
+    return result;
   }
 
   public async closeInteractive(id: string, userId: string): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
-    if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw conflict('session is already terminal');
-    const status = task.status === 'submitted' ? 'completed' : 'closing';
-    const updated: Task = {
-      ...task,
-      status,
-      updatedAt: new Date(this.clock()).toISOString()
-    };
-    if (task.status === 'submitted') {
-      if (!await this.repository.replaceSubmittedTask(updated, task.claimGeneration ?? 0, task.taskVersion ?? 0)) throw conflict('task state changed concurrently');
-    } else {
-      await this.replaceClaimedTask(task, updated);
-    }
-    await this.emit(updated, 'task.state_changed', { status });
-    if (status === 'completed') await this.emit(updated, 'task.completed', { status });
-    return updated;
+    const { persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
+      if (current.interaction !== 'interactive') throw conflict('task is not an interactive session');
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) throw conflict('session is already terminal');
+      return {
+        ...current,
+        status: current.status === 'submitted' ? 'completed' : 'closing',
+        updatedAt: new Date(this.clock()).toISOString()
+      };
+    });
+    await this.emit(persisted, 'task.state_changed', { status: persisted.status });
+    if (persisted.status === 'completed') await this.emit(persisted, 'task.completed', { status: persisted.status });
+    return persisted;
   }
 
   public async expireLeases(now = this.clock()): Promise<readonly Task[]> {
@@ -775,6 +775,84 @@ export class TaskService {
 
   private async tryReplaceClaimedTask(current: Task, updated: Task): Promise<boolean> {
     return this.repository.replaceTaskForClaim(updated, this.claimGuard(current));
+  }
+
+  private async replaceAuthorizedTask(
+    id: string,
+    userId: string,
+    initial: Task,
+    update: (current: Task) => Task,
+    options: {
+      claimBinding?: Pick<TaskClaimGuard, 'claimId' | 'claimGeneration'>;
+      requireActiveClaim?: boolean;
+    } = {}
+  ): Promise<{ previous: Task; persisted: Task }> {
+    let current = initial;
+    for (let attempt = 0; attempt < USER_TASK_CAS_ATTEMPTS; attempt += 1) {
+      if (
+        options.claimBinding !== undefined &&
+        (
+          current.status === 'submitted' ||
+          current.claimId !== options.claimBinding.claimId ||
+          current.claimGeneration !== options.claimBinding.claimGeneration
+        )
+      ) throw conflict('task claim generation changed concurrently');
+
+      const updated = update(current);
+      let replaced: boolean;
+      if (current.status === 'submitted') {
+        replaced = await this.repository.replaceSubmittedTask(
+          updated,
+          current.claimGeneration ?? 0,
+          current.taskVersion ?? 0
+        );
+      } else {
+        const guard = this.userClaimGuard(current);
+        if (options.requireActiveClaim === true) {
+          if (current.leaseExpiresAt === undefined) throw conflict('task claim is not active');
+          replaced = await this.repository.replaceTaskForActiveClaim(updated, { ...guard, leaseExpiresAt: current.leaseExpiresAt });
+        } else {
+          replaced = await this.repository.replaceTaskForClaim(updated, guard);
+        }
+      }
+      if (replaced) return { previous: current, persisted: await this.authorizedTask(id, userId) };
+      const latest = await this.authorizedTask(id, userId);
+      if (
+        options.requireActiveClaim === true &&
+        latest.claimId === current.claimId &&
+        latest.claimGeneration === current.claimGeneration &&
+        (latest.taskVersion ?? 0) === (current.taskVersion ?? 0) &&
+        latest.status === current.status &&
+        latest.leaseExpiresAt === current.leaseExpiresAt
+      ) throw conflict('task claim is not active');
+      current = latest;
+    }
+    throw concurrentUpdate();
+  }
+
+  private userClaimBinding(task: Task): Pick<TaskClaimGuard, 'claimId' | 'claimGeneration'> {
+    if (task.claimId === undefined || task.claimGeneration === undefined || task.claimGeneration <= 0) {
+      throw conflict('task claim is not active');
+    }
+    return { claimId: task.claimId, claimGeneration: task.claimGeneration };
+  }
+
+  private userClaimGuard(task: Task): TaskClaimGuard {
+    if (task.claimRecovery !== undefined || this.malformedClaimReason(task) !== undefined) {
+      throw conflict('task claim state cannot be changed');
+    }
+    return { ...this.userClaimBinding(task), taskVersion: task.taskVersion ?? 0, status: task.status };
+  }
+
+  private assertTaskAcceptsInput(task: Task): void {
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
+    if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
+  }
+
+  private assertTaskCanRequestHandoff(task: Task): void {
+    if (task.interaction === 'interactive') throw conflict('interactive sessions do not support handoff');
+    if (!['running', 'claimed'].includes(task.status)) throw conflict('task cannot request handoff in current state');
+    if (task.claimCommitted !== true) throw conflict('task claim is not active');
   }
 
   private claimGuard(task: Task): TaskClaimGuard {

@@ -1444,6 +1444,117 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('retries an authorized cancellation after heartbeat wins the first task CAS', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'cancel-race-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'cancel-race-machine', poolId: 'cancel-race-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+      const cancelCasReached = deferred();
+      const resumeCancelCas = deferred();
+      let cancelAttempts = 0;
+      let leaseReleases = 0;
+      const raced = new Proxy<Repository>(repository, {
+        get(target, property) {
+          if (property === 'replaceTaskForClaim') {
+            return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+              if (args[0].status === 'cancelled' && args[0].claimReleased !== true) {
+                cancelAttempts += 1;
+                if (cancelAttempts === 1) {
+                  cancelCasReached.resolve();
+                  await resumeCancelCas.promise;
+                }
+              }
+              return target.replaceTaskForClaim(...args);
+            };
+          }
+          if (property === 'releaseMachineLease') {
+            return async (...args: Parameters<Repository['releaseMachineLease']>): Promise<boolean> => {
+              leaseReleases += 1;
+              return target.releaseMachineLease(...args);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      const service = taskService(raced, clock);
+      const task = await service.createTask('cancel-race-user', { kind: 'browse', goal: 'cancel race' });
+      const claim = await service.claim('cancel-race-worker', 'cancel-race-machine', clock.value);
+
+      const cancellation = service.cancel(task.id, task.userId);
+      await cancelCasReached.promise;
+      await service.heartbeat(task.id, 'cancel-race-worker', claim.leaseToken, 30);
+      resumeCancelCas.resolve();
+
+      await expect(cancellation).resolves.toMatchObject({ status: 'cancelled', claimReleased: true });
+      expect(cancelAttempts).toBe(2);
+      expect(leaseReleases).toBe(1);
+      expect(await repository.getMachine('cancel-race-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+      expect((await repository.listWebhooks()).filter((event) => event.payload.status === 'cancelled')).toHaveLength(1);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('retries interactive close after heartbeat and preserves pending-action teardown', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'close-race-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({ id: 'close-race-machine', poolId: 'close-race-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+      const closeCasReached = deferred();
+      const resumeCloseCas = deferred();
+      let closeAttempts = 0;
+      const raced = new Proxy<Repository>(repository, {
+        get(target, property) {
+          if (property === 'replaceTaskForClaim') {
+            return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+              if (args[0].status === 'closing') {
+                closeAttempts += 1;
+                if (closeAttempts === 1) {
+                  closeCasReached.resolve();
+                  await resumeCloseCas.promise;
+                }
+              }
+              return target.replaceTaskForClaim(...args);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      const tasks = taskService(raced, clock);
+      const sessions = new SessionService(tasks, raced, { clock: () => clock.value });
+      const session = await sessions.create('close-race-user', { mode: 'act', constraints: {} });
+      const claim = await tasks.claim('close-race-worker', 'close-race-machine', clock.value);
+      const action = await sessions.sendAction(session.id, 'close-race-user', {
+        type: 'screenshot',
+        format: 'png',
+        quality: 80
+      }, 0);
+
+      const closing = sessions.close(session.id, 'close-race-user');
+      await closeCasReached.promise;
+      await tasks.heartbeat(session.id, 'close-race-worker', claim.leaseToken, 30);
+      resumeCloseCas.resolve();
+
+      await expect(closing).resolves.toMatchObject({ status: 'closing', lastActionId: action.action_id });
+      expect(closeAttempts).toBe(2);
+      await expect(sessions.getAction(session.id, action.action_id, 'close-race-user', 0)).resolves.toMatchObject({
+        status: 'completed',
+        result: { error: { code: 'session_closed' } }
+      });
+      await expect(sessions.pollWorkerAction(session.id, 'close-race-worker', claim.leaseToken))
+        .resolves.toEqual({ closing: true });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('reconciles interrupted projections and fences a requeued generation', async () => {
     const { repository, close } = await makeHarness();
     try {
