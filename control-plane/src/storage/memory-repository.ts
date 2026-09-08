@@ -167,7 +167,12 @@ export class MemoryRepository implements Repository {
     const machine = this.machines.get(machineId);
     if (machine === undefined) return false;
     const reservations = machine.leaseReservations ?? [];
-    if (reservations.some((entry) => entry.claimId === reservation.claimId && entry.claimGeneration === reservation.claimGeneration)) return true;
+    if (reservations.some((entry) =>
+      entry.taskId === reservation.taskId &&
+      entry.claimId === reservation.claimId &&
+      entry.claimGeneration === reservation.claimGeneration
+    )) return true;
+    if (reservations.some((entry) => entry.claimId === reservation.claimId)) return false;
     if (!machine.online || machine.activeLeases >= machine.capacity) return false;
     this.machines.set(machineId, {
       ...machine,
@@ -219,8 +224,10 @@ export class MemoryRepository implements Repository {
     return this.profiles.get(id);
   }
 
-  public async saveProfile(profile: Profile): Promise<void> {
-    if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+  public async createProfile(profile: Profile): Promise<boolean> {
+    if (this.profiles.has(profile.id)) return false;
+    this.profiles.set(profile.id, profile);
+    return true;
   }
 
   public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined> {

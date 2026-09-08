@@ -104,7 +104,7 @@ describe('task service', () => {
       new WebhookSigner('test-webhook-secret'),
       { clock: () => clock.value, leaseSeconds: 10 }
     );
-    await repository.saveProfile({ id: 'renewal-profile', userId: 'user-a' });
+    await repository.createProfile({ id: 'renewal-profile', userId: 'user-a' });
     await repository.savePool({ id: 'renewal-pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'renewal-machine', poolId: 'renewal-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'x' });
     const first = await service.createTask('user-a', { kind: 'browse', goal: 'first', profile_id: 'renewal-profile' });
@@ -173,7 +173,7 @@ describe('task service', () => {
 
   it('enforces profile ownership and one concurrent lock', async () => {
     const { repository, service } = setup();
-    await repository.saveProfile({ id: 'profile', userId: 'user-a' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a' });
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
     await expect(service.createTask('user-b', { kind: 'browse', goal: 'x', profile_id: 'profile' })).rejects.toMatchObject({ code: 'forbidden' });
@@ -196,7 +196,7 @@ describe('task service', () => {
       online: true,
       workerTokenHash: 'x'
     });
-    await repository.saveProfile({ id: 'profile', userId: 'user-a', machineId: 'remote-machine' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a', machineId: 'remote-machine' });
 
     await expect(service.createTask('user-a', {
       kind: 'browse',
@@ -211,7 +211,7 @@ describe('task service', () => {
 
   it('keeps a profile lock renewed and resumes late input without requeue', async () => {
     const { repository, service, clock } = setup({ value: 1000 });
-    await repository.saveProfile({ id: 'profile', userId: 'user-a' });
+    await repository.createProfile({ id: 'profile', userId: 'user-a' });
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
     const task = await service.createTask('user-a', { kind: 'browse', goal: 'input', profile_id: 'profile' });

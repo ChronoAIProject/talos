@@ -16,8 +16,8 @@ describe('MemoryRepository owner listings', () => {
       ownerUserId: 'bob',
       tags: {}
     });
-    await repository.saveProfile({ id: 'alice-profile', userId: 'alice' });
-    await repository.saveProfile({ id: 'bob-profile', userId: 'bob' });
+    await repository.createProfile({ id: 'alice-profile', userId: 'alice' });
+    await repository.createProfile({ id: 'bob-profile', userId: 'bob' });
 
     expect((await repository.listPoolsByOwner('alice')).map((pool) => pool.id)).toEqual([
       'alice-pool'

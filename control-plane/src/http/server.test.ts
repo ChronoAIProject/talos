@@ -218,6 +218,7 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/pools`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-pool' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/pools/bob-pool/machines`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-machine' }) })).status).toBe(201);
     expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-profile', machine_id: 'bob-machine' }) })).status).toBe(201);
+    expect((await fetch(`${base}/v1/profiles`, { method: 'POST', headers: user('bob'), body: JSON.stringify({ id: 'bob-profile' }) })).status).toBe(409);
     const bobPools = await fetch(`${base}/v1/pools`, { headers: user('bob') });
     expect(bobPools.status).toBe(200);
     expect((await bobPools.json() as Array<{ id: string }>).map((pool) => pool.id)).toEqual(['bob-pool']);
@@ -290,7 +291,7 @@ describe('control-plane HTTP API', () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
-    await repository.saveProfile({ id: 'p', userId: 'u' });
+    await repository.createProfile({ id: 'p', userId: 'u' });
     const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
     const server = createApiServer(service, repository);
     await new Promise<void>((resolve) => server.listen(0, resolve));

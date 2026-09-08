@@ -136,7 +136,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     try {
       await repository.savePool({ id: 'claim-pool', visibility: 'platform', tags: {} });
       await repository.saveMachine({ id: 'claim-machine', poolId: 'claim-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
-      await repository.saveProfile({ id: 'claim-profile', userId: 'user-1' });
+      await repository.createProfile({ id: 'claim-profile', userId: 'user-1' });
       await repository.saveTask(baseTask({ id: 'claim-task', profileId: 'claim-profile' }));
       const service = taskService(barrierRepository(repository));
 
@@ -229,7 +229,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         id: 'machine-reservation-mutations',
         poolId: 'pool',
         tags: {},
-        capacity: 1,
+        capacity: 2,
         activeLeases: 0,
         online: true,
         workerTokenHash: 'hash'
@@ -243,6 +243,10 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
 
       expect(await repository.reserveMachineLease('machine-reservation-mutations', initial)).toBe(true);
       expect(await repository.reserveMachineLease('machine-reservation-mutations', initial)).toBe(true);
+      expect(await repository.reserveMachineLease('machine-reservation-mutations', {
+        ...initial,
+        taskId: 'task-with-conflicting-claim-id'
+      })).toBe(false);
       expect(await repository.getMachine('machine-reservation-mutations')).toMatchObject({
         activeLeases: 1,
         leaseReservations: [initial]
@@ -278,10 +282,10 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('does not let profile creation clear an active claim lock', async () => {
     const { repository, close } = await makeHarness();
     try {
-      await repository.saveProfile({ id: 'profile-insert', userId: 'user-1' });
+      expect(await repository.createProfile({ id: 'profile-insert', userId: 'user-1' })).toBe(true);
       const reservation = { taskId: 'task-a', claimId: 'claim-a', claimGeneration: 1, expiresAt: '2026-09-07T12:01:00.000Z' };
       expect(await repository.acquireProfileLease('profile-insert', 'user-1', 'machine-a', reservation)).toBeDefined();
-      await repository.saveProfile({ id: 'profile-insert', userId: 'user-1', machineId: 'machine-b' });
+      expect(await repository.createProfile({ id: 'profile-insert', userId: 'user-1', machineId: 'machine-b' })).toBe(false);
       expect(await repository.getProfile('profile-insert')).toMatchObject({
         machineId: 'machine-a',
         lockedByTaskId: 'task-a',
@@ -292,11 +296,26 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('atomically selects one winner for concurrent profile creation', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const candidates = [
+        { id: 'profile-create-race', userId: 'user-a', machineId: 'machine-a' },
+        { id: 'profile-create-race', userId: 'user-b', machineId: 'machine-b' }
+      ] as const;
+      const results = await Promise.all(candidates.map((profile) => repository.createProfile(profile)));
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await repository.getProfile('profile-create-race')).toEqual(candidates[results.indexOf(true)]);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('serializes profile takeover after authoritative task expiry', async () => {
     const { repository, close } = await makeHarness();
     try {
       const now = Date.now();
-      await repository.saveProfile({ id: 'profile-renewing', userId: 'user-1' });
+      await repository.createProfile({ id: 'profile-renewing', userId: 'user-1' });
       const submitted = baseTask({ id: 'task-renewing', profileId: 'profile-renewing' });
       await repository.saveTask(submitted);
       const active = (await repository.claimTask({
@@ -378,7 +397,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       const clock = { value: Date.now() };
       await repository.savePool({ id: 'takeover-pool', visibility: 'platform', tags: {} });
       await repository.saveMachine({ id: 'takeover-machine', poolId: 'takeover-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
-      await repository.saveProfile({ id: 'takeover-profile', userId: 'user-1' });
+      await repository.createProfile({ id: 'takeover-profile', userId: 'user-1' });
       const previous = baseTask({ id: 'takeover-previous', profileId: 'takeover-profile', queuePriority: 7 });
       await repository.saveTask(previous);
       const expired = (await repository.claimTask({
@@ -449,6 +468,64 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('rejects a delayed initial claimant after a later generation was requeued', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const submitted = baseTask({ id: 'delayed-claim-task' });
+      await repository.saveTask(submitted);
+      const delayedClaim = {
+        ...submitted,
+        status: 'claimed' as const,
+        workerId: 'worker-delayed',
+        machineId: 'machine-delayed',
+        leaseToken: 'lease-delayed',
+        leaseExpiresAt: '2026-09-08T12:01:00.000Z',
+        claimId: 'claim-delayed',
+        claimGeneration: 1,
+        taskVersion: 1,
+        claimCommitted: false,
+        claimReleased: false,
+        claimedAt: '2026-09-08T12:00:00.000Z',
+        updatedAt: '2026-09-08T12:00:00.000Z'
+      };
+      const winner = await repository.claimTask({
+        ...delayedClaim,
+        workerId: 'worker-winner',
+        machineId: 'machine-winner',
+        leaseToken: 'lease-winner',
+        claimId: 'claim-winner'
+      }, 0, 0);
+      expect(winner).toBeDefined();
+      expect(await repository.replaceTaskForClaim({
+        ...winner!,
+        status: 'submitted',
+        workerId: undefined,
+        machineId: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        claimCommitted: false,
+        claimReleased: true,
+        queuePriority: -1
+      }, {
+        claimId: winner!.claimId!,
+        claimGeneration: winner!.claimGeneration!,
+        taskVersion: winner!.taskVersion!,
+        status: winner!.status
+      })).toBe(true);
+
+      expect(await repository.claimTask(delayedClaim, 0, 0)).toBeUndefined();
+      expect(await repository.getTask(submitted.id)).toMatchObject({
+        status: 'submitted',
+        claimId: 'claim-winner',
+        claimGeneration: 1,
+        taskVersion: 2,
+        claimReleased: true
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('rejects a heartbeat mutation that reaches the claim CAS after lease expiry', async () => {
     const { repository, close } = await makeHarness();
     try {
@@ -509,7 +586,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       const clock = { value: 1_000 };
       await repository.savePool({ id: 'reconcile-pool', visibility: 'platform', tags: {} });
       await repository.saveMachine({ id: 'reconcile-machine', poolId: 'reconcile-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
-      await repository.saveProfile({ id: 'reconcile-profile', userId: 'user-1' });
+      await repository.createProfile({ id: 'reconcile-profile', userId: 'user-1' });
       const submitted = baseTask({ id: 'reconcile-task', profileId: 'reconcile-profile' });
       await repository.saveTask(submitted);
       const interrupted = await repository.claimTask({
@@ -631,7 +708,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     try {
       await repository.savePool({ id: 'pool-1', visibility: 'org', ownerUserId: 'user-1', sharedWithGroups: ['eng'], tags: { os: 'linux' } });
       await repository.saveMachine({ id: 'machine-1', poolId: 'pool-1', tags: { browser: true }, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash' });
-      await repository.saveProfile({ id: 'profile-1', userId: 'user-1', machineId: 'machine-1' });
+      await repository.createProfile({ id: 'profile-1', userId: 'user-1', machineId: 'machine-1' });
       const task = baseTask({ profileId: 'profile-1', poolId: 'pool-1' });
       await repository.saveTask(task);
       await repository.saveHandoff({ id: 'handoff-1', taskId: task.id, userId: task.userId, url: '/v1/handoffs/handoff-1', expiresAt: '2025-01-01T00:10:00.000Z', used: false });

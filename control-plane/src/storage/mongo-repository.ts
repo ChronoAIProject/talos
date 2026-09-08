@@ -103,14 +103,17 @@ export class MongoRepository implements Repository {
 
   public async claimTask(task: Task, expectedClaimGeneration: number, expectedTaskVersion: number): Promise<Task | undefined> {
     if (!isValidClaim(task, expectedClaimGeneration, expectedTaskVersion)) return undefined;
-    const document = await this.tasks.findOneAndReplace(
-      {
+    const filter = {
         _id: task.id,
         status: 'submitted',
-        ...claimGenerationFilter(expectedClaimGeneration),
-        ...taskVersionFilter(expectedTaskVersion),
-        $or: [{ claimId: { $exists: false } }, { claimReleased: true }]
-      },
+        $and: [
+          claimGenerationFilter(expectedClaimGeneration),
+          taskVersionFilter(expectedTaskVersion),
+          { $or: [{ claimId: { $exists: false } }, { claimReleased: true }] }
+        ]
+      } satisfies Filter<Document>;
+    const document = await this.tasks.findOneAndReplace(
+      filter,
       { ...task, _id: task.id, queuePriority: task.queuePriority ?? 0 },
       { returnDocument: 'after' }
     );
@@ -310,8 +313,14 @@ export class MongoRepository implements Repository {
     return document === null ? undefined : profileFromDocument(document);
   }
 
-  public async saveProfile(profile: Profile): Promise<void> {
-    await this.profiles.updateOne({ _id: profile.id }, { $setOnInsert: { ...profile, _id: profile.id } }, { upsert: true });
+  public async createProfile(profile: Profile): Promise<boolean> {
+    try {
+      await this.profiles.insertOne({ ...profile, _id: profile.id });
+      return true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
   }
 
   public async acquireProfileLease(profileId: string, userId: string, machineId: string, reservation: MachineLeaseReservation): Promise<Profile | undefined> {

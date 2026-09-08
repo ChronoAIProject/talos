@@ -230,8 +230,9 @@ const route = async (
       await assertPoolOwner(repository, machine.poolId, userId);
     }
     const id = input.id ?? newId('profile');
-    if (await repository.getProfile(id) !== undefined) throw conflict('profile already exists');
-    await repository.saveProfile({ id, userId, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
+    if (!await repository.createProfile({ id, userId, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) })) {
+      throw conflict('profile already exists');
+    }
     return send(response, 201, {
       id,
       userId,
@@ -402,8 +403,9 @@ const adminRoute = async (
   }
   if (parts[2] === 'profiles') {
     const input = adminProfileSchema.parse(await readBody(request, options.maxBodyBytes));
-    if (await repository.getProfile(input.id) !== undefined) throw conflict('profile already exists');
-    await repository.saveProfile({ id: input.id, userId: input.user_id, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) });
+    if (!await repository.createProfile({ id: input.id, userId: input.user_id, ...(input.machine_id === undefined ? {} : { machineId: input.machine_id }) })) {
+      throw conflict('profile already exists');
+    }
     return send(response, 201, { id: input.id });
   }
   return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
