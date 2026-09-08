@@ -22,6 +22,7 @@ import { testTestingExecutionDependencyReadiness } from '../test-support/testing
 
 interface Harness {
   repository: Repository;
+  restart: () => Promise<Repository>;
   close: () => Promise<void>;
 }
 
@@ -51,6 +52,163 @@ const barrierRepository = (repository: Repository, participants = 2): Repository
   });
 };
 
+const profileAcquireRaceRepositories = (
+  repository: Repository,
+  taskIds: readonly string[]
+): { repositories: readonly Repository[]; arrivals: ReadonlySet<string> } => {
+  const barrier = deferred();
+  const arrivals = new Set<string>();
+  const repositories = taskIds.map((taskId) => new Proxy(repository, {
+    get(target, property) {
+      if (property === 'listQueuedTasks') {
+        return async () => (await target.listQueuedTasks()).filter((task) => task.id === taskId);
+      }
+      if (property === 'acquireProfileLease') {
+        return async (...args: Parameters<Repository['acquireProfileLease']>): Promise<Awaited<ReturnType<Repository['acquireProfileLease']>>> => {
+          arrivals.add(args[3].taskId);
+          if (arrivals.size === taskIds.length) barrier.resolve();
+          await barrier.promise;
+          return target.acquireProfileLease(...args);
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  }));
+  return { repositories, arrivals };
+};
+
+type FaultBoundary =
+  | 'claim_task'
+  | 'machine_reservation'
+  | 'profile_lock'
+  | 'claim_commit'
+  | 'terminal_task'
+  | 'machine_release'
+  | 'profile_release'
+  | 'task_release'
+  | 'legacy_draining'
+  | 'legacy_machine_release'
+  | 'legacy_profile_release'
+  | 'legacy_finalizing'
+  | 'legacy_marker_clear'
+  | 'legacy_done'
+  | 'legacy_action_requeue'
+  | 'legacy_action_finalize';
+
+const faultAfterBoundary = (
+  repository: Repository,
+  boundary: FaultBoundary
+): { repository: Repository; hitCount: () => number } => {
+  let injected = false;
+  let hits = 0;
+  const inject = (): never => {
+    injected = true;
+    hits += 1;
+    throw new Error(`injected fault after ${boundary}`);
+  };
+  const faulted = new Proxy(repository, {
+    get(target, property) {
+      if (property === 'claimTask' && boundary === 'claim_task') {
+        return async (...args: Parameters<Repository['claimTask']>): Promise<Awaited<ReturnType<Repository['claimTask']>>> => {
+          const result = await target.claimTask(...args);
+          if (!injected && result !== undefined) inject();
+          return result;
+        };
+      }
+      if (property === 'reserveMachineLease' && boundary === 'machine_reservation') {
+        return async (...args: Parameters<Repository['reserveMachineLease']>): Promise<boolean> => {
+          const result = await target.reserveMachineLease(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'acquireProfileLease' && boundary === 'profile_lock') {
+        return async (...args: Parameters<Repository['acquireProfileLease']>): Promise<Awaited<ReturnType<Repository['acquireProfileLease']>>> => {
+          const result = await target.acquireProfileLease(...args);
+          if (!injected && result !== undefined) inject();
+          return result;
+        };
+      }
+      if (property === 'replaceTaskForClaim' && ['claim_commit', 'terminal_task', 'task_release'].includes(boundary)) {
+        return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+          const result = await target.replaceTaskForClaim(...args);
+          const task = args[0];
+          const matches =
+            (boundary === 'claim_commit' && task.status === 'claimed' && task.claimCommitted === true && task.claimReleased !== true) ||
+            (boundary === 'terminal_task' && ['completed', 'failed', 'cancelled', 'submitted'].includes(task.status) && task.claimReleased !== true) ||
+            (boundary === 'task_release' && task.claimReleased === true);
+          if (!injected && result && matches) inject();
+          return result;
+        };
+      }
+      if (property === 'releaseMachineLease' && boundary === 'machine_release') {
+        return async (...args: Parameters<Repository['releaseMachineLease']>): Promise<boolean> => {
+          const result = await target.releaseMachineLease(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'releaseProfileLease' && boundary === 'profile_release') {
+        return async (...args: Parameters<Repository['releaseProfileLease']>): Promise<boolean> => {
+          const result = await target.releaseProfileLease(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'replaceTaskForRecovery' && ['legacy_draining', 'legacy_finalizing', 'legacy_done'].includes(boundary)) {
+        return async (...args: Parameters<Repository['replaceTaskForRecovery']>): Promise<boolean> => {
+          const result = await target.replaceTaskForRecovery(...args);
+          const [task, guard] = args;
+          const matches =
+            (boundary === 'legacy_draining' && task.claimRecovery?.phase === 'draining' && guard.recoveryId === undefined) ||
+            (boundary === 'legacy_finalizing' && task.claimRecovery?.phase === 'finalizing') ||
+            (boundary === 'legacy_done' && task.claimRecovery === undefined && guard.recoveryPhase === 'finalizing');
+          if (!injected && result && matches) inject();
+          return result;
+        };
+      }
+      if (property === 'releaseLegacyMachineLease' && boundary === 'legacy_machine_release') {
+        return async (...args: Parameters<Repository['releaseLegacyMachineLease']>): Promise<boolean> => {
+          const result = await target.releaseLegacyMachineLease(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'releaseLegacyProfileLease' && boundary === 'legacy_profile_release') {
+        return async (...args: Parameters<Repository['releaseLegacyProfileLease']>): Promise<boolean> => {
+          const result = await target.releaseLegacyProfileLease(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'clearLegacyMachineLeaseMarker' && boundary === 'legacy_marker_clear') {
+        return async (...args: Parameters<Repository['clearLegacyMachineLeaseMarker']>): Promise<boolean> => {
+          const result = await target.clearLegacyMachineLeaseMarker(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      if (property === 'requeueSessionAction' && boundary === 'legacy_action_requeue') {
+        return async (...args: Parameters<Repository['requeueSessionAction']>): Promise<void> => {
+          await target.requeueSessionAction(...args);
+          if (!injected) inject();
+        };
+      }
+      if (property === 'finalizeSessionAction' && boundary === 'legacy_action_finalize') {
+        return async (...args: Parameters<Repository['finalizeSessionAction']>): Promise<boolean> => {
+          const result = await target.finalizeSessionAction(...args);
+          if (!injected && result) inject();
+          return result;
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  });
+  return { repository: faulted, hitCount: () => hits };
+};
+
 const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
 const MONGODB_CONNECT_TIMEOUT_MS = 5_000;
 const MONGODB_CONTRACT_TEST_TIMEOUT_MS = 30_000;
@@ -66,7 +224,11 @@ const baseTask = (overrides: Partial<BrowserTask> = {}): BrowserTask => ({
 
 const memoryHarness = async (): Promise<Harness> => {
   const repository = new MemoryRepository();
-  return { repository, close: () => repository.close() };
+  return {
+    repository,
+    restart: async () => repository,
+    close: () => repository.close()
+  };
 };
 
 let mongoServer: MongoMemoryServer | undefined;
@@ -95,9 +257,10 @@ afterAll(async () => {
 
 const mongoHarness = async (): Promise<Harness> => {
   if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
-  const client = new MongoClient(mongoUrl, mongodbClientOptions);
+  const url = mongoUrl;
   const databaseName = `talos_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const repository = new MongoRepository(mongoUrl, databaseName, { client });
+  let client = new MongoClient(url, mongodbClientOptions);
+  let repository = new MongoRepository(url, databaseName, { client });
   try {
     await repository.initialize();
   } catch (error) {
@@ -112,6 +275,13 @@ const mongoHarness = async (): Promise<Harness> => {
   }
   return {
     repository,
+    restart: async () => {
+      await repository.close();
+      client = new MongoClient(url, mongodbClientOptions);
+      repository = new MongoRepository(url, databaseName, { client });
+      await repository.initialize();
+      return repository;
+    },
     close: async () => {
       try {
         await client.db(databaseName).dropDatabase();
@@ -122,15 +292,15 @@ const mongoHarness = async (): Promise<Harness> => {
   };
 };
 
-const contractTests = (makeHarness: () => Promise<Harness>): void => {
-  const taskService = (repository: Repository, clock = { value: 1_000 }): TaskService => new TaskService(
-    repository,
-    new Scheduler(repository),
-    new ProfileLockService(repository),
-    new WebhookSigner('repository-contract-webhook-secret'),
-    { clock: () => clock.value, leaseSeconds: 10 }
-  );
+const taskService = (repository: Repository, clock = { value: 1_000 }): TaskService => new TaskService(
+  repository,
+  new Scheduler(repository),
+  new ProfileLockService(repository),
+  new WebhookSigner('repository-contract-webhook-secret'),
+  { clock: () => clock.value, leaseSeconds: 10 }
+);
 
+const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('linearizes task claim, machine admission, and profile ownership', async () => {
     const { repository, close } = await makeHarness();
     try {
@@ -194,6 +364,408 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.getMachine('capacity-machine')).toMatchObject({
         activeLeases: 2,
         leaseReservations: [expect.any(Object)]
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('recovers a committed claim after faults at every claim persistence boundary', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'fault-claim-pool', visibility: 'platform', tags: {} });
+      const boundaries = ['claim_task', 'machine_reservation', 'profile_lock', 'claim_commit'] as const;
+      for (const [index, boundary] of boundaries.entries()) {
+        const suffix = `${index}-${boundary}`;
+        const machineId = `fault-claim-machine-${suffix}`;
+        const profileId = `fault-claim-profile-${suffix}`;
+        const taskId = `fault-claim-task-${suffix}`;
+        await repository.saveMachine({
+          id: machineId,
+          poolId: 'fault-claim-pool',
+          tags: {},
+          capacity: 1,
+          activeLeases: 0,
+          online: true,
+          workerTokenHash: 'hash'
+        });
+        await repository.createProfile({ id: profileId, userId: 'user-1' });
+        await repository.saveTask(baseTask({ id: taskId, profileId }));
+        const fault = faultAfterBoundary(repository, boundary);
+        const faulted = taskService(fault.repository, clock);
+
+        await expect(faulted.claim(`worker-${suffix}`, machineId, clock.value))
+          .rejects.toThrow(`injected fault after ${boundary}`);
+        expect(fault.hitCount()).toBe(1);
+        repository = await harness.restart();
+        const restarted = taskService(repository, clock);
+        await restarted.reconcileClaims(clock.value);
+
+        const stored = await repository.getTask(taskId);
+        expect(stored).toMatchObject({
+          status: 'claimed',
+          claimCommitted: true,
+          claimReleased: false,
+          machineId,
+          workerId: `worker-${suffix}`
+        });
+        expect(await repository.getMachine(machineId)).toMatchObject({
+          activeLeases: 1,
+          leaseReservations: [{
+            taskId,
+            claimId: stored?.claimId,
+            claimGeneration: stored?.claimGeneration
+          }]
+        });
+        expect(await repository.getProfile(profileId)).toMatchObject({
+          lockedByTaskId: taskId,
+          lockedByClaimId: stored?.claimId,
+          lockedByClaimGeneration: stored?.claimGeneration
+        });
+        await expect(restarted.claim(`duplicate-${suffix}`, machineId, clock.value))
+          .rejects.toMatchObject({ code: 'not_found' });
+      }
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('recovers a lost claim response through expiry and a fenced generation N+1 reclaim', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    try {
+      const clock = { value: 1_000 };
+      await repository.savePool({ id: 'lost-response-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'lost-response-machine',
+        poolId: 'lost-response-pool',
+        tags: {},
+        capacity: 1,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({ id: 'lost-response-profile', userId: 'user-1' });
+      await repository.saveTask(baseTask({ id: 'lost-response-task', profileId: 'lost-response-profile' }));
+      const first = await taskService(repository, clock).claim('lost-response-worker', 'lost-response-machine', clock.value);
+
+      repository = await harness.restart();
+      const restarted = taskService(repository, clock);
+      await expect(restarted.claim('duplicate-worker', 'lost-response-machine', clock.value))
+        .rejects.toMatchObject({ code: 'not_found' });
+
+      clock.value = 12_000;
+      expect(await restarted.expireLeases(clock.value)).toHaveLength(1);
+      expect(await repository.getTask('lost-response-task')).toMatchObject({
+        status: 'submitted',
+        claimGeneration: first.task.claimGeneration,
+        claimReleased: true
+      });
+      expect(await repository.getMachine('lost-response-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+      expect((await repository.getProfile('lost-response-profile'))?.lockedByTaskId).toBeUndefined();
+
+      const second = await restarted.claim('replacement-worker', 'lost-response-machine', clock.value);
+      expect(second.task.claimGeneration).toBe((first.task.claimGeneration ?? 0) + 1);
+      expect(second.task.claimId).not.toBe(first.task.claimId);
+      await expect(restarted.heartbeat('lost-response-task', 'lost-response-worker', first.leaseToken, 10))
+        .rejects.toMatchObject({ code: 'unauthorized' });
+      await expect(restarted.complete('lost-response-task', 'lost-response-worker', first.leaseToken, 'completed', []))
+        .rejects.toMatchObject({ code: 'unauthorized' });
+      expect(await repository.getMachine('lost-response-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [expect.objectContaining({
+          taskId: second.task.id,
+          claimId: second.task.claimId,
+          claimGeneration: second.task.claimGeneration
+        })]
+      });
+      expect(await repository.getProfile('lost-response-profile')).toMatchObject({
+        lockedByTaskId: second.task.id,
+        lockedByClaimId: second.task.claimId,
+        lockedByClaimGeneration: second.task.claimGeneration
+      });
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('converges exact release after faults without changing unrelated leases or profiles', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'fault-release-pool', visibility: 'platform', tags: {} });
+      const boundaries = ['terminal_task', 'machine_release', 'profile_release', 'task_release'] as const;
+      for (const [index, boundary] of boundaries.entries()) {
+        const suffix = `${index}-${boundary}`;
+        const machineId = `fault-release-machine-${suffix}`;
+        const profileId = `fault-release-profile-${suffix}`;
+        const unrelatedProfileId = `unrelated-profile-${suffix}`;
+        const taskId = `fault-release-task-${suffix}`;
+        const unrelated = {
+          taskId: `unrelated-task-${suffix}`,
+          claimId: `unrelated-claim-${suffix}`,
+          claimGeneration: 9,
+          expiresAt: new Date(clock.value + 60_000).toISOString()
+        };
+        await repository.saveMachine({
+          id: machineId,
+          poolId: 'fault-release-pool',
+          tags: {},
+          capacity: 2,
+          activeLeases: 1,
+          leaseReservations: [unrelated],
+          online: true,
+          workerTokenHash: 'hash'
+        });
+        await repository.createProfile({ id: profileId, userId: 'user-1' });
+        await repository.createProfile({
+          id: unrelatedProfileId,
+          userId: 'user-1',
+          machineId,
+          lockedByTaskId: unrelated.taskId,
+          lockedByClaimId: unrelated.claimId,
+          lockedByClaimGeneration: unrelated.claimGeneration,
+          lockExpiresAt: unrelated.expiresAt
+        });
+        await repository.saveTask(baseTask({ id: taskId, profileId }));
+        const claimed = await taskService(repository, clock).claim(`worker-${suffix}`, machineId, clock.value);
+        const fault = faultAfterBoundary(repository, boundary);
+        const faulted = taskService(fault.repository, clock);
+
+        await expect(faulted.complete(taskId, `worker-${suffix}`, claimed.leaseToken, 'completed', []))
+          .rejects.toThrow(`injected fault after ${boundary}`);
+        expect(fault.hitCount()).toBe(1);
+        repository = await harness.restart();
+        await taskService(repository, clock).reconcileClaims(clock.value);
+
+        expect(await repository.getTask(taskId)).toMatchObject({ status: 'completed', claimReleased: true });
+        expect(await repository.getMachine(machineId)).toMatchObject({
+          activeLeases: 1,
+          leaseReservations: [unrelated]
+        });
+        expect((await repository.getProfile(profileId))?.lockedByTaskId).toBeUndefined();
+        expect(await repository.getProfile(unrelatedProfileId)).toMatchObject({
+          lockedByTaskId: unrelated.taskId,
+          lockedByClaimId: unrelated.claimId,
+          lockedByClaimGeneration: unrelated.claimGeneration
+        });
+      }
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('converges legacy recovery after faults at every durable side-effect boundary', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    try {
+      const clock = { value: Date.now() };
+      const boundaries = [
+        'legacy_draining',
+        'legacy_machine_release',
+        'legacy_profile_release',
+        'legacy_finalizing',
+        'legacy_marker_clear',
+        'legacy_done'
+      ] as const;
+      for (const [index, boundary] of boundaries.entries()) {
+        const suffix = `${index}-${boundary}`;
+        const machineId = `legacy-fault-machine-${suffix}`;
+        const profileId = `legacy-fault-profile-${suffix}`;
+        const taskId = `legacy-fault-task-${suffix}`;
+        await repository.saveMachine({
+          id: machineId,
+          poolId: 'pool',
+          tags: {},
+          capacity: 1,
+          activeLeases: 1,
+          online: true,
+          workerTokenHash: 'hash'
+        });
+        await repository.createProfile({
+          id: profileId,
+          userId: 'user-1',
+          machineId,
+          lockedByTaskId: taskId,
+          lockExpiresAt: new Date(clock.value + 60_000).toISOString()
+        });
+        await repository.saveTask(baseTask({
+          id: taskId,
+          status: 'running',
+          profileId,
+          machineId,
+          workerId: `legacy-worker-${suffix}`,
+          leaseToken: `legacy-token-${suffix}`,
+          leaseExpiresAt: new Date(clock.value + 60_000).toISOString(),
+          queuePriority: index
+        }));
+
+        const fault = faultAfterBoundary(repository, boundary);
+        await taskService(fault.repository, clock).reconcileClaims(clock.value);
+        expect(fault.hitCount()).toBe(1);
+        const interrupted = await repository.getTask(taskId);
+        if (boundary === 'legacy_done') {
+          expect(interrupted?.claimRecovery).toBeUndefined();
+        } else {
+          expect(interrupted?.claimRecovery?.phase).toBe(
+            ['legacy_finalizing', 'legacy_marker_clear'].includes(boundary) ? 'finalizing' : 'draining'
+          );
+        }
+        expect(await repository.getMachine(machineId)).toMatchObject({
+          activeLeases: ['legacy_draining'].includes(boundary) ? 1 : 0
+        });
+        expect((await repository.getProfile(profileId))?.lockedByTaskId).toBe(
+          ['legacy_draining', 'legacy_machine_release'].includes(boundary) ? taskId : undefined
+        );
+
+        repository = await harness.restart();
+        const restarted = taskService(repository, clock);
+        await restarted.reconcileClaims(clock.value);
+        expect(await repository.getTask(taskId)).toMatchObject({
+          status: 'submitted',
+          queuePriority: index
+        });
+        expect((await repository.getTask(taskId))?.claimRecovery).toBeUndefined();
+        expect(await repository.getMachine(machineId)).toMatchObject({ activeLeases: 0 });
+        expect((await repository.getProfile(profileId))?.lockedByTaskId).toBeUndefined();
+
+        await restarted.reconcileClaims(clock.value);
+        expect(await repository.getMachine(machineId)).toMatchObject({ activeLeases: 0 });
+      }
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('retries legacy interactive action side effects after restart', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    try {
+      const clock = { value: Date.now() };
+      await repository.saveTask(baseTask({
+        id: 'legacy-action-requeue-task',
+        interaction: 'interactive',
+        status: 'running',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        pendingActionId: 'legacy-action-requeue'
+      }));
+      await repository.enqueueSessionAction({
+        id: 'legacy-action-requeue',
+        taskId: 'legacy-action-requeue-task',
+        action: { type: 'navigate', url: 'https://example.com/retry' },
+        state: 'pending',
+        createdAt: '2025-01-01T00:00:00.000Z'
+      });
+      await repository.takePendingSessionAction('legacy-action-requeue-task');
+      const requeueFault = faultAfterBoundary(repository, 'legacy_action_requeue');
+      await taskService(requeueFault.repository, clock).reconcileClaims(clock.value);
+      expect(requeueFault.hitCount()).toBe(1);
+      expect((await repository.getTask('legacy-action-requeue-task'))?.claimRecovery?.phase).toBe('draining');
+      expect(await repository.getPendingSessionAction('legacy-action-requeue-task')).toMatchObject({
+        id: 'legacy-action-requeue',
+        state: 'pending'
+      });
+
+      repository = await harness.restart();
+      await taskService(repository, clock).reconcileClaims(clock.value);
+      expect(await repository.getTask('legacy-action-requeue-task')).toMatchObject({ status: 'submitted' });
+      expect((await repository.getTask('legacy-action-requeue-task'))?.claimRecovery).toBeUndefined();
+      expect(await repository.getPendingSessionAction('legacy-action-requeue-task')).toMatchObject({ state: 'pending' });
+
+      await repository.saveTask(baseTask({
+        id: 'legacy-action-closing-task',
+        interaction: 'interactive',
+        status: 'closing',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        pendingActionId: 'legacy-action-close',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+      await repository.enqueueSessionAction({
+        id: 'legacy-action-close',
+        taskId: 'legacy-action-closing-task',
+        action: { type: 'navigate', url: 'https://example.com/close' },
+        state: 'pending',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      });
+      await repository.takePendingSessionAction('legacy-action-closing-task');
+      const finalizeFault = faultAfterBoundary(repository, 'legacy_action_finalize');
+      await taskService(finalizeFault.repository, clock).reconcileClaims(clock.value);
+      expect(finalizeFault.hitCount()).toBe(1);
+      expect((await repository.getTask('legacy-action-closing-task'))?.claimRecovery?.phase).toBe('draining');
+      expect(await repository.getSessionActionResult('legacy-action-close')).toMatchObject({
+        result: { error: { code: 'session_closed' } }
+      });
+
+      repository = await harness.restart();
+      await taskService(repository, clock).reconcileClaims(clock.value);
+      expect(await repository.getTask('legacy-action-closing-task')).toMatchObject({ status: 'completed' });
+      expect((await repository.getTask('legacy-action-closing-task'))?.claimRecovery).toBeUndefined();
+      expect(await repository.getPendingSessionAction('legacy-action-closing-task')).toBeUndefined();
+      expect(await repository.getSessionActionResult('legacy-action-close')).toMatchObject({
+        result: { error: { code: 'session_closed' } }
+      });
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('allows exactly one of two different tasks to own the same profile', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'profile-race-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'profile-race-machine',
+        poolId: 'profile-race-pool',
+        tags: {},
+        capacity: 2,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({ id: 'shared-race-profile', userId: 'user-1' });
+      await repository.saveTask(baseTask({ id: 'profile-race-task-a', profileId: 'shared-race-profile' }));
+      await repository.saveTask(baseTask({
+        id: 'profile-race-task-b',
+        profileId: 'shared-race-profile',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+      const race = profileAcquireRaceRepositories(repository, ['profile-race-task-a', 'profile-race-task-b']);
+      const firstService = taskService(race.repositories[0]!, clock);
+      const secondService = taskService(race.repositories[1]!, clock);
+
+      const results = await Promise.allSettled([
+        firstService.claim('profile-race-worker-a', 'profile-race-machine', clock.value),
+        secondService.claim('profile-race-worker-b', 'profile-race-machine', clock.value)
+      ]);
+      const winners = results.filter((result) => result.status === 'fulfilled');
+      expect(winners).toHaveLength(1);
+      expect([...race.arrivals].sort()).toEqual(['profile-race-task-a', 'profile-race-task-b']);
+      const tasks = await repository.listTasks();
+      const claimed = tasks.filter((task) => task.id.startsWith('profile-race-task-') && task.status === 'claimed');
+      const requeued = tasks.filter((task) => task.id.startsWith('profile-race-task-') && task.status === 'submitted');
+      expect(claimed).toHaveLength(1);
+      expect(requeued).toHaveLength(1);
+      const machine = await repository.getMachine('profile-race-machine');
+      expect(machine).toMatchObject({ activeLeases: 1 });
+      expect(machine?.leaseReservations).toEqual([expect.objectContaining({
+        taskId: claimed[0]?.id,
+        claimId: claimed[0]?.claimId,
+        claimGeneration: claimed[0]?.claimGeneration
+      })]);
+      expect(requeued[0]).toMatchObject({ claimReleased: true, claimCommitted: false });
+      expect(await repository.getProfile('shared-race-profile')).toMatchObject({
+        lockedByTaskId: claimed[0]?.id,
+        lockedByClaimId: claimed[0]?.claimId,
+        lockedByClaimGeneration: claimed[0]?.claimGeneration
       });
     } finally {
       await close();
@@ -520,6 +1092,77 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         claimGeneration: 1,
         taskVersion: 2,
         claimReleased: true
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('fences a delayed initial claimant after a complete generation N+1 reclaim', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: 1_000 };
+      await repository.savePool({ id: 'delayed-reclaim-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'delayed-reclaim-machine',
+        poolId: 'delayed-reclaim-pool',
+        tags: {},
+        capacity: 2,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({ id: 'delayed-reclaim-profile', userId: 'user-1' });
+      await repository.saveTask(baseTask({
+        id: 'delayed-reclaim-task',
+        profileId: 'delayed-reclaim-profile'
+      }));
+      const delayedAtCas = deferred();
+      const resumeDelayed = deferred();
+      const delayedRepository = new Proxy(repository, {
+        get(target, property) {
+          if (property === 'claimTask') {
+            return async (...args: Parameters<Repository['claimTask']>): Promise<Awaited<ReturnType<Repository['claimTask']>>> => {
+              delayedAtCas.resolve();
+              await resumeDelayed.promise;
+              return target.claimTask(...args);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      const delayed = taskService(delayedRepository, clock)
+        .claim('delayed-worker', 'delayed-reclaim-machine', clock.value);
+      await delayedAtCas.promise;
+
+      const authority = taskService(repository, clock);
+      const generationN = await authority.claim('generation-n-worker', 'delayed-reclaim-machine', clock.value);
+      clock.value = 12_000;
+      expect(await authority.expireLeases(clock.value)).toHaveLength(1);
+      const generationNPlusOne = await authority.claim('generation-n-plus-one-worker', 'delayed-reclaim-machine', clock.value);
+      expect(generationNPlusOne.task.claimGeneration).toBe((generationN.task.claimGeneration ?? 0) + 1);
+
+      resumeDelayed.resolve();
+      await expect(delayed).rejects.toMatchObject({ code: 'not_found' });
+      expect(await repository.getTask('delayed-reclaim-task')).toMatchObject({
+        status: 'claimed',
+        workerId: 'generation-n-plus-one-worker',
+        claimId: generationNPlusOne.task.claimId,
+        claimGeneration: generationNPlusOne.task.claimGeneration
+      });
+      expect(await repository.getMachine('delayed-reclaim-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [expect.objectContaining({
+          taskId: generationNPlusOne.task.id,
+          claimId: generationNPlusOne.task.claimId,
+          claimGeneration: generationNPlusOne.task.claimGeneration
+        })]
+      });
+      expect(await repository.getProfile('delayed-reclaim-profile')).toMatchObject({
+        lockedByTaskId: generationNPlusOne.task.id,
+        lockedByClaimId: generationNPlusOne.task.claimId,
+        lockedByClaimGeneration: generationNPlusOne.task.claimGeneration
       });
     } finally {
       await close();
@@ -1384,4 +2027,51 @@ describe('Repository contract: mongo', () => {
   contractTests(mongoHarness);
   undefinedLeaseTest(mongoHarness);
   testingRunContractTest(mongoHarness);
+
+  it('continues the durable maintenance cursor after a real repository reconnect', async () => {
+    if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
+    const databaseName = `talos_restart_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const firstClient = new MongoClient(mongoUrl, mongodbClientOptions);
+    const first = new MongoRepository(mongoUrl, databaseName, { client: firstClient });
+    let firstClosed = false;
+    let secondClient: MongoClient | undefined;
+    let second: MongoRepository | undefined;
+    try {
+      await first.initialize();
+      for (let index = 0; index < 100; index += 1) {
+        await first.saveTask(baseTask({
+          id: `restart-healthy-${String(index).padStart(3, '0')}`,
+          createdAt: '2025-01-01T00:00:00.000Z'
+        }));
+      }
+      await first.saveTask(baseTask({
+        id: 'restart-legacy-after-batch',
+        status: 'running',
+        workerId: 'legacy-worker',
+        leaseToken: 'legacy-token',
+        createdAt: '2025-01-01T00:00:01.000Z'
+      }));
+      await taskService(first).reconcileClaims();
+      expect(await first.getTask('restart-legacy-after-batch')).toMatchObject({ status: 'running' });
+
+      await first.close();
+      firstClosed = true;
+      secondClient = new MongoClient(mongoUrl, mongodbClientOptions);
+      second = new MongoRepository(mongoUrl, databaseName, { client: secondClient });
+      await second.initialize();
+      await taskService(second).reconcileClaims();
+
+      expect(await second.getTask('restart-legacy-after-batch')).toMatchObject({ status: 'submitted' });
+      expect((await second.getTask('restart-legacy-after-batch'))?.claimRecovery).toBeUndefined();
+    } finally {
+      if (!firstClosed) await first.close();
+      if (secondClient !== undefined) {
+        try {
+          await secondClient.db(databaseName).dropDatabase();
+        } finally {
+          await second?.close();
+        }
+      }
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 });

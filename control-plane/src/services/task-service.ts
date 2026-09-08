@@ -918,10 +918,10 @@ export class TaskService {
     await this.repository.saveWebhook(event);
     const signed = this.signer.sign(event, this.clock());
     if (this.onWebhook !== undefined) {
-      void this.onWebhook(event, signed, task.callback).catch((error: unknown) => {
+      void this.onWebhook(event, signed, task.callback).catch(() => {
         this.logger?.warn('webhook delivery failed', {
           eventId: event.id,
-          error: error instanceof Error ? error.message : 'unknown'
+          error: 'webhook_delivery_failed'
         });
       });
     }
@@ -943,6 +943,8 @@ export class TaskService {
       'leaseExpiresAt',
       'input',
       'requesterGroups',
+      'pendingActionId',
+      'lastActionId',
       'claimRecovery',
       'testing'
     ]);

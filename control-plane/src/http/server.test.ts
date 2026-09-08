@@ -58,6 +58,26 @@ describe('control-plane HTTP API', () => {
     server.close();
   });
 
+  it('maps repository failures to an opaque public error', async () => {
+    const repository = new MemoryRepository();
+    repository.getTask = async () => { throw new Error('claim-secret-sentinel lease-token-sentinel'); };
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'));
+    const server = createApiServer(service, repository);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/tasks/task`, {
+      headers: { 'x-nyxid-identity-token': 'user:user-a' }
+    });
+    expect(response.status).toBe(500);
+    const body = JSON.stringify(await response.json());
+    expect(body).toContain('internal_error');
+    expect(body).not.toContain('claim-secret-sentinel');
+    expect(body).not.toContain('lease-token-sentinel');
+    server.close();
+  });
+
   it('enforces NyxID and worker authentication across lifecycle routes', async () => {
     const repository = new MemoryRepository();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
@@ -77,8 +97,30 @@ describe('control-plane HTTP API', () => {
     expect(badWorker.status).toBe(401);
     const claimResponse = await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'machine', 'content-type': 'application/json' }, body: JSON.stringify({ worker_id: 'w', machine_id: 'machine' }) });
     expect(claimResponse.status).toBe(200);
-    const claim = await claimResponse.json() as { task: { id: string }; leaseToken: string };
+    const claim = await claimResponse.json() as { task: Record<string, unknown> & { id: string }; leaseToken: string };
     expect(claim.task.id).toBe(created.id);
+    const internalAuthorityFields = [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ];
+    for (const field of internalAuthorityFields) expect(claim.task).not.toHaveProperty(field);
+    const publicTaskResponse = await fetch(`${base}/v1/tasks/${created.id}`, {
+      headers: { 'x-nyxid-identity-token': 'user:user-a' }
+    });
+    expect(publicTaskResponse.status).toBe(200);
+    const publicTask = await publicTaskResponse.json() as Record<string, unknown>;
+    for (const field of internalAuthorityFields) expect(publicTask).not.toHaveProperty(field);
+    expect(JSON.stringify(publicTask)).not.toContain(claim.leaseToken);
     const heartbeat = await fetch(`${base}/v1/worker/tasks/${created.id}/heartbeat`, { method: 'POST', headers: { authorization: 'Bearer worker-token-123456', 'x-talos-worker-id': 'w', 'x-talos-machine-id': 'machine', 'content-type': 'application/json' }, body: JSON.stringify({ lease_token: claim.leaseToken }) });
     expect(heartbeat.status).toBe(200);
     server.close();

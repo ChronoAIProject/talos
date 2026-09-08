@@ -143,8 +143,10 @@ describe('task service', () => {
     expect(publicTask).not.toHaveProperty('machineId');
     expect(publicTask).not.toHaveProperty('leaseExpiresAt');
     expect(publicTask).not.toHaveProperty('queuePriority');
-    expect(service.toPublicTask({
+    const publicInteractiveTask = service.toPublicTask({
       ...(await repository.getTask(task.id))!,
+      pendingActionId: 'pending-action-secret',
+      lastActionId: 'last-action-secret',
       claimRecovery: {
         schemaVersion: 'talos.task-claim-recovery/v1',
         recoveryId: 'recovery-secret',
@@ -157,7 +159,76 @@ describe('task service', () => {
         startedAt: '2025-01-01T00:00:00.000Z',
         updatedAt: '2025-01-01T00:00:00.000Z'
       }
-    })).not.toHaveProperty('claimRecovery');
+    });
+    expect(publicInteractiveTask).not.toHaveProperty('pendingActionId');
+    expect(publicInteractiveTask).not.toHaveProperty('lastActionId');
+    expect(publicInteractiveTask).not.toHaveProperty('claimRecovery');
+  });
+
+  it('never includes internal claim authority in webhook payloads', async () => {
+    const { repository, service } = setup();
+    await repository.savePool({ id: 'webhook-pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({
+      id: 'webhook-machine',
+      poolId: 'webhook-pool',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: 'hash'
+    });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'webhook disclosure' });
+    const claim = await service.claim('webhook-worker', 'webhook-machine');
+    await service.complete(task.id, 'webhook-worker', claim.leaseToken, 'completed', []);
+
+    const serialized = JSON.stringify(await repository.listWebhooks());
+    const stored = await repository.getTask(task.id);
+    for (const field of [
+      'claimId',
+      'claimGeneration',
+      'taskVersion',
+      'claimCommitted',
+      'claimReleased',
+      'claimQueuePriority',
+      'queuePriority',
+      'workerId',
+      'machineId',
+      'leaseExpiresAt',
+      'leaseToken',
+      'claimRecovery'
+    ]) expect(serialized).not.toContain(`\"${field}\"`);
+    expect(serialized).not.toContain(claim.leaseToken);
+    expect(serialized).not.toContain(stored?.claimId);
+  });
+
+  it('logs a stable code when webhook delivery rejects with internal authority', async () => {
+    const repository = new MemoryRepository();
+    const warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('test-webhook-secret'),
+      {
+        onWebhook: async () => { throw new Error('claim-secret-sentinel lease-token-sentinel'); },
+        logger: { warn: (message, fields) => warnings.push({ message, fields }) }
+      }
+    );
+
+    await service.createTask('user-a', {
+      kind: 'browse',
+      goal: 'webhook failure disclosure',
+      callback: 'https://example.invalid/webhook'
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(warnings).toContainEqual({
+      message: 'webhook delivery failed',
+      fields: expect.objectContaining({ error: 'webhook_delivery_failed' })
+    });
+    const serialized = JSON.stringify(warnings);
+    expect(serialized).not.toContain('claim-secret-sentinel');
+    expect(serialized).not.toContain('lease-token-sentinel');
   });
 
   it('uses a unique artifact id and injected clock', async () => {
