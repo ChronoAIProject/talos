@@ -212,33 +212,42 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
       workerToken: 'worker-token-123456'
     });
     const calls: string[] = [];
+    let markExecutorReady!: () => void;
+    const executorReady = new Promise<void>((resolve) => { markExecutorReady = resolve; });
     const runtime = new workerModule.WorkerRuntime({
       client,
       planner: { plan: async () => { throw new Error('interactive sessions must bypass the planner'); } },
-      createExecutor: async () => ({
-        execute: async (action: { type: string }) => {
-          calls.push(action.type);
-          if (action.type === 'screenshot') {
-            return {
-              screenshot: {
-                mimeType: 'image/jpeg',
-                data: Buffer.from('jpeg').toString('base64'),
-                width: 1280,
-                height: 720
-              }
-            };
-          }
-          if (action.type === 'extract-structured-dom') return { value: ['Example'] };
-          return {};
-        },
-        close: async () => { calls.push('close'); }
-      }),
+      createExecutor: async () => {
+        markExecutorReady();
+        return {
+          execute: async (action: { type: string }) => {
+            calls.push(action.type);
+            if (action.type === 'screenshot') {
+              return {
+                screenshot: {
+                  mimeType: 'image/jpeg',
+                  data: Buffer.from('jpeg').toString('base64'),
+                  width: 1280,
+                  height: 720
+                }
+              };
+            }
+            if (action.type === 'extract-structured-dom') return { value: ['Example'] };
+            return {};
+          },
+          close: async () => { calls.push('close'); }
+        };
+      },
       heartbeatMs: 5,
       actionPollMs: 1,
       sessionIdleMs: 10_000
     });
     const running = runtime.runOnce();
     let runtimeFinished = false;
+    const runtimeStopped = running.then(
+      () => ({ type: 'runtime_stopped' } as const),
+      (error: unknown) => ({ type: 'runtime_failed', error } as const)
+    );
     runtimeCleanups.push(async () => {
       if (runtimeFinished) return;
       let stopFailure: unknown;
@@ -256,14 +265,45 @@ describe('worker rendezvous through a NyxID-style public proxy', () => {
       runtimeFinished = true;
       if (stopFailure !== undefined) throw stopFailure;
     });
+    let readyTimeout!: ReturnType<typeof setTimeout>;
+    const readiness = await Promise.race([
+      executorReady.then(() => ({ type: 'executor_ready' } as const)),
+      runtimeStopped,
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        readyTimeout = setTimeout(() => resolve({ type: 'timeout' }), 2_000);
+      })
+    ]);
+    clearTimeout(readyTimeout);
+    if (readiness.type === 'runtime_failed') {
+      runtimeFinished = true;
+      throw readiness.error;
+    }
+    if (readiness.type === 'runtime_stopped') {
+      runtimeFinished = true;
+      throw new Error('worker runtime stopped before its executor was ready');
+    }
+    if (readiness.type === 'timeout') throw new Error('worker executor was not ready within 2000ms');
+
+    const readyResponse = await fetch(`${base}/v1/sessions/${created.id}`);
+    const readyBody = await readyResponse.text();
+    expect(
+      readyResponse.status,
+      `get session returned HTTP ${readyResponse.status}: ${readyBody}`
+    ).toBe(200);
+    const ready: unknown = JSON.parse(readyBody);
+    expect(ready).toEqual(expect.objectContaining({ status: expect.stringMatching(/^(claimed|running)$/) }));
     const sendAction = async (action: unknown) => {
       const response = await fetch(`${base}/v1/sessions/${created.id}/actions?wait_seconds=5`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action })
       });
-      expect(response.status).toBe(200);
-      return response.json() as Promise<{ action_id: string; status: string; result: unknown }>;
+      const responseBody = await response.text();
+      expect(
+        response.status,
+        `send action returned HTTP ${response.status}: ${responseBody}`
+      ).toBe(200);
+      return JSON.parse(responseBody) as { action_id: string; status: string; result: unknown };
     };
     const navigate = await sendAction({ type: 'navigate', url: 'https://example.com' });
     const screenshot = await sendAction({ type: 'screenshot' });
