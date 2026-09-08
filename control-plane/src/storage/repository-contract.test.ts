@@ -6,6 +6,7 @@ import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
 import type { BrowserTask, WebhookEvent } from '../domain/types.js';
 import { TaskService } from '../services/task-service.js';
+import { SessionService } from '../services/session-service.js';
 import { Scheduler } from '../services/scheduler.js';
 import { ProfileLockService } from '../services/profile-lock.js';
 import { WebhookSigner } from '../services/webhook-signer.js';
@@ -76,6 +77,29 @@ const profileAcquireRaceRepositories = (
     }
   }));
   return { repositories, arrivals };
+};
+
+const barrierBeforeRepositoryMethods = (
+  repository: Repository,
+  methods: readonly (keyof Repository)[],
+  participants = methods.length
+): Repository => {
+  const barrier = deferred();
+  let arrivals = 0;
+  return new Proxy(repository, {
+    get(target, property) {
+      const value = Reflect.get(target, property);
+      if (typeof value === 'function' && methods.includes(property as keyof Repository)) {
+        return async (...args: unknown[]) => {
+          arrivals += 1;
+          if (arrivals === participants) barrier.resolve();
+          await barrier.promise;
+          return Reflect.apply(value, target, args);
+        };
+      }
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  });
 };
 
 type FaultBoundary =
@@ -870,20 +894,122 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('rotates machine tokens without replacing lease accounting', async () => {
     const { repository, close } = await makeHarness();
     try {
-      await repository.saveMachine({ id: 'machine-accounting', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'old-hash' });
-      const firstReservation = { taskId: 'task-a', claimId: 'claim-a', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
-      const secondReservation = { taskId: 'task-b', claimId: 'claim-b', claimGeneration: 1, expiresAt: '2026-09-04T12:01:00.000Z' };
-
-      expect(await repository.reserveMachineLease('machine-accounting', firstReservation)).toBe(true);
-      expect(await repository.rotateMachineToken('machine-accounting', 'old-hash', 'rotated-hash')).toBe(true);
-      expect(await repository.rotateMachineToken('machine-accounting', 'old-hash', 'stale-hash')).toBe(false);
-
-      expect(await repository.getMachine('machine-accounting')).toMatchObject({
+      const unrelatedReservation = { taskId: 'task-unrelated', claimId: 'claim-unrelated', claimGeneration: 7, expiresAt: '2026-09-04T12:01:00.000Z' };
+      const targetReservation = { taskId: 'task-target', claimId: 'claim-target', claimGeneration: 1, expiresAt: '2026-09-04T12:02:00.000Z' };
+      await repository.saveMachine({
+        id: 'machine-accounting',
+        poolId: 'pool',
+        tags: { os: 'macos' },
+        capacity: 2,
         activeLeases: 1,
-        workerTokenHash: 'rotated-hash',
-        leaseReservations: [firstReservation]
+        leaseReservations: [unrelatedReservation],
+        online: true,
+        workerTokenHash: 'old-hash'
       });
-      expect(await repository.reserveMachineLease('machine-accounting', secondReservation)).toBe(false);
+
+      const reserveRace = barrierBeforeRepositoryMethods(repository, ['rotateMachineToken', 'reserveMachineLease']);
+      expect(await Promise.all([
+        reserveRace.rotateMachineToken('machine-accounting', 'old-hash', 'rotated-hash'),
+        reserveRace.reserveMachineLease('machine-accounting', targetReservation)
+      ])).toEqual([true, true]);
+      expect(await repository.rotateMachineToken('machine-accounting', 'old-hash', 'stale-hash')).toBe(false);
+      expect(await repository.getMachine('machine-accounting')).toEqual({
+        id: 'machine-accounting',
+        poolId: 'pool',
+        tags: { os: 'macos' },
+        capacity: 2,
+        online: true,
+        activeLeases: 2,
+        workerTokenHash: 'rotated-hash',
+        leaseReservations: [unrelatedReservation, targetReservation]
+      });
+
+      const releaseRace = barrierBeforeRepositoryMethods(repository, ['rotateMachineToken', 'releaseMachineLease']);
+      expect(await Promise.all([
+        releaseRace.rotateMachineToken('machine-accounting', 'rotated-hash', 'final-hash'),
+        releaseRace.releaseMachineLease('machine-accounting', {
+          taskId: targetReservation.taskId,
+          claimId: targetReservation.claimId,
+          claimGeneration: targetReservation.claimGeneration
+        })
+      ])).toEqual([true, true]);
+      expect(await repository.getMachine('machine-accounting')).toEqual({
+        id: 'machine-accounting',
+        poolId: 'pool',
+        tags: { os: 'macos' },
+        capacity: 2,
+        online: true,
+        activeLeases: 1,
+        workerTokenHash: 'final-hash',
+        leaseReservations: [unrelatedReservation]
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('refuses a lease response when a committed projection disappears before verification', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() };
+      await repository.savePool({ id: 'projection-loss-pool', visibility: 'platform', tags: {} });
+      for (const projection of ['machine', 'profile'] as const) {
+        const taskId = `projection-loss-${projection}-task`;
+        const machineId = `projection-loss-${projection}-machine`;
+        const profileId = `projection-loss-${projection}-profile`;
+        await repository.saveMachine({ id: machineId, poolId: 'projection-loss-pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'hash' });
+        await repository.createProfile({ id: profileId, userId: 'user-1' });
+        await repository.saveTask(baseTask({ id: taskId, profileId }));
+        let injections = 0;
+        const projectionLossRepository = new Proxy(repository, {
+          get(target, property) {
+            if (property === 'replaceTaskForClaim') {
+              return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+                const committed = await target.replaceTaskForClaim(...args);
+                const task = args[0];
+                if (committed && injections === 0 && task.claimCommitted === true && task.claimReleased !== true) {
+                  injections += 1;
+                  const reservation = { taskId: task.id, claimId: task.claimId!, claimGeneration: task.claimGeneration! };
+                  if (projection === 'machine') await target.releaseMachineLease(machineId, reservation);
+                  else await target.releaseProfileLease(profileId, reservation);
+                }
+                return committed;
+              };
+            }
+            const value = Reflect.get(target, property);
+            return typeof value === 'function' ? value.bind(target) : value;
+          }
+        });
+
+        await expect(taskService(projectionLossRepository, clock).claim(`projection-loss-${projection}-worker`, machineId, clock.value))
+          .rejects.toMatchObject({ code: 'not_found' });
+        expect(injections).toBe(1);
+        expect(await repository.getTask(taskId)).toMatchObject({
+          status: 'submitted',
+          claimGeneration: 1,
+          claimCommitted: false,
+          claimReleased: true
+        });
+        expect(await repository.getMachine(machineId)).toMatchObject({ activeLeases: 0, leaseReservations: [] });
+        expect(await repository.getProfile(profileId)).not.toHaveProperty('lockedByTaskId');
+
+        const reclaimed = await taskService(repository, clock).claim(`projection-loss-${projection}-replacement`, machineId, clock.value);
+        expect(reclaimed.task).toMatchObject({ status: 'claimed', claimGeneration: 2, claimCommitted: true });
+        expect(await repository.getMachine(machineId)).toMatchObject({
+          activeLeases: 1,
+          leaseReservations: [{
+            taskId,
+            claimId: reclaimed.task.claimId,
+            claimGeneration: reclaimed.task.claimGeneration,
+            expiresAt: reclaimed.task.leaseExpiresAt
+          }]
+        });
+        expect(await repository.getProfile(profileId)).toMatchObject({
+          lockedByTaskId: taskId,
+          lockedByClaimId: reclaimed.task.claimId,
+          lockedByClaimGeneration: reclaimed.task.claimGeneration
+        });
+      }
     } finally {
       await close();
     }
@@ -1369,6 +1495,221 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       await expect(restarted.heartbeat('reconcile-task', 'worker-a', 'lease-a', 10)).rejects.toMatchObject({ code: 'unauthorized' });
       expect(await repository.getMachine('reconcile-machine')).toMatchObject({ activeLeases: 1 });
       expect(await repository.getProfile('reconcile-profile')).toMatchObject({ lockedByClaimId: reclaimed.task.claimId });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('does not let a stale generation reconciler remove generation N+1 projections', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() - 30_000 };
+      await repository.savePool({ id: 'stale-reconcile-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'stale-reconcile-machine',
+        poolId: 'stale-reconcile-pool',
+        tags: {},
+        capacity: 2,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({ id: 'stale-reconcile-profile', userId: 'user-1' });
+      await repository.saveTask(baseTask({ id: 'stale-reconcile-task', profileId: 'stale-reconcile-profile' }));
+      const authority = taskService(repository, clock);
+      const generationN = await authority.claim('stale-reconcile-worker-n', 'stale-reconcile-machine', clock.value);
+
+      const staleAtReservation = deferred();
+      const resumeStale = deferred();
+      const staleReservationPersisted = deferred();
+      const returnStaleReservation = deferred();
+      let paused = false;
+      let staleReservationResult: boolean | undefined;
+      let staleReservationError: unknown;
+      const staleRepository = new Proxy(repository, {
+        get(target, property) {
+          if (property === 'reserveMachineLease') {
+            return async (...args: Parameters<Repository['reserveMachineLease']>): Promise<boolean> => {
+              const reservation = args[1];
+              if (!paused && reservation.claimId === generationN.task.claimId) {
+                paused = true;
+                staleAtReservation.resolve();
+                await resumeStale.promise;
+                try {
+                  staleReservationResult = await target.reserveMachineLease(...args);
+                } catch (error) {
+                  staleReservationError = error;
+                } finally {
+                  staleReservationPersisted.resolve();
+                }
+                await returnStaleReservation.promise;
+                if (staleReservationError !== undefined) throw staleReservationError;
+                return staleReservationResult ?? false;
+              }
+              return target.reserveMachineLease(...args);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      const staleReconciliation = taskService(staleRepository, { value: Date.now() }).reconcileClaims(Date.now());
+      await staleAtReservation.promise;
+
+      clock.value = Date.now();
+      expect(await authority.expireLeases(clock.value)).toHaveLength(1);
+      clock.value = Date.now() + 600_000;
+      const generationNPlusOne = await authority.claim('stale-reconcile-worker-n-plus-one', 'stale-reconcile-machine', clock.value);
+      expect(generationNPlusOne.task.claimGeneration).toBe((generationN.task.claimGeneration ?? 0) + 1);
+      const cursorBeforeStaleResume = await repository.getTaskMaintenanceCursor('task-claim-reconciliation');
+      expect(cursorBeforeStaleResume).toMatchObject({ id: 'task-claim-reconciliation' });
+      if (cursorBeforeStaleResume === undefined) throw new Error('authoritative maintenance cursor missing');
+      expect(cursorBeforeStaleResume.version).toBeGreaterThan(0);
+      expect(await repository.getMachine('stale-reconcile-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [{
+          taskId: 'stale-reconcile-task',
+          claimId: generationNPlusOne.task.claimId,
+          claimGeneration: generationNPlusOne.task.claimGeneration,
+          expiresAt: generationNPlusOne.task.leaseExpiresAt
+        }]
+      });
+
+      resumeStale.resolve();
+      await staleReservationPersisted.promise;
+      let temporaryMachine: Awaited<ReturnType<Repository['getMachine']>>;
+      let observationError: unknown;
+      try {
+        temporaryMachine = await repository.getMachine('stale-reconcile-machine');
+      } catch (error) {
+        observationError = error;
+      } finally {
+        returnStaleReservation.resolve();
+      }
+      await staleReconciliation;
+      if (observationError !== undefined) throw observationError;
+      expect(staleReservationError).toBeUndefined();
+      expect(staleReservationResult).toBe(true);
+      expect(temporaryMachine).toMatchObject({ activeLeases: 2 });
+      expect(temporaryMachine?.leaseReservations).toHaveLength(2);
+      expect(temporaryMachine?.leaseReservations).toEqual(expect.arrayContaining([
+        {
+          taskId: 'stale-reconcile-task',
+          claimId: generationN.task.claimId,
+          claimGeneration: generationN.task.claimGeneration,
+          expiresAt: generationN.task.leaseExpiresAt
+        },
+        {
+          taskId: 'stale-reconcile-task',
+          claimId: generationNPlusOne.task.claimId,
+          claimGeneration: generationNPlusOne.task.claimGeneration,
+          expiresAt: generationNPlusOne.task.leaseExpiresAt
+        }
+      ]));
+
+      expect(await repository.getTask('stale-reconcile-task')).toMatchObject({
+        status: 'claimed',
+        claimId: generationNPlusOne.task.claimId,
+        claimGeneration: generationNPlusOne.task.claimGeneration,
+        workerId: 'stale-reconcile-worker-n-plus-one'
+      });
+      expect(await repository.getMachine('stale-reconcile-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [{
+          taskId: 'stale-reconcile-task',
+          claimId: generationNPlusOne.task.claimId,
+          claimGeneration: generationNPlusOne.task.claimGeneration,
+          expiresAt: generationNPlusOne.task.leaseExpiresAt
+        }]
+      });
+      expect(await repository.getProfile('stale-reconcile-profile')).toMatchObject({
+        lockedByTaskId: 'stale-reconcile-task',
+        lockedByClaimId: generationNPlusOne.task.claimId,
+        lockedByClaimGeneration: generationNPlusOne.task.claimGeneration
+      });
+      expect(await repository.getTaskMaintenanceCursor('task-claim-reconciliation'))
+        .toEqual(cursorBeforeStaleResume);
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('fences generation N action operations after N+1 reclaims the original action', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      const clock = { value: Date.now() - 30_000 };
+      await repository.savePool({ id: 'action-reclaim-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'action-reclaim-machine',
+        poolId: 'action-reclaim-pool',
+        tags: {},
+        capacity: 1,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      await repository.createProfile({ id: 'action-reclaim-profile', userId: 'user-1' });
+      const tasks = taskService(repository, clock);
+      const sessions = new SessionService(tasks, repository, { clock: () => clock.value });
+      const session = await sessions.create('user-1', {
+        profile_id: 'action-reclaim-profile',
+        mode: 'act',
+        constraints: {}
+      });
+      const generationN = await tasks.claim('action-reclaim-worker-n', 'action-reclaim-machine', clock.value);
+      const pending = await sessions.sendAction(session.id, 'user-1', { type: 'wait', milliseconds: 1 }, 0);
+      expect((await sessions.pollWorkerAction(session.id, 'action-reclaim-worker-n', generationN.leaseToken)).action?.id)
+        .toBe(pending.action_id);
+
+      clock.value = Date.now();
+      expect(await tasks.expireLeases(clock.value)).toHaveLength(1);
+      const generationNPlusOne = await tasks.claim('action-reclaim-worker-n-plus-one', 'action-reclaim-machine', clock.value);
+      expect(generationNPlusOne.task.claimGeneration).toBe((generationN.task.claimGeneration ?? 0) + 1);
+
+      await expect(sessions.pollWorkerAction(session.id, 'action-reclaim-worker-n', generationN.leaseToken))
+        .rejects.toMatchObject({ code: 'unauthorized' });
+      await expect(sessions.saveWorkerResult(
+        session.id,
+        pending.action_id,
+        'action-reclaim-worker-n',
+        generationN.leaseToken,
+        { value: 'stale' },
+        'action-reclaim-machine'
+      )).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(await repository.getSessionActionResult(pending.action_id)).toBeUndefined();
+      expect(await repository.getPendingSessionAction(session.id)).toMatchObject({
+        id: pending.action_id,
+        state: 'pending'
+      });
+
+      expect((await sessions.pollWorkerAction(session.id, 'action-reclaim-worker-n-plus-one', generationNPlusOne.leaseToken)).action?.id)
+        .toBe(pending.action_id);
+      await sessions.saveWorkerResult(
+        session.id,
+        pending.action_id,
+        'action-reclaim-worker-n-plus-one',
+        generationNPlusOne.leaseToken,
+        { value: 'generation-n-plus-one' },
+        'action-reclaim-machine'
+      );
+      await expect(sessions.getAction(session.id, pending.action_id, 'user-1', 0)).resolves.toEqual({
+        action_id: pending.action_id,
+        status: 'completed',
+        result: { value: 'generation-n-plus-one' }
+      });
+      expect(await repository.getMachine('action-reclaim-machine')).toMatchObject({
+        activeLeases: 1,
+        leaseReservations: [expect.objectContaining({
+          taskId: session.id,
+          claimId: generationNPlusOne.task.claimId,
+          claimGeneration: generationNPlusOne.task.claimGeneration
+        })]
+      });
+      expect(await repository.getProfile('action-reclaim-profile')).toMatchObject({
+        lockedByTaskId: session.id,
+        lockedByClaimId: generationNPlusOne.task.claimId,
+        lockedByClaimGeneration: generationNPlusOne.task.claimGeneration
+      });
     } finally {
       await close();
     }
