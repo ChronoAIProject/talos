@@ -70,8 +70,8 @@ export class WebhookDispatcher {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await this.update(event, { status: 'delivered', attempts: attempt, lastAttemptAt: new Date(this.clock()).toISOString() });
         return;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : lastError;
+      } catch {
+        lastError = 'webhook_delivery_failed';
         await this.update(event, { status: 'pending', attempts: attempt, lastAttemptAt: new Date(this.clock()).toISOString(), lastError });
         if (attempt < this.retries) await new Promise((resolve) => setTimeout(resolve, this.backoffMs * attempt));
       }

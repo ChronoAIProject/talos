@@ -32,7 +32,7 @@ describe('Scheduler eligibility', () => {
     await repository.savePool({ id: 'platform', visibility: 'platform', tags: {} });
     await repository.saveMachine({ id: 'a', poolId: 'private', tags: { os: 'macos' }, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
     await repository.saveMachine({ id: 'b', poolId: 'platform', tags: { os: 'linux', computer_use: true }, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
-    await repository.saveProfile({ id: 'p', userId: 'u', machineId: 'b' });
+    await repository.createProfile({ id: 'p', userId: 'u', machineId: 'b' });
     expect(await scheduler.isEligible(task({ os: 'linux' }), 'b', 'u')).toBeDefined();
     expect(await scheduler.isEligible(task({ os: 'macos' }), 'b', 'u')).toBeUndefined();
     expect(await scheduler.isEligible(task({ os: 'macos' }), 'a', 'u')).toBeUndefined();

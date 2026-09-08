@@ -1655,6 +1655,7 @@ components:
       properties: { kind: { type: string, enum: [choice, text, otp] }, value: { type: string } }
     Task:
       type: object
+      additionalProperties: false
       required: [id, userId, kind, goal, interaction, status, createdAt, updatedAt, findings, artifacts]
       properties:
         id: { type: string }
@@ -1686,6 +1687,7 @@ components:
         constraints: { type: object, properties: { budget: { type: number, minimum: 0 }, deadline: { type: string, format: date-time }, requirements: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: boolean }] } } } }
     Session:
       type: object
+      additionalProperties: false
       required: [id, status, mode, createdAt, updatedAt]
       properties:
         id: { type: string }
@@ -1742,6 +1744,7 @@ components:
       properties: { id: { type: string }, name: { type: string }, contentType: { type: string }, size: { type: integer }, uri: { type: string, format: uri }, createdAt: { type: string, format: date-time } }
     ClaimResponse:
       type: object
+      additionalProperties: false
       required: [task, lease, leaseToken]
       properties:
         task: { $ref: '#/components/schemas/Task' }
@@ -1749,6 +1752,7 @@ components:
         leaseToken: { type: string, minLength: 1 }
     Lease:
       type: object
+      additionalProperties: false
       required: [taskId, workerId, machineId, expiresAt]
       properties: { taskId: { type: string }, workerId: { type: string }, machineId: { type: string }, expiresAt: { type: string, format: date-time } }
     WorkerCredentials:
@@ -1897,6 +1901,7 @@ components:
       properties: { error: { $ref: '#/components/schemas/PublicErrorDetail' } }
     PublicErrorDetail:
       type: object
+      additionalProperties: false
       required: [code, message, retryable]
       properties:
         code: { type: string }
@@ -1921,6 +1926,7 @@ components:
             snapshot_digest: { $ref: '#/components/schemas/Sha256Digest' }
     WebhookEvent:
       type: object
+      additionalProperties: false
       required: [id, type, taskId, userId, timestamp, payload]
       properties:
         id: { type: string }
@@ -1937,24 +1943,29 @@ components:
         delivery: { $ref: '#/components/schemas/WebhookDelivery' }
     StateChangedPayload:
       type: object
+      additionalProperties: false
       required: [status]
       properties:
         status: { type: string, enum: [submitted, claimed, running, needs_input, handoff, closing, completed, failed, cancelled] }
         error: { $ref: '#/components/schemas/TaskError' }
     NeedsInputPayload:
       type: object
+      additionalProperties: false
       required: [status]
       properties: { status: { type: string, const: needs_input } }
     HandoffRequestedPayload:
       type: object
+      additionalProperties: false
       required: [handoff_url, expires]
       properties: { handoff_url: { type: string }, expires: { type: string, format: date-time } }
     CompletedPayload:
       type: object
+      additionalProperties: false
       required: [status]
       properties: { status: { type: string, const: completed } }
     WebhookDelivery:
       type: object
+      additionalProperties: false
       required: [status, attempts]
       properties:
         status: { type: string, enum: [pending, delivered, failed] }
@@ -1963,6 +1974,7 @@ components:
         lastError: { type: string }
     TaskError:
       type: object
+      additionalProperties: false
       required: [code, message]
       properties: { code: { type: string }, message: { type: string } }
 x-webhook-signing:
