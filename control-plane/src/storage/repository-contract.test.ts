@@ -559,6 +559,73 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
     }
   }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
+  it('reconciles a reservation when the task machine pointer is stale', async () => {
+    const { repository, close } = await makeHarness();
+    try {
+      await repository.saveMachine({
+        id: 'reservation-machine',
+        poolId: 'pool',
+        tags: {},
+        capacity: 1,
+        activeLeases: 0,
+        online: true,
+        workerTokenHash: 'hash'
+      });
+      const submitted = baseTask({ id: 'stale-machine-pointer-task' });
+      await repository.saveTask(submitted);
+      const claimed = (await repository.claimTask({
+        ...submitted,
+        status: 'claimed',
+        workerId: 'worker-a',
+        machineId: 'stale-machine-pointer',
+        leaseToken: 'lease-a',
+        leaseExpiresAt: '1970-01-01T00:00:11.000Z',
+        claimId: 'claim-a',
+        claimGeneration: 1,
+        taskVersion: 1,
+        claimCommitted: true,
+        claimedAt: '1970-01-01T00:00:01.000Z',
+        updatedAt: '1970-01-01T00:00:01.000Z'
+      }, 0, 0))!;
+      const reservation = {
+        taskId: claimed.id,
+        claimId: claimed.claimId!,
+        claimGeneration: claimed.claimGeneration!,
+        expiresAt: claimed.leaseExpiresAt!
+      };
+      expect(await repository.reserveMachineLease('reservation-machine', reservation)).toBe(true);
+      expect(await repository.replaceTaskForClaim({
+        ...claimed,
+        status: 'submitted',
+        workerId: undefined,
+        leaseToken: undefined,
+        leaseExpiresAt: undefined,
+        queuePriority: -1
+      }, {
+        claimId: claimed.claimId!,
+        claimGeneration: claimed.claimGeneration!,
+        taskVersion: claimed.taskVersion!,
+        status: claimed.status
+      })).toBe(true);
+
+      const service = taskService(repository);
+      await service.reconcileClaims();
+      expect(await repository.getMachine('reservation-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+      expect(await repository.getTask(claimed.id)).toMatchObject({ claimReleased: true });
+
+      await service.reconcileClaims();
+      expect(await repository.getMachine('reservation-machine')).toMatchObject({
+        activeLeases: 0,
+        leaseReservations: []
+      });
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('round-trips registry entities and task state', async () => {
     const { repository, close } = await makeHarness();
     try {

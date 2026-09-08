@@ -188,7 +188,7 @@ describe('control-plane factory', () => {
     const repository = new MemoryRepository();
     let releaseFirst: ((tasks: readonly []) => void) | undefined;
     const blocked = new Promise<readonly []>((resolve) => { releaseFirst = resolve; });
-    const listTasks = vi.spyOn(repository, 'listTasks')
+    const listExpirableTasks = vi.spyOn(repository, 'listExpirableTasks')
       .mockImplementationOnce(async () => blocked)
       .mockResolvedValue([]);
     const server = createControlPlane(repository, 'webhook-secret-1234', {
@@ -197,13 +197,13 @@ describe('control-plane factory', () => {
     });
 
     await vi.advanceTimersByTimeAsync(11);
-    expect(listTasks).toHaveBeenCalledTimes(1);
+    expect(listExpirableTasks).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(50);
-    expect(listTasks).toHaveBeenCalledTimes(1);
+    expect(listExpirableTasks).toHaveBeenCalledTimes(1);
     releaseFirst?.([]);
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(11);
-    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(listExpirableTasks).toHaveBeenCalledTimes(2);
     server.stopSweep();
   });
 
@@ -211,7 +211,7 @@ describe('control-plane factory', () => {
     vi.useFakeTimers();
     const repository = new MemoryRepository();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const listTasks = vi.spyOn(repository, 'listTasks')
+    const listClaimReconciliationTasks = vi.spyOn(repository, 'listClaimReconciliationTasks')
       .mockRejectedValueOnce(new Error('task sweep unavailable'))
       .mockResolvedValue([]);
     const listTestingRuns = vi.spyOn(repository, 'listTestingRuns')
@@ -224,7 +224,7 @@ describe('control-plane factory', () => {
 
     await vi.advanceTimersByTimeAsync(11);
     await vi.advanceTimersByTimeAsync(11);
-    expect(listTasks.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(listClaimReconciliationTasks.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(listTestingRuns.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(stderr.mock.calls.flat().join('\n')).toContain('task lease sweep failed');
     expect(stderr.mock.calls.flat().join('\n')).toContain('testing attempt sweep failed');

@@ -68,6 +68,11 @@ export class MongoRepository implements Repository {
       this.pools.createIndex({ ownerUserId: 1 }),
       this.profiles.createIndex({ userId: 1 }),
       this.machines.createIndex({ poolId: 1 }),
+      this.machines.createIndex({
+        'leaseReservations.taskId': 1,
+        'leaseReservations.claimId': 1,
+        'leaseReservations.claimGeneration': 1
+      }),
       this.pendingActions.createIndex(
         { taskId: 1 },
         { unique: true, partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } } }
@@ -278,6 +283,18 @@ export class MongoRepository implements Repository {
   public async releaseMachineLease(machineId: string, reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
     const filter = {
       _id: machineId,
+      leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
+    } satisfies Filter<MachineDocument>;
+    const update = {
+      $inc: { activeLeases: -1 },
+      $pull: { leaseReservations: claimReservationFilter(reservation) }
+    } satisfies UpdateFilter<MachineDocument>;
+    const result = await this.machines.updateOne(filter, update);
+    return result.modifiedCount === 1;
+  }
+
+  public async releaseMachineLeaseReservation(reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const filter = {
       leaseReservations: { $elemMatch: claimReservationFilter(reservation) }
     } satisfies Filter<MachineDocument>;
     const update = {
@@ -635,6 +652,9 @@ const withoutId = (document: Document): Record<string, unknown> => {
 
 const taskFromDocument = (document: Document): Task => ({
   interaction: 'autonomous',
+  workerId: undefined,
+  leaseExpiresAt: undefined,
+  claimQueuePriority: undefined,
   ...withoutId(document)
 }) as unknown as Task;
 const poolFromDocument = (document: Document): Pool => withoutId(document) as unknown as Pool;

@@ -382,14 +382,16 @@ export class TaskService {
       task.leaseToken === undefined ||
       task.claimId === undefined ||
       task.claimGeneration === undefined ||
-      task.claimGeneration <= 0 ||
-      task.claimCommitted !== true ||
-      !['claimed', 'running', 'needs_input', 'handoff', 'closing', 'cancelled'].includes(task.status)
+      task.claimGeneration <= 0
     ) throw unauthorized('worker does not own active lease');
     const expected = Buffer.from(task.leaseToken);
     const actual = Buffer.from(leaseToken);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw unauthorized('invalid lease token');
     if (task.status === 'cancelled') throw taskCancelled();
+    if (
+      task.claimCommitted !== true ||
+      !['claimed', 'running', 'needs_input', 'handoff', 'closing'].includes(task.status)
+    ) throw unauthorized('worker does not own active lease');
     if (task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= this.clock() && !['needs_input', 'handoff'].includes(task.status)) throw unauthorized('lease expired');
     return task;
   }
@@ -607,11 +609,17 @@ export class TaskService {
     const reservation = { taskId: task.id, claimId: task.claimId, claimGeneration: task.claimGeneration };
     const current = await this.repository.getTask(task.id);
     if (current?.claimId !== reservation.claimId || current.claimGeneration !== reservation.claimGeneration || current.claimReleased === true) return;
-    if (current.machineId !== undefined) await this.repository.releaseMachineLease(current.machineId, reservation);
+    let machineReleased = false;
+    if (current.machineId !== undefined) {
+      machineReleased = await this.repository.releaseMachineLease(current.machineId, reservation);
+    }
+    if (!machineReleased && task.machineId !== undefined && task.machineId !== current.machineId) {
+      machineReleased = await this.repository.releaseMachineLease(task.machineId, reservation);
+    }
+    if (!machineReleased) await this.repository.releaseMachineLeaseReservation(reservation);
     if (current.profileId !== undefined) await this.profiles.release(current.profileId, reservation);
     await this.repository.replaceTaskForClaim({
       ...current,
-      machineId: undefined,
       claimCommitted: false,
       claimReleased: true
     }, this.claimGuard(current));

@@ -204,6 +204,17 @@ export class MemoryRepository implements Repository {
     return true;
   }
 
+  public async releaseMachineLeaseReservation(reservation: Omit<MachineLeaseReservation, 'expiresAt'>): Promise<boolean> {
+    const machine = [...this.machines.values()].find((candidate) =>
+      candidate.leaseReservations?.some((entry) =>
+        entry.taskId === reservation.taskId &&
+        entry.claimId === reservation.claimId &&
+        entry.claimGeneration === reservation.claimGeneration
+      ) === true
+    );
+    return machine === undefined ? false : this.releaseMachineLease(machine.id, reservation);
+  }
+
   public async getProfile(id: string): Promise<Profile | undefined> {
     return this.profiles.get(id);
   }
