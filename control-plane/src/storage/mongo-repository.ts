@@ -27,6 +27,14 @@ const NON_TESTING_TASK_KINDS = ['browse', 'computer_use'] as const;
 const ACTIVE_TASK_STATUSES = ['claimed', 'running', 'closing'] as const;
 const TASK_LEASE_EXPIRY_INDEX = 'task-lease-expiry-v1';
 const TASK_DEADLINE_EXPIRY_INDEX = 'task-deadline-expiry-v1';
+const LEGACY_ACTION_MIGRATION_INDEX = 'legacy-action-migration-v1';
+const LEGACY_ACTION_MIGRATION_BATCH_SIZE = 100;
+const LEGACY_ACTION_RECOVERY_ERROR = {
+  error: {
+    code: 'legacy_action_quarantined',
+    message: 'legacy action quarantined during schema migration'
+  }
+} as const;
 
 const assertPositivePageLimit = (limit: number): void => {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
@@ -104,11 +112,19 @@ export class MongoRepository implements Repository {
         { taskId: 1 },
         { unique: true, partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } } }
       ),
+      this.pendingActions.createIndex(
+        { state: 1, _id: 1 },
+        {
+          name: LEGACY_ACTION_MIGRATION_INDEX,
+          partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } }
+        }
+      ),
       this.actionResults.createIndex({ taskId: 1 }),
       this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true }),
       this.testingMachineReservations.createIndex({ runId: 1, attemptId: 1 }, { unique: true }),
       this.testingMachineReservations.createIndex({ expiresAt: 1 })
     ]);
+    await this.quarantineLegacySessionActions();
   }
 
   public async ping(): Promise<void> {
@@ -563,8 +579,7 @@ export class MongoRepository implements Repository {
       const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.state !== 'completed');
       if (action !== undefined && action.state !== 'completed') return action;
     }
-    const legacy = await this.pendingActions.findOne({ taskId, state: { $in: ['pending', 'dispatched'] } });
-    return legacy === null ? undefined : sessionActionFromDocument(legacy);
+    return undefined;
   }
 
   public async takePendingSessionAction(
@@ -705,6 +720,29 @@ export class MongoRepository implements Repository {
   public async markSessionActionPending(_taskId: string, _actionId: string, _updatedAt: string): Promise<void> {}
 
   public async markSessionActionCompleted(_taskId: string, _actionId: string, _completedAt: string): Promise<void> {}
+
+  private async quarantineLegacySessionActions(): Promise<void> {
+    while (true) {
+      const documents = await this.pendingActions.find(
+        { state: { $in: ['pending', 'dispatched'] } },
+        { projection: { _id: 1 } }
+      ).sort({ _id: 1 }).limit(LEGACY_ACTION_MIGRATION_BATCH_SIZE).toArray();
+      if (documents.length === 0) return;
+      const completedAt = new Date().toISOString();
+      await this.pendingActions.bulkWrite(documents.map((document) => ({
+        updateOne: {
+          filter: { _id: document._id, state: { $in: ['pending', 'dispatched'] } },
+          update: {
+            $set: {
+              state: 'completed',
+              completionResult: LEGACY_ACTION_RECOVERY_ERROR,
+              completedAt
+            }
+          }
+        }
+      })), { ordered: false });
+    }
+  }
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
     try {
@@ -918,7 +956,6 @@ const machineFromDocument = ({
 const profileFromDocument = (document: Document): Profile => withoutId(document) as unknown as Profile;
 const handoffFromDocument = (document: Document): HandoffLink => withoutId(document) as unknown as HandoffLink;
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
-const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
 const completedSessionActionResultFromDocument = (document: Document): SessionActionResult => ({
   actionId: document.id as string,

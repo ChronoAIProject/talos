@@ -116,9 +116,7 @@ type FaultBoundary =
   | 'legacy_profile_release'
   | 'legacy_finalizing'
   | 'legacy_marker_clear'
-  | 'legacy_done'
-  | 'legacy_action_requeue'
-  | 'legacy_action_finalize';
+  | 'legacy_done';
 
 const faultAfterBoundary = (
   repository: Repository,
@@ -209,19 +207,6 @@ const faultAfterBoundary = (
       if (property === 'clearLegacyMachineLeaseMarker' && boundary === 'legacy_marker_clear') {
         return async (...args: Parameters<Repository['clearLegacyMachineLeaseMarker']>): Promise<boolean> => {
           const result = await target.clearLegacyMachineLeaseMarker(...args);
-          if (!injected && result) inject();
-          return result;
-        };
-      }
-      if (property === 'requeueSessionAction' && boundary === 'legacy_action_requeue') {
-        return async (...args: Parameters<Repository['requeueSessionAction']>): Promise<void> => {
-          await target.requeueSessionAction(...args);
-          if (!injected) inject();
-        };
-      }
-      if (property === 'finalizeSessionAction' && boundary === 'legacy_action_finalize') {
-        return async (...args: Parameters<Repository['finalizeSessionAction']>): Promise<boolean> => {
-          const result = await target.finalizeSessionAction(...args);
           if (!injected && result) inject();
           return result;
         };
@@ -757,80 +742,6 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         await restarted.reconcileClaims(clock.value);
         expect(await repository.getMachine(machineId)).toMatchObject({ activeLeases: 0 });
       }
-    } finally {
-      await harness.close();
-    }
-  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
-
-  it('retries legacy interactive action side effects after restart', async () => {
-    const harness = await makeHarness();
-    let repository = harness.repository;
-    try {
-      const clock = { value: Date.now() };
-      await repository.saveTask(baseTask({
-        id: 'legacy-action-requeue-task',
-        interaction: 'interactive',
-        status: 'running',
-        workerId: 'legacy-worker',
-        leaseToken: 'legacy-token',
-        pendingActionId: 'legacy-action-requeue'
-      }));
-      await repository.enqueueSessionAction({
-        id: 'legacy-action-requeue',
-        taskId: 'legacy-action-requeue-task',
-        action: { type: 'navigate', url: 'https://example.com/retry' },
-        state: 'pending',
-        createdAt: '2025-01-01T00:00:00.000Z'
-      });
-      await repository.takePendingSessionAction('legacy-action-requeue-task');
-      const requeueFault = faultAfterBoundary(repository, 'legacy_action_requeue');
-      await taskService(requeueFault.repository, clock).reconcileClaims(clock.value);
-      expect(requeueFault.hitCount()).toBe(1);
-      expect((await repository.getTask('legacy-action-requeue-task'))?.claimRecovery?.phase).toBe('draining');
-      expect(await repository.getPendingSessionAction('legacy-action-requeue-task')).toMatchObject({
-        id: 'legacy-action-requeue',
-        state: 'pending'
-      });
-
-      repository = await harness.restart();
-      await taskService(repository, clock).reconcileClaims(clock.value);
-      expect(await repository.getTask('legacy-action-requeue-task')).toMatchObject({ status: 'submitted' });
-      expect((await repository.getTask('legacy-action-requeue-task'))?.claimRecovery).toBeUndefined();
-      expect(await repository.getPendingSessionAction('legacy-action-requeue-task')).toMatchObject({ state: 'pending' });
-
-      await repository.saveTask(baseTask({
-        id: 'legacy-action-closing-task',
-        interaction: 'interactive',
-        status: 'closing',
-        workerId: 'legacy-worker',
-        leaseToken: 'legacy-token',
-        pendingActionId: 'legacy-action-close',
-        createdAt: '2025-01-01T00:00:01.000Z'
-      }));
-      await repository.enqueueSessionAction({
-        id: 'legacy-action-close',
-        taskId: 'legacy-action-closing-task',
-        action: { type: 'navigate', url: 'https://example.com/close' },
-        state: 'pending',
-        createdAt: '2025-01-01T00:00:01.000Z'
-      });
-      await repository.takePendingSessionAction('legacy-action-closing-task');
-      const finalizeFault = faultAfterBoundary(repository, 'legacy_action_finalize');
-      await taskService(finalizeFault.repository, clock).reconcileClaims(clock.value);
-      expect(finalizeFault.hitCount()).toBe(1);
-      expect((await repository.getTask('legacy-action-closing-task'))?.claimRecovery?.phase).toBe('draining');
-      expect(await repository.getSessionActionResult('legacy-action-close')).toMatchObject({
-        result: { error: { code: 'session_closed' } }
-      });
-
-      repository = await harness.restart();
-      await taskService(repository, clock).reconcileClaims(clock.value);
-      expect(await repository.getTask('legacy-action-closing-task')).toMatchObject({ status: 'completed' });
-      expect((await repository.getTask('legacy-action-closing-task'))?.claimRecovery).toBeUndefined();
-      expect(await repository.getPendingSessionAction('legacy-action-closing-task')).toBeUndefined();
-      expect(await repository.getSessionActionResult('legacy-action-close')).toMatchObject({
-        result: { error: { code: 'session_closed' } }
-      });
     } finally {
       await harness.close();
     }
@@ -2574,6 +2485,82 @@ describe('Repository contract: mongo', () => {
   contractTests(mongoHarness);
   undefinedLeaseTest(mongoHarness);
   testingRunContractTest(mongoHarness);
+
+  it('quarantines legacy in-flight actions in bounded restart-safe batches', async () => {
+    if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
+    const databaseName = `talos_legacy_actions_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    let client = new MongoClient(mongoUrl, { ...mongodbClientOptions, monitorCommands: true });
+    let repository = new MongoRepository(mongoUrl, databaseName, { client });
+    const migrationBatchSizes: number[] = [];
+    client.on('commandStarted', (event) => {
+      if (event.commandName === 'update' && event.command.update === 'pending_actions') {
+        migrationBatchSizes.push((event.command.updates as unknown[]).length);
+      }
+    });
+    try {
+      await client.connect();
+      const legacyActions = Array.from({ length: 101 }, (_, index) => {
+        const id = `legacy-action-${String(index).padStart(3, '0')}`;
+        return {
+          _id: id,
+          id,
+          taskId: `legacy-action-task-${String(index).padStart(3, '0')}`,
+          action: { type: 'navigate', url: `https://example.com/${index}` },
+          state: index % 2 === 0 ? 'pending' : 'dispatched',
+          createdAt: '2025-01-01T00:00:00.000Z'
+        };
+      });
+      await client.db(databaseName).collection('pending_actions').insertMany([
+        ...legacyActions,
+        {
+          _id: 'legacy-action-already-quarantined',
+          id: 'legacy-action-already-quarantined',
+          taskId: 'legacy-action-task-already-quarantined',
+          action: { type: 'wait', milliseconds: 1 },
+          state: 'completed',
+          completionResult: {
+            error: {
+              code: 'legacy_action_quarantined',
+              message: 'legacy action quarantined during schema migration'
+            }
+          },
+          completedAt: '2025-01-01T00:00:01.000Z',
+          createdAt: '2025-01-01T00:00:00.000Z'
+        }
+      ]);
+
+      await repository.initialize();
+
+      expect(migrationBatchSizes).toEqual([100, 1]);
+      expect(await client.db(databaseName).collection('pending_actions').countDocuments({
+        state: { $in: ['pending', 'dispatched'] }
+      })).toBe(0);
+      expect(await repository.getPendingSessionAction('legacy-action-task-000')).toBeUndefined();
+      expect(await repository.getSessionActionResult('legacy-action-000')).toMatchObject({
+        result: { error: { code: 'legacy_action_quarantined' } }
+      });
+      expect(await repository.getSessionActionResult('legacy-action-100')).toMatchObject({
+        result: { error: { code: 'legacy_action_quarantined' } }
+      });
+      expect(await repository.getSessionActionResult('legacy-action-already-quarantined')).toMatchObject({
+        completedAt: '2025-01-01T00:00:01.000Z'
+      });
+
+      const completedAt = (await repository.getSessionActionResult('legacy-action-000'))?.completedAt;
+      await repository.close();
+      client = new MongoClient(mongoUrl, mongodbClientOptions);
+      repository = new MongoRepository(mongoUrl, databaseName, { client });
+      await repository.initialize();
+      expect(migrationBatchSizes).toEqual([100, 1]);
+      expect((await repository.getSessionActionResult('legacy-action-000'))?.completedAt).toBe(completedAt);
+    } finally {
+      try {
+        await client.db(databaseName).dropDatabase();
+      } finally {
+        await repository.close();
+      }
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
 
   it('continues the durable maintenance cursor after a real repository reconnect', async () => {
     if (mongoUrl === undefined) throw new Error('Mongo contract setup did not provide a database URL');
