@@ -1,7 +1,7 @@
 import { MongoClient, type Collection, type Db, type Document as MongoDriverDocument, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 type Document = { _id: string; [key: string]: unknown };
 
@@ -539,71 +539,172 @@ export class MongoRepository implements Repository {
   }
 
   public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
-    try {
-      await this.pendingActions.insertOne({ ...action, _id: action.id });
-      return true;
-    } catch (error) {
-      if (isDuplicateKeyError(error)) return false;
-      throw error;
-    }
-  }
-
-  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const document = await this.pendingActions.findOne({ taskId, state: { $in: ['pending', 'dispatched'] } });
-    return document === null ? undefined : sessionActionFromDocument(document);
-  }
-
-  public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const document = await this.pendingActions.findOneAndUpdate(
-      { taskId, state: 'pending' },
-      { $set: { state: 'dispatched' } },
-      { returnDocument: 'after' }
-    );
-    return document === null ? undefined : sessionActionFromDocument(document);
-  }
-
-  public async requeueSessionAction(taskId: string): Promise<void> {
-    await this.pendingActions.updateOne(
-      { taskId, state: 'dispatched' },
-      { $set: { state: 'pending' } }
-    );
-  }
-
-  public async finalizeSessionAction(
-    result: SessionActionResult,
-    expectedStates: readonly PendingSessionAction['state'][]
-  ): Promise<boolean> {
-    const document = await this.pendingActions.findOneAndUpdate(
-      { taskId: result.taskId, id: result.actionId, state: { $in: expectedStates } },
+    const document = await this.tasks.findOneAndUpdate(
       {
-        $set: {
-          state: 'completed',
-          completionResult: result.result,
-          completedAt: result.completedAt
-        }
+        _id: action.taskId,
+        $nor: [{ sessionActions: { $elemMatch: { state: { $in: ['pending', 'dispatched'] } } } }]
+      },
+      {
+        $push: { sessionActions: action },
+        $set: { pendingActionId: action.id, updatedAt: action.createdAt },
+        $inc: { taskVersion: 1 }
       },
       { returnDocument: 'after' }
     );
     return document !== null;
   }
 
+  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const taskDocument = await this.tasks.findOne({
+      _id: taskId,
+      sessionActions: { $elemMatch: { state: { $in: ['pending', 'dispatched'] } } }
+    });
+    if (taskDocument !== null) {
+      const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.state !== 'completed');
+      if (action !== undefined && action.state !== 'completed') return action;
+    }
+    const legacy = await this.pendingActions.findOne({ taskId, state: { $in: ['pending', 'dispatched'] } });
+    return legacy === null ? undefined : sessionActionFromDocument(legacy);
+  }
+
+  public async takePendingSessionAction(
+    taskId: string,
+    guard: SessionActionDispatchGuard
+  ): Promise<PendingSessionAction | undefined> {
+    const dispatchGeneration = guard.expectedDispatchGeneration + 1;
+    const dispatchBinding: ActionDispatchBinding = {
+      schemaVersion: 'talos.internal-action-dispatch-binding/v1',
+      dispatchId: guard.dispatchId,
+      dispatchGeneration,
+      workerId: guard.workerId,
+      machineId: guard.machineId,
+      leaseTokenDigest: guard.leaseTokenDigest
+    };
+    const document = await this.tasks.findOneAndUpdate(
+      {
+        _id: taskId,
+        workerId: guard.workerId,
+        machineId: guard.machineId,
+        leaseToken: guard.leaseToken,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        claimCommitted: true,
+        status: { $in: ['claimed', 'running'] },
+        $expr: afterDatabaseNow('$leaseExpiresAt'),
+        sessionActions: {
+          $elemMatch: {
+            schemaVersion: 'talos.internal-session-action/v1',
+            state: 'pending',
+            dispatchGeneration: guard.expectedDispatchGeneration
+          }
+        }
+      },
+      {
+        $set: {
+          'sessionActions.$[action].state': 'dispatched',
+          'sessionActions.$[action].dispatchGeneration': dispatchGeneration,
+          'sessionActions.$[action].dispatchBinding': dispatchBinding,
+          'sessionActions.$[action].dispatchClaimId': guard.claimId,
+          'sessionActions.$[action].dispatchClaimGeneration': guard.claimGeneration
+        },
+        $inc: { taskVersion: 1 }
+      },
+      {
+        arrayFilters: [{
+          'action.schemaVersion': 'talos.internal-session-action/v1',
+          'action.state': 'pending',
+          'action.dispatchGeneration': guard.expectedDispatchGeneration
+        }],
+        returnDocument: 'after'
+      }
+    );
+    if (document === null) return undefined;
+    const action = taskFromDocument(document).sessionActions?.find((candidate) => candidate.state === 'dispatched');
+    return action?.state === 'dispatched' ? action : undefined;
+  }
+
+  public async requeueSessionAction(taskId: string): Promise<void> {
+    await this.tasks.updateOne(
+      { _id: taskId, sessionActions: { $elemMatch: { state: 'dispatched' } } },
+      { $set: { 'sessionActions.$[action].state': 'pending' }, $inc: { taskVersion: 1 } },
+      { arrayFilters: [{ 'action.state': 'dispatched' }] }
+    );
+  }
+
+  public async finalizeSessionAction(
+    result: SessionActionResult,
+    expectedStates: readonly PendingSessionAction['state'][],
+    guard?: SessionActionResultGuard
+  ): Promise<boolean> {
+    const bindingFilter = guard === undefined ? {} : {
+      'sessionActions.dispatchBinding': guard.binding,
+      workerId: guard.binding.workerId,
+      machineId: guard.binding.machineId,
+      leaseToken: guard.leaseToken,
+      claimId: guard.claimId,
+      claimGeneration: guard.claimGeneration,
+      claimCommitted: true,
+      status: { $in: ['claimed', 'running', 'closing'] },
+      $expr: afterDatabaseNow('$leaseExpiresAt')
+    };
+    const actionFilter = guard === undefined
+      ? { 'action.id': result.actionId, 'action.state': { $in: expectedStates } }
+      : {
+          'action.id': result.actionId,
+          'action.state': 'dispatched',
+          'action.dispatchBinding': guard.binding,
+          'action.dispatchClaimId': guard.claimId,
+          'action.dispatchClaimGeneration': guard.claimGeneration
+        };
+    const completion: SessionActionResult = guard === undefined
+      ? (result.dispatchBinding === undefined ? { ...result, unbound: true } : result)
+      : { ...result, dispatchBinding: guard.binding };
+    const update = await this.tasks.updateOne(
+      {
+        _id: result.taskId,
+        pendingActionId: result.actionId,
+        sessionActions: {
+          $elemMatch: guard === undefined
+            ? { id: result.actionId, state: { $in: expectedStates } }
+            : {
+                id: result.actionId, state: 'dispatched', dispatchBinding: guard.binding,
+                dispatchClaimId: guard.claimId, dispatchClaimGeneration: guard.claimGeneration
+              }
+        },
+        ...bindingFilter
+      },
+      {
+        $set: {
+          'sessionActions.$[action].state': 'completed',
+          'sessionActions.$[action].completion': completion,
+          lastActionId: result.actionId,
+          updatedAt: result.completedAt
+        },
+        $unset: { pendingActionId: '' },
+        $inc: { taskVersion: 1 }
+      },
+      { arrayFilters: [actionFilter] }
+    );
+    return update.modifiedCount === 1;
+  }
+
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
+    const taskDocument = await this.tasks.findOne({
+      sessionActions: { $elemMatch: { id: actionId, state: 'completed' } }
+    });
+    if (taskDocument !== null) {
+      const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.id === actionId);
+      if (action?.state === 'completed') return action.completion;
+    }
     const document = await this.actionResults.findOne({ _id: actionId });
     if (document !== null) return sessionActionResultFromDocument(document);
     const completed = await this.pendingActions.findOne({ id: actionId, state: 'completed' });
     return completed === null ? undefined : completedSessionActionResultFromDocument(completed);
   }
 
-  public async markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void> {
-    await this.tasks.updateOne({ _id: taskId }, { $set: { pendingActionId: actionId, updatedAt } });
-  }
+  public async markSessionActionPending(_taskId: string, _actionId: string, _updatedAt: string): Promise<void> {}
 
-  public async markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void> {
-    await this.tasks.updateOne(
-      { _id: taskId, pendingActionId: actionId },
-      { $unset: { pendingActionId: '' }, $set: { lastActionId: actionId, updatedAt: completedAt } }
-    );
-  }
+  public async markSessionActionCompleted(_taskId: string, _actionId: string, _completedAt: string): Promise<void> {}
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
     try {

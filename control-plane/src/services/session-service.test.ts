@@ -97,7 +97,8 @@ describe('session service', () => {
             pending.action_id,
             'worker',
             claim.leaseToken,
-            { value: 'loaded' }
+            { value: 'loaded' },
+            'machine'
           );
         }
       }
@@ -123,7 +124,8 @@ describe('session service', () => {
       first.action_id,
       'worker',
       claim.leaseToken,
-      { value: 'done' }
+      { value: 'done' },
+      'machine'
     );
 
     await expect(sessions.getAction(created.id, first.action_id, 'user-a', 0)).resolves.toEqual({
@@ -148,7 +150,8 @@ describe('session service', () => {
       pending.action_id,
       'worker',
       claim.leaseToken,
-      { value: 'done' }
+      { value: 'done' },
+      'machine'
     );
 
     await expect(sessions.saveWorkerResult(
@@ -156,7 +159,8 @@ describe('session service', () => {
       pending.action_id,
       'worker',
       claim.leaseToken,
-      { value: 'done' }
+      { value: 'done' },
+      'machine'
     )).rejects.toMatchObject({ code: 'action_already_completed', status: 409 });
   });
 
@@ -166,7 +170,7 @@ describe('session service', () => {
     const claim = await tasks.claim('worker', 'machine');
     const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
     await sessions.pollWorkerAction(created.id, 'worker', claim.leaseToken);
-    await sessions.saveWorkerResult(created.id, sent.action_id, 'worker', claim.leaseToken, { value: 'winner' });
+    await sessions.saveWorkerResult(created.id, sent.action_id, 'worker', claim.leaseToken, { value: 'winner' }, 'machine');
     await sessions.close(created.id, 'user-a');
     clock.value = 12_000;
     await tasks.expireLeases();
@@ -215,7 +219,7 @@ describe('session service', () => {
   });
 
   it('returns a dispatched action to pending when an interactive lease is requeued', async () => {
-    const { clock, sessions, tasks } = await setup();
+    const { clock, repository, sessions, tasks } = await setup();
     const created = await sessions.create('user-a', { mode: 'act', constraints: {} });
     const claim = await tasks.claim('worker-one', 'machine');
     const sent = await sessions.sendAction(created.id, 'user-a', { type: 'wait', milliseconds: 1 }, 0);
@@ -225,5 +229,12 @@ describe('session service', () => {
     await tasks.expireLeases();
     const replacement = await tasks.claim('worker-two', 'machine');
     expect((await sessions.pollWorkerAction(created.id, 'worker-two', replacement.leaseToken)).action?.id).toBe(sent.action_id);
+    await expect(sessions.saveWorkerResult(
+      created.id, sent.action_id, 'worker-one', claim.leaseToken, { value: 'stale' }, 'machine'
+    )).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+    await sessions.saveWorkerResult(
+      created.id, sent.action_id, 'worker-two', replacement.leaseToken, { value: 'winner' }, 'machine'
+    );
+    expect((await repository.getSessionActionResult(sent.action_id))?.result).toEqual({ value: 'winner' });
   });
 });
