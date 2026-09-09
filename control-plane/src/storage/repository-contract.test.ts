@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { MongoClient, type Document as MongoDocument } from 'mongodb';
+import { MongoClient, type Collection, type Document as MongoDocument } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
@@ -2492,11 +2492,14 @@ describe('Repository contract: mongo', () => {
     let client = new MongoClient(mongoUrl, { ...mongodbClientOptions, monitorCommands: true });
     let repository = new MongoRepository(mongoUrl, databaseName, { client });
     const migrationBatchSizes: number[] = [];
-    client.on('commandStarted', (event) => {
-      if (event.commandName === 'update' && event.command.update === 'pending_actions') {
-        migrationBatchSizes.push((event.command.updates as unknown[]).length);
-      }
-    });
+    const monitorMigrationBatches = (): void => {
+      client.on('commandStarted', (event) => {
+        if (event.commandName === 'update' && event.command.update === 'pending_actions') {
+          migrationBatchSizes.push((event.command.updates as unknown[]).length);
+        }
+      });
+    };
+    monitorMigrationBatches();
     try {
       await client.connect();
       const legacyActions = Array.from({ length: 101 }, (_, index) => {
@@ -2529,17 +2532,21 @@ describe('Repository contract: mongo', () => {
         }
       ]);
 
-      await repository.initialize();
+      const pendingActions = (repository as unknown as { pendingActions: Collection<MongoDocument> }).pendingActions;
+      const bulkWrite = pendingActions.bulkWrite.bind(pendingActions);
+      pendingActions.bulkWrite = async (operations, options) => {
+        await bulkWrite(operations, options);
+        throw new Error('injected legacy action migration interruption');
+      };
 
-      expect(migrationBatchSizes).toEqual([100, 1]);
+      await expect(repository.initialize()).rejects.toThrow('injected legacy action migration interruption');
+
+      expect(migrationBatchSizes).toEqual([100]);
       expect(await client.db(databaseName).collection('pending_actions').countDocuments({
         state: { $in: ['pending', 'dispatched'] }
-      })).toBe(0);
+      })).toBe(1);
       expect(await repository.getPendingSessionAction('legacy-action-task-000')).toBeUndefined();
       expect(await repository.getSessionActionResult('legacy-action-000')).toMatchObject({
-        result: { error: { code: 'legacy_action_quarantined' } }
-      });
-      expect(await repository.getSessionActionResult('legacy-action-100')).toMatchObject({
         result: { error: { code: 'legacy_action_quarantined' } }
       });
       expect(await repository.getSessionActionResult('legacy-action-already-quarantined')).toMatchObject({
@@ -2548,10 +2555,17 @@ describe('Repository contract: mongo', () => {
 
       const completedAt = (await repository.getSessionActionResult('legacy-action-000'))?.completedAt;
       await repository.close();
-      client = new MongoClient(mongoUrl, mongodbClientOptions);
+      client = new MongoClient(mongoUrl, { ...mongodbClientOptions, monitorCommands: true });
       repository = new MongoRepository(mongoUrl, databaseName, { client });
+      monitorMigrationBatches();
       await repository.initialize();
       expect(migrationBatchSizes).toEqual([100, 1]);
+      expect(await client.db(databaseName).collection('pending_actions').countDocuments({
+        state: { $in: ['pending', 'dispatched'] }
+      })).toBe(0);
+      expect(await repository.getSessionActionResult('legacy-action-100')).toMatchObject({
+        result: { error: { code: 'legacy_action_quarantined' } }
+      });
       expect((await repository.getSessionActionResult('legacy-action-000'))?.completedAt).toBe(completedAt);
     } finally {
       try {
