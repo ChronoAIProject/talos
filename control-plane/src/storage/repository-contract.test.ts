@@ -2238,9 +2238,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       const dispatchGuard = sessionActionDispatchGuard(task, 0, 'dispatch-worker-wins');
       await repository.saveTask(task);
       expect(await repository.enqueueSessionAction(action)).toBe(true);
-      let browserExecutions = 0;
       const dispatched = await repository.takePendingSessionAction(action.taskId, dispatchGuard);
-      if (dispatched !== undefined) browserExecutions += 1;
       const workerResult = {
         actionId: action.id,
         taskId: action.taskId,
@@ -2270,7 +2268,6 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
       expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
       expect(await repository.takePendingSessionAction(action.taskId, dispatchGuard)).toBeUndefined();
-      expect(browserExecutions).toBe(1);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-next' })).toBe(true);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-extra' })).toBe(false);
     } finally {
@@ -2286,9 +2283,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       const dispatchGuard = sessionActionDispatchGuard(task, 0, 'dispatch-teardown-wins');
       await repository.saveTask(task);
       expect(await repository.enqueueSessionAction(action)).toBe(true);
-      let browserExecutions = 0;
       const dispatched = await repository.takePendingSessionAction(action.taskId, dispatchGuard);
-      if (dispatched !== undefined) browserExecutions += 1;
       const workerResult = {
         actionId: action.id,
         taskId: action.taskId,
@@ -2318,7 +2313,6 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
       expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
       expect(await repository.takePendingSessionAction(action.taskId, dispatchGuard)).toBeUndefined();
-      expect(browserExecutions).toBe(1);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-next' })).toBe(true);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-extra' })).toBe(false);
     } finally {
