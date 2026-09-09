@@ -167,18 +167,28 @@ export const workerInputPollSchema = workerNeedsInputSchema;
 
 export const workerActionPollSchema = workerNeedsInputSchema;
 
+export const workerActionResultPayloadSchema = z.object({
+  screenshot: z.object({
+    mimeType: z.enum(['image/jpeg', 'image/png']),
+    data: z.string(),
+    width: z.number().int().nonnegative(),
+    height: z.number().int().nonnegative()
+  }).optional(),
+  value: z.unknown().optional(),
+  error: z.object({ code: z.string().min(1), message: z.string().min(1) }).optional()
+}).strict();
+
+export const workerActionResultEnvelopeSchema = z.object({
+  worker_token: z.unknown().optional(),
+  worker_id: z.unknown().optional(),
+  machine_id: z.unknown().optional(),
+  lease_token: z.unknown().optional(),
+  result: z.unknown().optional()
+}).passthrough();
+
 export const workerActionResultSchema = workerBodyCredentialsSchema.extend({
   lease_token: z.string().min(1),
-  result: z.object({
-    screenshot: z.object({
-      mimeType: z.enum(['image/jpeg', 'image/png']),
-      data: z.string(),
-      width: z.number().int().nonnegative(),
-      height: z.number().int().nonnegative()
-    }).optional(),
-    value: z.unknown().optional(),
-    error: z.object({ code: z.string().min(1), message: z.string().min(1) }).optional()
-  }).strict()
+  result: workerActionResultPayloadSchema
 });
 
 export const resultSchema = workerBodyCredentialsSchema.extend({

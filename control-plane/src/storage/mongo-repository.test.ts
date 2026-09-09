@@ -39,13 +39,19 @@ class FakeCollection {
   }
 
   public find(filter: Readonly<Record<string, unknown>>): {
-    sort: () => { toArray: () => Promise<FakeDocument[]> };
+    sort: () => ReturnType<FakeCollection['find']>;
+    limit: () => ReturnType<FakeCollection['find']>;
     toArray: () => Promise<FakeDocument[]>;
   } {
     const toArray = async (): Promise<FakeDocument[]> => [...this.documents.values()]
       .filter((candidate) => Object.entries(filter).every(([key, value]) => candidate[key] === value))
       .map((document) => structuredClone(document));
-    return { sort: () => ({ toArray }), toArray };
+    const cursor = {
+      sort: () => cursor,
+      limit: () => cursor,
+      toArray
+    };
+    return cursor;
   }
 
   public async findOne(filter: Readonly<Record<string, unknown>>): Promise<FakeDocument | null> {

@@ -1,9 +1,9 @@
 import { MongoClient, type Collection, type Db, type Document as MongoDriverDocument, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
-type Document = { _id: string; [key: string]: unknown };
+type Document = MongoDriverDocument & { _id: string };
 
 type MachineDocument = Omit<Machine, 'leaseReservations'> & {
   _id: string;
@@ -27,6 +27,14 @@ const NON_TESTING_TASK_KINDS = ['browse', 'computer_use'] as const;
 const ACTIVE_TASK_STATUSES = ['claimed', 'running', 'closing'] as const;
 const TASK_LEASE_EXPIRY_INDEX = 'task-lease-expiry-v1';
 const TASK_DEADLINE_EXPIRY_INDEX = 'task-deadline-expiry-v1';
+const LEGACY_ACTION_MIGRATION_INDEX = 'legacy-action-migration-v1';
+const LEGACY_ACTION_MIGRATION_BATCH_SIZE = 100;
+const LEGACY_ACTION_RECOVERY_ERROR = {
+  error: {
+    code: 'legacy_action_quarantined',
+    message: 'legacy action quarantined during schema migration'
+  }
+} as const;
 
 const assertPositivePageLimit = (limit: number): void => {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
@@ -104,11 +112,19 @@ export class MongoRepository implements Repository {
         { taskId: 1 },
         { unique: true, partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } } }
       ),
+      this.pendingActions.createIndex(
+        { state: 1, _id: 1 },
+        {
+          name: LEGACY_ACTION_MIGRATION_INDEX,
+          partialFilterExpression: { state: { $in: ['pending', 'dispatched'] } }
+        }
+      ),
       this.actionResults.createIndex({ taskId: 1 }),
       this.testingRuns.createIndex({ userId: 1, idempotencyKey: 1 }, { unique: true }),
       this.testingMachineReservations.createIndex({ runId: 1, attemptId: 1 }, { unique: true }),
       this.testingMachineReservations.createIndex({ expiresAt: 1 })
     ]);
+    await this.quarantineLegacySessionActions();
   }
 
   public async ping(): Promise<void> {
@@ -539,70 +555,234 @@ export class MongoRepository implements Repository {
   }
 
   public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
-    try {
-      await this.pendingActions.insertOne({ ...action, _id: action.id });
-      return true;
-    } catch (error) {
-      if (isDuplicateKeyError(error)) return false;
-      throw error;
-    }
-  }
-
-  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const document = await this.pendingActions.findOne({ taskId, state: { $in: ['pending', 'dispatched'] } });
-    return document === null ? undefined : sessionActionFromDocument(document);
-  }
-
-  public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const document = await this.pendingActions.findOneAndUpdate(
-      { taskId, state: 'pending' },
-      { $set: { state: 'dispatched' } },
-      { returnDocument: 'after' }
-    );
-    return document === null ? undefined : sessionActionFromDocument(document);
-  }
-
-  public async requeueSessionAction(taskId: string): Promise<void> {
-    await this.pendingActions.updateOne(
-      { taskId, state: 'dispatched' },
-      { $set: { state: 'pending' } }
-    );
-  }
-
-  public async finalizeSessionAction(
-    result: SessionActionResult,
-    expectedStates: readonly PendingSessionAction['state'][]
-  ): Promise<boolean> {
-    const document = await this.pendingActions.findOneAndUpdate(
-      { taskId: result.taskId, id: result.actionId, state: { $in: expectedStates } },
+    const document = await this.tasks.findOneAndUpdate(
       {
-        $set: {
-          state: 'completed',
-          completionResult: result.result,
-          completedAt: result.completedAt
-        }
+        _id: action.taskId,
+        $nor: [{ sessionActions: { $elemMatch: { state: { $in: ['pending', 'dispatched'] } } } }]
+      },
+      {
+        $push: { sessionActions: action } as MongoDriverDocument,
+        $set: { pendingActionId: action.id, updatedAt: action.createdAt },
+        $inc: { taskVersion: 1 }
       },
       { returnDocument: 'after' }
     );
     return document !== null;
   }
 
+  public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const taskDocument = await this.tasks.findOne({
+      _id: taskId,
+      sessionActions: { $elemMatch: { state: { $in: ['pending', 'dispatched'] } } }
+    });
+    if (taskDocument !== null) {
+      const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.state !== 'completed');
+      if (action !== undefined) return action;
+    }
+    return undefined;
+  }
+
+  public async takePendingSessionAction(
+    taskId: string,
+    guard: SessionActionDispatchGuard
+  ): Promise<PendingSessionAction | undefined> {
+    const dispatchGeneration = guard.expectedDispatchGeneration + 1;
+    const dispatchBinding: ActionDispatchBinding = {
+      schemaVersion: 'talos.internal-action-dispatch-binding/v1',
+      dispatchId: guard.dispatchId,
+      dispatchGeneration,
+      workerId: guard.workerId,
+      machineId: guard.machineId,
+      leaseTokenDigest: guard.leaseTokenDigest
+    };
+    const document = await this.tasks.findOneAndUpdate(
+      {
+        _id: taskId,
+        workerId: guard.workerId,
+        machineId: guard.machineId,
+        leaseToken: guard.leaseToken,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        claimCommitted: true,
+        status: { $in: ['claimed', 'running'] },
+        $expr: afterDatabaseNow('$leaseExpiresAt'),
+        sessionActions: {
+          $elemMatch: {
+            schemaVersion: 'talos.internal-session-action/v1',
+            state: 'pending',
+            dispatchGeneration: guard.expectedDispatchGeneration
+          }
+        }
+      },
+      {
+        $set: {
+          'sessionActions.$[action].state': 'dispatched',
+          'sessionActions.$[action].dispatchGeneration': dispatchGeneration,
+          'sessionActions.$[action].dispatchBinding': dispatchBinding,
+          'sessionActions.$[action].dispatchClaimId': guard.claimId,
+          'sessionActions.$[action].dispatchClaimGeneration': guard.claimGeneration
+        },
+        $inc: { taskVersion: 1 }
+      },
+      {
+        arrayFilters: [{
+          'action.schemaVersion': 'talos.internal-session-action/v1',
+          'action.state': 'pending',
+          'action.dispatchGeneration': guard.expectedDispatchGeneration
+        }],
+        returnDocument: 'after'
+      }
+    );
+    if (document === null) return undefined;
+    const action = taskFromDocument(document).sessionActions?.find((candidate) => candidate.state === 'dispatched');
+    return action?.state === 'dispatched' ? action : undefined;
+  }
+
+  public async requeueSessionAction(taskId: string): Promise<void> {
+    await this.tasks.updateOne(
+      { _id: taskId, sessionActions: { $elemMatch: { state: 'dispatched' } } },
+      { $set: { 'sessionActions.$[action].state': 'pending' }, $inc: { taskVersion: 1 } },
+      { arrayFilters: [{ 'action.state': 'dispatched' }] }
+    );
+  }
+
+  public async finalizeSessionAction(
+    result: SessionActionResult,
+    expectedStates: readonly PendingSessionAction['state'][],
+    guard?: SessionActionResultGuard
+  ): Promise<boolean> {
+    if (guard === undefined) {
+      const update = await this.tasks.updateOne(
+        {
+          _id: result.taskId,
+          pendingActionId: result.actionId,
+          sessionActions: { $elemMatch: { id: result.actionId, state: { $in: expectedStates } } }
+        },
+        [{
+          $set: {
+            sessionActions: {
+              $map: {
+                input: '$sessionActions',
+                as: 'action',
+                in: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$$action.id', result.actionId] },
+                        { $in: ['$$action.state', expectedStates] }
+                      ]
+                    },
+                    {
+                      $mergeObjects: [
+                        '$$action',
+                        {
+                          state: 'completed',
+                          completion: {
+                            $cond: [
+                              { $eq: [{ $type: '$$action.dispatchBinding' }, 'missing'] },
+                              { $mergeObjects: [{ $literal: result }, { unbound: true }] },
+                              { $mergeObjects: [{ $literal: result }, { dispatchBinding: '$$action.dispatchBinding' }] }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    '$$action'
+                  ]
+                }
+              }
+            },
+            lastActionId: result.actionId,
+            updatedAt: result.completedAt,
+            taskVersion: { $add: [{ $ifNull: ['$taskVersion', 0] }, 1] }
+          }
+        }, { $unset: 'pendingActionId' }]
+      );
+      return update.modifiedCount === 1;
+    }
+    const completion: SessionActionResult = { ...result, dispatchBinding: guard.binding };
+    const update = await this.tasks.updateOne(
+      {
+        _id: result.taskId,
+        pendingActionId: result.actionId,
+        sessionActions: {
+          $elemMatch: {
+            id: result.actionId, state: 'dispatched', dispatchBinding: guard.binding,
+            dispatchClaimId: guard.claimId, dispatchClaimGeneration: guard.claimGeneration
+          }
+        },
+        'sessionActions.dispatchBinding': guard.binding,
+        workerId: guard.binding.workerId,
+        machineId: guard.binding.machineId,
+        leaseToken: guard.leaseToken,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        claimCommitted: true,
+        status: { $in: ['claimed', 'running', 'closing'] },
+        $expr: afterDatabaseNow('$leaseExpiresAt')
+      },
+      {
+        $set: {
+          'sessionActions.$[action].state': 'completed',
+          'sessionActions.$[action].completion': completion,
+          lastActionId: result.actionId,
+          updatedAt: result.completedAt
+        },
+        $unset: { pendingActionId: '' },
+        $inc: { taskVersion: 1 }
+      },
+      {
+        arrayFilters: [{
+          'action.id': result.actionId,
+          'action.state': 'dispatched',
+          'action.dispatchBinding': guard.binding,
+          'action.dispatchClaimId': guard.claimId,
+          'action.dispatchClaimGeneration': guard.claimGeneration
+        }]
+      }
+    );
+    return update.modifiedCount === 1;
+  }
+
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
+    const taskDocument = await this.tasks.findOne({
+      sessionActions: { $elemMatch: { id: actionId, state: 'completed' } }
+    });
+    if (taskDocument !== null) {
+      const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.id === actionId);
+      if (action?.state === 'completed') return action.completion;
+    }
     const document = await this.actionResults.findOne({ _id: actionId });
     if (document !== null) return sessionActionResultFromDocument(document);
     const completed = await this.pendingActions.findOne({ id: actionId, state: 'completed' });
     return completed === null ? undefined : completedSessionActionResultFromDocument(completed);
   }
 
-  public async markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void> {
-    await this.tasks.updateOne({ _id: taskId }, { $set: { pendingActionId: actionId, updatedAt } });
-  }
+  public async markSessionActionPending(_taskId: string, _actionId: string, _updatedAt: string): Promise<void> {}
 
-  public async markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void> {
-    await this.tasks.updateOne(
-      { _id: taskId, pendingActionId: actionId },
-      { $unset: { pendingActionId: '' }, $set: { lastActionId: actionId, updatedAt: completedAt } }
-    );
+  public async markSessionActionCompleted(_taskId: string, _actionId: string, _completedAt: string): Promise<void> {}
+
+  private async quarantineLegacySessionActions(): Promise<void> {
+    while (true) {
+      const documents = await this.pendingActions.find(
+        { state: { $in: ['pending', 'dispatched'] } },
+        { projection: { _id: 1 } }
+      ).sort({ _id: 1 }).limit(LEGACY_ACTION_MIGRATION_BATCH_SIZE).toArray();
+      if (documents.length === 0) return;
+      const completedAt = new Date().toISOString();
+      await this.pendingActions.bulkWrite(documents.map((document) => ({
+        updateOne: {
+          filter: { _id: document._id, state: { $in: ['pending', 'dispatched'] } },
+          update: {
+            $set: {
+              state: 'completed',
+              completionResult: LEGACY_ACTION_RECOVERY_ERROR,
+              completedAt
+            }
+          }
+        }
+      })), { ordered: false });
+    }
   }
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
@@ -817,7 +997,6 @@ const machineFromDocument = ({
 const profileFromDocument = (document: Document): Profile => withoutId(document) as unknown as Profile;
 const handoffFromDocument = (document: Document): HandoffLink => withoutId(document) as unknown as HandoffLink;
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
-const sessionActionFromDocument = (document: Document): PendingSessionAction => withoutId(document) as unknown as PendingSessionAction;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
 const completedSessionActionResultFromDocument = (document: Document): SessionActionResult => ({
   actionId: document.id as string,

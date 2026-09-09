@@ -1,5 +1,7 @@
-import { actionAlreadyCompleted, conflict, forbidden, modeForbidden, notFound } from '../domain/errors.js';
+import { actionAlreadyCompleted, conflict, forbidden, modeForbidden, notFound, unauthorized } from '../domain/errors.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type {
+  ActionDispatchBinding,
   PendingSessionAction,
   SessionAction,
   SessionActionResult,
@@ -7,6 +9,7 @@ import type {
   TaskMode,
   TaskStatus
 } from '../domain/types.js';
+import { workerActionResultPayloadSchema } from '../domain/schemas.js';
 import type { Repository } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { TaskService } from './task-service.js';
@@ -115,16 +118,17 @@ export class SessionService {
     this.assertActionAllowed(task, action);
     if (!['claimed', 'running'].includes(task.status)) throw conflict('session is not ready for actions');
     const pending: PendingSessionAction = {
+      schemaVersion: 'talos.internal-session-action/v1',
       id: newId('action'),
       taskId: task.id,
       action,
       state: 'pending',
+      dispatchGeneration: 0,
       createdAt: new Date(this.clock()).toISOString()
     };
     if (!await this.repository.enqueueSessionAction(pending)) {
       throw conflict('session already has an action in flight');
     }
-    await this.repository.markSessionActionPending(task.id, pending.id, new Date(this.clock()).toISOString());
     return this.waitForResult(pending.id, task.id, waitSeconds);
   }
 
@@ -150,7 +154,21 @@ export class SessionService {
     const task = await this.tasks.getWorkerTask(taskId, workerId, leaseToken);
     if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
     if (task.status === 'closing') return { closing: true };
-    const action = await this.repository.takePendingSessionAction(taskId);
+    const pending = await this.repository.getPendingSessionAction(taskId);
+    if (
+      pending === undefined || task.claimId === undefined || task.claimGeneration === undefined ||
+      task.machineId === undefined
+    ) return { closing: false };
+    const action = await this.repository.takePendingSessionAction(taskId, {
+      expectedDispatchGeneration: pending.dispatchGeneration,
+      dispatchId: newId('dispatch'),
+      workerId,
+      machineId: task.machineId,
+      leaseToken,
+      leaseTokenDigest: digestLeaseToken(leaseToken),
+      claimId: task.claimId,
+      claimGeneration: task.claimGeneration
+    });
     return {
       closing: false,
       ...(action === undefined ? {} : { action: { id: action.id, action: action.action } })
@@ -165,27 +183,37 @@ export class SessionService {
     result: unknown,
     authenticatedMachineId?: string
   ): Promise<void> {
-    const task = await this.tasks.getWorkerActionResultTask(
-      taskId,
-      actionId,
-      workerId,
-      authenticatedMachineId,
-      leaseToken,
-      async (candidateTaskId, candidateActionId) => {
-        const existing = await this.repository.getSessionActionResult(candidateActionId);
-        return existing?.taskId === candidateTaskId && existing.actionId === candidateActionId;
-      }
-    );
-    if (task.interaction !== 'interactive') throw conflict('task is not an interactive session');
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) throw actionAlreadyCompleted();
-    const completedAt = new Date(this.clock()).toISOString();
-    const stored: SessionActionResult = { actionId, taskId, result, completedAt };
-    if (!await this.repository.finalizeSessionAction(stored, ['dispatched'])) {
-      const existing = await this.repository.getSessionActionResult(actionId);
-      if (existing?.taskId === taskId) throw actionAlreadyCompleted();
-      throw conflict('session action is not in flight');
+    if (
+      authenticatedMachineId === undefined || Buffer.byteLength(leaseToken, 'utf8') > 4096 ||
+      Buffer.byteLength(workerId, 'utf8') > 255 || Buffer.byteLength(authenticatedMachineId, 'utf8') > 255
+    ) throw unauthorized('unauthorized');
+    const task = await this.repository.getTask(taskId);
+    const action = task?.sessionActions?.find((candidate) => candidate.id === actionId);
+    if (task === undefined || task.interaction !== 'interactive' || action === undefined) throw unauthorized('unauthorized');
+    const binding = action.state === 'completed' ? action.completion.dispatchBinding : action.dispatchBinding;
+    if (!isValidDispatchBinding(binding) || !matchesDispatchCredential(binding, workerId, authenticatedMachineId, leaseToken)) {
+      throw unauthorized('unauthorized');
     }
-    await this.repository.markSessionActionCompleted(task.id, actionId, completedAt);
+    if (action.state === 'completed') throw actionAlreadyCompleted();
+    if (
+      action.state !== 'dispatched' || action.dispatchClaimId === undefined ||
+      action.dispatchClaimGeneration === undefined
+    ) throw unauthorized('unauthorized');
+    const validatedResult = workerActionResultPayloadSchema.parse(result);
+    const completedAt = new Date(this.clock()).toISOString();
+    const stored: SessionActionResult = { actionId, taskId, result: validatedResult, completedAt, dispatchBinding: binding };
+    if (!await this.repository.finalizeSessionAction(stored, ['dispatched'], {
+      binding, leaseToken, claimId: action.dispatchClaimId, claimGeneration: action.dispatchClaimGeneration
+    })) {
+      const latest = await this.repository.getTask(taskId);
+      const completed = latest?.sessionActions?.find((candidate) => candidate.id === actionId);
+      if (
+        completed?.state === 'completed' &&
+        isValidDispatchBinding(completed.completion.dispatchBinding) &&
+        matchesDispatchCredential(completed.completion.dispatchBinding, workerId, authenticatedMachineId, leaseToken)
+      ) throw actionAlreadyCompleted();
+      throw unauthorized('unauthorized');
+    }
   }
 
   private async waitForResult(actionId: string, taskId: string, waitSeconds: number): Promise<ActionView> {
@@ -226,3 +254,26 @@ export class SessionService {
     };
   }
 }
+
+const digestLeaseToken = (leaseToken: string): string =>
+  `sha256:${createHash('sha256').update(Buffer.from(leaseToken, 'utf8')).digest('hex')}`;
+
+const isValidDispatchBinding = (binding: ActionDispatchBinding | undefined): binding is ActionDispatchBinding =>
+  binding?.schemaVersion === 'talos.internal-action-dispatch-binding/v1' &&
+  binding.dispatchId.length > 0 && binding.dispatchId.length <= 255 &&
+  Number.isSafeInteger(binding.dispatchGeneration) && binding.dispatchGeneration > 0 &&
+  binding.workerId.length > 0 && binding.workerId.length <= 255 &&
+  binding.machineId.length > 0 && binding.machineId.length <= 255 &&
+  /^sha256:[0-9a-f]{64}$/.test(binding.leaseTokenDigest);
+
+const matchesDispatchCredential = (
+  binding: ActionDispatchBinding,
+  workerId: string,
+  machineId: string,
+  leaseToken: string
+): boolean => {
+  if (binding.workerId !== workerId || binding.machineId !== machineId) return false;
+  const expected = Buffer.from(binding.leaseTokenDigest.slice('sha256:'.length), 'hex');
+  const actual = createHash('sha256').update(Buffer.from(leaseToken, 'utf8')).digest();
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+};
