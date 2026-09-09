@@ -3,7 +3,7 @@ import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservati
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
-type Document = { _id: string; [key: string]: unknown };
+type Document = MongoDriverDocument & { _id: string };
 
 type MachineDocument = Omit<Machine, 'leaseReservations'> & {
   _id: string;
@@ -561,7 +561,7 @@ export class MongoRepository implements Repository {
         $nor: [{ sessionActions: { $elemMatch: { state: { $in: ['pending', 'dispatched'] } } } }]
       },
       {
-        $push: { sessionActions: action },
+        $push: { sessionActions: action } as MongoDriverDocument,
         $set: { pendingActionId: action.id, updatedAt: action.createdAt },
         $inc: { taskVersion: 1 }
       },
@@ -577,7 +577,7 @@ export class MongoRepository implements Repository {
     });
     if (taskDocument !== null) {
       const action = taskFromDocument(taskDocument).sessionActions?.find((candidate) => candidate.state !== 'completed');
-      if (action !== undefined && action.state !== 'completed') return action;
+      if (action !== undefined) return action;
     }
     return undefined;
   }
@@ -651,42 +651,75 @@ export class MongoRepository implements Repository {
     expectedStates: readonly PendingSessionAction['state'][],
     guard?: SessionActionResultGuard
   ): Promise<boolean> {
-    const bindingFilter = guard === undefined ? {} : {
-      'sessionActions.dispatchBinding': guard.binding,
-      workerId: guard.binding.workerId,
-      machineId: guard.binding.machineId,
-      leaseToken: guard.leaseToken,
-      claimId: guard.claimId,
-      claimGeneration: guard.claimGeneration,
-      claimCommitted: true,
-      status: { $in: ['claimed', 'running', 'closing'] },
-      $expr: afterDatabaseNow('$leaseExpiresAt')
-    };
-    const actionFilter = guard === undefined
-      ? { 'action.id': result.actionId, 'action.state': { $in: expectedStates } }
-      : {
-          'action.id': result.actionId,
-          'action.state': 'dispatched',
-          'action.dispatchBinding': guard.binding,
-          'action.dispatchClaimId': guard.claimId,
-          'action.dispatchClaimGeneration': guard.claimGeneration
-        };
-    const completion: SessionActionResult = guard === undefined
-      ? (result.dispatchBinding === undefined ? { ...result, unbound: true } : result)
-      : { ...result, dispatchBinding: guard.binding };
+    if (guard === undefined) {
+      const update = await this.tasks.updateOne(
+        {
+          _id: result.taskId,
+          pendingActionId: result.actionId,
+          sessionActions: { $elemMatch: { id: result.actionId, state: { $in: expectedStates } } }
+        },
+        [{
+          $set: {
+            sessionActions: {
+              $map: {
+                input: '$sessionActions',
+                as: 'action',
+                in: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$$action.id', result.actionId] },
+                        { $in: ['$$action.state', expectedStates] }
+                      ]
+                    },
+                    {
+                      $mergeObjects: [
+                        '$$action',
+                        {
+                          state: 'completed',
+                          completion: {
+                            $cond: [
+                              { $eq: [{ $type: '$$action.dispatchBinding' }, 'missing'] },
+                              { $mergeObjects: [{ $literal: result }, { unbound: true }] },
+                              { $mergeObjects: [{ $literal: result }, { dispatchBinding: '$$action.dispatchBinding' }] }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    '$$action'
+                  ]
+                }
+              }
+            },
+            lastActionId: result.actionId,
+            updatedAt: result.completedAt,
+            taskVersion: { $add: [{ $ifNull: ['$taskVersion', 0] }, 1] }
+          }
+        }, { $unset: 'pendingActionId' }]
+      );
+      return update.modifiedCount === 1;
+    }
+    const completion: SessionActionResult = { ...result, dispatchBinding: guard.binding };
     const update = await this.tasks.updateOne(
       {
         _id: result.taskId,
         pendingActionId: result.actionId,
         sessionActions: {
-          $elemMatch: guard === undefined
-            ? { id: result.actionId, state: { $in: expectedStates } }
-            : {
-                id: result.actionId, state: 'dispatched', dispatchBinding: guard.binding,
-                dispatchClaimId: guard.claimId, dispatchClaimGeneration: guard.claimGeneration
-              }
+          $elemMatch: {
+            id: result.actionId, state: 'dispatched', dispatchBinding: guard.binding,
+            dispatchClaimId: guard.claimId, dispatchClaimGeneration: guard.claimGeneration
+          }
         },
-        ...bindingFilter
+        'sessionActions.dispatchBinding': guard.binding,
+        workerId: guard.binding.workerId,
+        machineId: guard.binding.machineId,
+        leaseToken: guard.leaseToken,
+        claimId: guard.claimId,
+        claimGeneration: guard.claimGeneration,
+        claimCommitted: true,
+        status: { $in: ['claimed', 'running', 'closing'] },
+        $expr: afterDatabaseNow('$leaseExpiresAt')
       },
       {
         $set: {
@@ -698,7 +731,15 @@ export class MongoRepository implements Repository {
         $unset: { pendingActionId: '' },
         $inc: { taskVersion: 1 }
       },
-      { arrayFilters: [actionFilter] }
+      {
+        arrayFilters: [{
+          'action.id': result.actionId,
+          'action.state': 'dispatched',
+          'action.dispatchBinding': guard.binding,
+          'action.dispatchClaimId': guard.claimId,
+          'action.dispatchClaimGeneration': guard.claimGeneration
+        }]
+      }
     );
     return update.modifiedCount === 1;
   }

@@ -8,7 +8,7 @@ import { WebhookSigner } from './webhook-signer.js';
 
 const setup = async () => {
   const clock = { value: 1_000 };
-  const repository = new MemoryRepository();
+  const repository = new MemoryRepository(() => clock.value);
   await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
   await repository.saveMachine({
     id: 'machine',

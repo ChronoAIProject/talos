@@ -426,7 +426,7 @@ export class MemoryRepository implements Repository {
 
   public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
     const action = this.tasks.get(taskId)?.sessionActions?.find((candidate) => candidate.state !== 'completed');
-    if (action !== undefined && action.state !== 'completed') return action;
+    if (action !== undefined) return action;
     return this.pendingActions.get(taskId);
   }
 

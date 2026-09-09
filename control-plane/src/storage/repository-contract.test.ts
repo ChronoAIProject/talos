@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { MongoClient, type Collection, type Document as MongoDocument } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import type { Repository } from './repository.js';
+import type { Repository, SessionActionDispatchGuard } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
-import type { BrowserTask, WebhookEvent } from '../domain/types.js';
+import type { BrowserTask, PendingSessionAction, WebhookEvent } from '../domain/types.js';
 import { TaskService } from '../services/task-service.js';
 import { SessionService } from '../services/session-service.js';
 import { Scheduler } from '../services/scheduler.js';
@@ -233,6 +233,44 @@ const baseTask = (overrides: Partial<BrowserTask> = {}): BrowserTask => ({
   interaction: 'autonomous', status: 'submitted', createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z', findings: [], artifacts: [], ...overrides
 });
 
+const sessionAction = (id: string, taskId: string, createdAt = '2025-01-01T00:00:00.000Z'): PendingSessionAction => ({
+  schemaVersion: 'talos.internal-session-action/v1',
+  id,
+  taskId,
+  action: { type: 'navigate', url: 'https://example.com' },
+  state: 'pending',
+  dispatchGeneration: 0,
+  createdAt
+});
+
+const sessionActionTask = (id: string): BrowserTask => baseTask({
+  id,
+  interaction: 'interactive',
+  status: 'running',
+  workerId: `${id}-worker`,
+  machineId: `${id}-machine`,
+  leaseToken: `${id}-lease`,
+  leaseExpiresAt: '2099-01-01T00:00:00.000Z',
+  claimId: `${id}-claim`,
+  claimGeneration: 1,
+  claimCommitted: true
+});
+
+const sessionActionDispatchGuard = (
+  task: BrowserTask,
+  expectedDispatchGeneration: number,
+  dispatchId: string
+): SessionActionDispatchGuard => ({
+  expectedDispatchGeneration,
+  dispatchId,
+  workerId: task.workerId ?? '',
+  machineId: task.machineId ?? '',
+  leaseToken: task.leaseToken ?? '',
+  leaseTokenDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  claimId: task.claimId ?? '',
+  claimGeneration: task.claimGeneration ?? 0
+});
+
 const memoryHarness = async (): Promise<Harness> => {
   const repository = new MemoryRepository();
   return {
@@ -303,12 +341,12 @@ const mongoHarness = async (): Promise<Harness> => {
   };
 };
 
-const taskService = (repository: Repository, clock = { value: 1_000 }): TaskService => new TaskService(
+const taskService = (repository: Repository, clock = { value: 1_000 }, leaseSeconds = 10): TaskService => new TaskService(
   repository,
   new Scheduler(repository),
   new ProfileLockService(repository),
   new WebhookSigner('repository-contract-webhook-secret'),
-  { clock: () => clock.value, leaseSeconds: 10 }
+  { clock: () => clock.value, leaseSeconds }
 );
 
 const executionPlanContainsStage = (value: unknown, stage: string): boolean => {
@@ -1659,7 +1697,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('fences generation N action operations after N+1 reclaims the original action', async () => {
     const { repository, close } = await makeHarness();
     try {
-      const clock = { value: Date.now() - 30_000 };
+      const clock = { value: Date.now() };
       await repository.savePool({ id: 'action-reclaim-pool', visibility: 'platform', tags: {} });
       await repository.saveMachine({
         id: 'action-reclaim-machine',
@@ -1671,7 +1709,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         workerTokenHash: 'hash'
       });
       await repository.createProfile({ id: 'action-reclaim-profile', userId: 'user-1' });
-      const tasks = taskService(repository, clock);
+      const tasks = taskService(repository, clock, 2);
       const sessions = new SessionService(tasks, repository, { clock: () => clock.value });
       const session = await sessions.create('user-1', {
         profile_id: 'action-reclaim-profile',
@@ -1683,6 +1721,9 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect((await sessions.pollWorkerAction(session.id, 'action-reclaim-worker-n', generationN.leaseToken)).action?.id)
         .toBe(pending.action_id);
 
+      const leaseExpiresAt = generationN.task.leaseExpiresAt;
+      if (leaseExpiresAt === undefined) throw new Error('generation N lease expiry missing');
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Date.parse(leaseExpiresAt) - Date.now() + 50)));
       clock.value = Date.now();
       expect(await tasks.expireLeases(clock.value)).toHaveLength(1);
       const generationNPlusOne = await tasks.claim('action-reclaim-worker-n-plus-one', 'action-reclaim-machine', clock.value);
@@ -1823,21 +1864,23 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         createdAt: '2025-01-01T00:00:01.000Z'
       }));
       await repository.enqueueSessionAction({
+        schemaVersion: 'talos.internal-session-action/v1',
         id: 'action-requeue',
         taskId: 'legacy-interactive',
         action: { type: 'navigate', url: 'https://example.com/requeue' },
         state: 'pending',
+        dispatchGeneration: 0,
         createdAt: '2025-01-01T00:00:00.000Z'
       });
       await repository.enqueueSessionAction({
+        schemaVersion: 'talos.internal-session-action/v1',
         id: 'action-close',
         taskId: 'legacy-closing',
         action: { type: 'navigate', url: 'https://example.com/close' },
         state: 'pending',
+        dispatchGeneration: 0,
         createdAt: '2025-01-01T00:00:01.000Z'
       });
-      await repository.takePendingSessionAction('legacy-interactive');
-      await repository.takePendingSessionAction('legacy-closing');
 
       await taskService(repository).reconcileClaims();
       expect(await repository.getTask('legacy-interactive')).toMatchObject({ status: 'submitted' });
@@ -2136,20 +2179,26 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('atomically relays one interactive action and correlates its result', async () => {
     const { repository, close } = await makeHarness();
     try {
-      const action = {
-        id: 'action-1',
-        taskId: 'task-1',
-        action: { type: 'navigate' as const, url: 'https://example.com' },
-        state: 'pending' as const,
-        createdAt: '2025-01-01T00:00:00.000Z'
-      };
+      const task = sessionActionTask('task-1');
+      const action = sessionAction('action-1', task.id);
+      await repository.saveTask(task);
       expect(await repository.enqueueSessionAction(action)).toBe(true);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-2' })).toBe(false);
       expect(await repository.getPendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'pending' });
-      expect(await repository.takePendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'dispatched' });
-      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.takePendingSessionAction(
+        action.taskId,
+        sessionActionDispatchGuard(task, 0, 'dispatch-1')
+      )).toMatchObject({ id: action.id, state: 'dispatched' });
+      expect(await repository.takePendingSessionAction(
+        action.taskId,
+        sessionActionDispatchGuard(task, 0, 'dispatch-stale')
+      )).toBeUndefined();
       await repository.requeueSessionAction(action.taskId);
-      expect(await repository.takePendingSessionAction(action.taskId)).toMatchObject({ id: action.id, state: 'dispatched' });
+      const dispatched = await repository.takePendingSessionAction(
+        action.taskId,
+        sessionActionDispatchGuard(task, 1, 'dispatch-2')
+      );
+      expect(dispatched).toMatchObject({ id: action.id, state: 'dispatched' });
       const completed = {
         actionId: action.id,
         taskId: action.taskId,
@@ -2160,8 +2209,11 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.getSessionActionResult(action.id)).toMatchObject({ taskId: action.taskId, result: { value: 'ok' } });
       expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
       expect(await repository.finalizeSessionAction(completed, ['dispatched'])).toBe(false);
-      expect(await repository.getSessionActionResult(action.id)).toEqual(completed);
-      const pending = { ...action, id: 'action-cancel', state: 'pending' as const };
+      expect(await repository.getSessionActionResult(action.id)).toEqual({
+        ...completed,
+        dispatchBinding: dispatched?.dispatchBinding
+      });
+      const pending = { ...action, id: 'action-cancel', state: 'pending' as const, dispatchGeneration: 0 };
       expect(await repository.enqueueSessionAction(pending)).toBe(true);
       expect(await repository.getPendingSessionAction(action.taskId)).toMatchObject({ id: pending.id });
       const cancelled = {
@@ -2172,7 +2224,7 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       };
       expect(await repository.finalizeSessionAction(cancelled, ['pending'])).toBe(true);
       expect(await repository.finalizeSessionAction(cancelled, ['pending'])).toBe(false);
-      expect(await repository.getSessionActionResult(pending.id)).toEqual(cancelled);
+      expect(await repository.getSessionActionResult(pending.id)).toEqual({ ...cancelled, unbound: true });
     } finally {
       await close();
     }
@@ -2181,16 +2233,14 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('preserves a worker result when worker terminalization wins the teardown race', async () => {
     const { repository, close } = await makeHarness();
     try {
-      const action = {
-        id: 'action-worker-wins',
-        taskId: 'task-worker-wins',
-        action: { type: 'navigate' as const, url: 'https://example.com' },
-        state: 'pending' as const,
-        createdAt: '2025-01-01T00:00:00.000Z'
-      };
+      const task = sessionActionTask('task-worker-wins');
+      const action = sessionAction('action-worker-wins', task.id);
+      const dispatchGuard = sessionActionDispatchGuard(task, 0, 'dispatch-worker-wins');
+      await repository.saveTask(task);
       expect(await repository.enqueueSessionAction(action)).toBe(true);
       let browserExecutions = 0;
-      if (await repository.takePendingSessionAction(action.taskId) !== undefined) browserExecutions += 1;
+      const dispatched = await repository.takePendingSessionAction(action.taskId, dispatchGuard);
+      if (dispatched !== undefined) browserExecutions += 1;
       const workerResult = {
         actionId: action.id,
         taskId: action.taskId,
@@ -2212,11 +2262,14 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(true);
       teardownBarrier.resolve();
       expect(await teardown).toBe(false);
-      expect(await repository.getSessionActionResult(action.id)).toEqual(workerResult);
+      expect(await repository.getSessionActionResult(action.id)).toEqual({
+        ...workerResult,
+        dispatchBinding: dispatched?.dispatchBinding
+      });
       expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
       expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
       expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
-      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.takePendingSessionAction(action.taskId, dispatchGuard)).toBeUndefined();
       expect(browserExecutions).toBe(1);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-next' })).toBe(true);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-worker-wins-extra' })).toBe(false);
@@ -2228,16 +2281,14 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
   it('preserves teardown cancellation when teardown terminalization wins the worker race', async () => {
     const { repository, close } = await makeHarness();
     try {
-      const action = {
-        id: 'action-teardown-wins',
-        taskId: 'task-teardown-wins',
-        action: { type: 'navigate' as const, url: 'https://example.com' },
-        state: 'pending' as const,
-        createdAt: '2025-01-01T00:00:00.000Z'
-      };
+      const task = sessionActionTask('task-teardown-wins');
+      const action = sessionAction('action-teardown-wins', task.id);
+      const dispatchGuard = sessionActionDispatchGuard(task, 0, 'dispatch-teardown-wins');
+      await repository.saveTask(task);
       expect(await repository.enqueueSessionAction(action)).toBe(true);
       let browserExecutions = 0;
-      if (await repository.takePendingSessionAction(action.taskId) !== undefined) browserExecutions += 1;
+      const dispatched = await repository.takePendingSessionAction(action.taskId, dispatchGuard);
+      if (dispatched !== undefined) browserExecutions += 1;
       const workerResult = {
         actionId: action.id,
         taskId: action.taskId,
@@ -2259,11 +2310,14 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(true);
       workerBarrier.resolve();
       expect(await worker).toBe(false);
-      expect(await repository.getSessionActionResult(action.id)).toEqual(teardownResult);
+      expect(await repository.getSessionActionResult(action.id)).toEqual({
+        ...teardownResult,
+        dispatchBinding: dispatched?.dispatchBinding
+      });
       expect(await repository.getPendingSessionAction(action.taskId)).toBeUndefined();
       expect(await repository.finalizeSessionAction(teardownResult, ['pending', 'dispatched'])).toBe(false);
       expect(await repository.finalizeSessionAction(workerResult, ['dispatched'])).toBe(false);
-      expect(await repository.takePendingSessionAction(action.taskId)).toBeUndefined();
+      expect(await repository.takePendingSessionAction(action.taskId, dispatchGuard)).toBeUndefined();
       expect(browserExecutions).toBe(1);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-next' })).toBe(true);
       expect(await repository.enqueueSessionAction({ ...action, id: 'action-teardown-wins-extra' })).toBe(false);
@@ -2513,7 +2567,7 @@ describe('Repository contract: mongo', () => {
           createdAt: '2025-01-01T00:00:00.000Z'
         };
       });
-      await client.db(databaseName).collection('pending_actions').insertMany([
+      await client.db(databaseName).collection<MongoDocument & { _id: string }>('pending_actions').insertMany([
         ...legacyActions,
         {
           _id: 'legacy-action-already-quarantined',

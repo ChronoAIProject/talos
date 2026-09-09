@@ -164,7 +164,7 @@ describe('interactive session HTTP API', () => {
 
   it('returns one opaque denial for invalid terminal action-result bindings', async () => {
     const clock = { value: 1_000 };
-    const repository = new MemoryRepository();
+    const repository = new MemoryRepository(() => clock.value);
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
     await repository.saveMachine({
       id: 'machine',
@@ -332,7 +332,7 @@ describe('interactive session HTTP API', () => {
       headers: originalHeaders,
       body: JSON.stringify({ lease_token: claim.leaseToken })
     });
-    expect(authorizedMalformed.status).toBe(400);
-    expect(await authorizedMalformed.json()).toMatchObject({ error: { code: 'validation_error' } });
+    expect(authorizedMalformed.status).toBe(409);
+    expect(await authorizedMalformed.json()).toMatchObject({ error: { code: 'action_already_completed' } });
   });
 });
