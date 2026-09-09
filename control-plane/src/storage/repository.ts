@@ -1,4 +1,4 @@
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -23,6 +23,24 @@ export interface TaskMaintenanceCursor {
   readonly afterCreatedAt?: string;
   readonly afterTaskId?: string;
   readonly updatedAt: string;
+}
+
+export interface SessionActionDispatchGuard {
+  expectedDispatchGeneration: number;
+  dispatchId: string;
+  workerId: string;
+  machineId: string;
+  leaseToken: string;
+  leaseTokenDigest: string;
+  claimId: string;
+  claimGeneration: number;
+}
+
+export interface SessionActionResultGuard {
+  binding: ActionDispatchBinding;
+  leaseToken: string;
+  claimId: string;
+  claimGeneration: number;
 }
 
 export interface Repository {
@@ -73,11 +91,12 @@ export interface Repository {
   takePendingInput(taskId: string): Promise<TaskInput | undefined>;
   enqueueSessionAction(action: PendingSessionAction): Promise<boolean>;
   getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
-  takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
+  takePendingSessionAction(taskId: string, guard: SessionActionDispatchGuard): Promise<PendingSessionAction | undefined>;
   requeueSessionAction(taskId: string): Promise<void>;
   finalizeSessionAction(
     result: SessionActionResult,
-    expectedStates: readonly PendingSessionAction['state'][]
+    expectedStates: readonly PendingSessionAction['state'][],
+    guard?: SessionActionResultGuard
   ): Promise<boolean>;
   getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined>;
   markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void>;

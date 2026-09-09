@@ -103,6 +103,7 @@ interface TaskBase {
   handoff?: { url: string; expiresAt: string };
   pendingActionId?: string;
   lastActionId?: string;
+  sessionActions?: readonly SessionActionRecord[];
   claimRecovery?: TaskClaimRecovery;
 }
 
@@ -143,11 +144,25 @@ export interface PublicTask {
 
 export type SessionAction = BrowserAction;
 
+export interface ActionDispatchBinding {
+  schemaVersion: 'talos.internal-action-dispatch-binding/v1';
+  dispatchId: string;
+  dispatchGeneration: number;
+  workerId: string;
+  machineId: string;
+  leaseTokenDigest: string;
+}
+
 export interface PendingSessionAction {
+  schemaVersion: 'talos.internal-session-action/v1';
   id: string;
   taskId: string;
   action: SessionAction;
   state: 'pending' | 'dispatched';
+  dispatchGeneration: number;
+  dispatchBinding?: ActionDispatchBinding;
+  dispatchClaimId?: string;
+  dispatchClaimGeneration?: number;
   createdAt: string;
 }
 
@@ -156,7 +171,14 @@ export interface SessionActionResult {
   taskId: string;
   result: unknown;
   completedAt: string;
+  dispatchBinding?: ActionDispatchBinding;
+  unbound?: true;
 }
+
+export type SessionActionRecord = PendingSessionAction | (Omit<PendingSessionAction, 'state'> & {
+  state: 'completed';
+  completion: SessionActionResult;
+});
 
 export interface Pool {
   id: string;

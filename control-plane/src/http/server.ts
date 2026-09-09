@@ -32,7 +32,7 @@ import {
   workerBodyCredentialsSchema,
   workerClaimSchema,
   workerActionPollSchema,
-  workerActionResultSchema,
+  workerActionResultEnvelopeSchema,
   workerInputPollSchema,
   workerNeedsInputSchema
 } from '../domain/schemas.js';
@@ -144,8 +144,11 @@ export const createApiServer = (
   });
 };
 
-const isWorkerActionResultPath = (method: string | undefined, path: string): boolean =>
-  method === 'POST' && /^\/v1\/worker\/tasks\/[^/]+\/actions\/[^/]+\/result$/.test(path);
+const isWorkerActionResultPath = (method: string | undefined, path: string): boolean => {
+  const parts = path.split('/').filter(Boolean);
+  return method === 'POST' && parts.length === 7 && parts[0] === 'v1' && parts[1] === 'worker' &&
+    parts[2] === 'tasks' && parts[4] === 'actions' && parts[6] === 'result';
+};
 
 const route = async (
   request: IncomingMessage,
@@ -422,19 +425,11 @@ const workerRoute = async (
   options: ServerOptions
 ): Promise<void> => {
   const method = request.method ?? 'GET';
-  const isActionResult = parts[2] === 'tasks' && parts[4] === 'actions' && parts[6] === 'result';
+  const isActionResult = method === 'POST' && parts.length === 7 && parts[2] === 'tasks' && parts[4] === 'actions' && parts[5] !== undefined && parts[6] === 'result';
   const maxBodyBytes = isActionResult ? 8 * 1024 * 1024 : options.maxBodyBytes;
   const body = method === 'POST' ? await readBody(request, maxBodyBytes) : undefined;
-  const workerIdentity = await requireWorker(request, repository, body);
-  if (isActionResult) {
-    const bodyCredentials = workerBodyCredentialsSchema.safeParse(body);
-    if (bodyCredentials.success && (
-      (bodyCredentials.data.machine_id !== undefined && bodyCredentials.data.machine_id !== workerIdentity.machineId) ||
-      (bodyCredentials.data.worker_id !== undefined && bodyCredentials.data.worker_id !== workerIdentity.workerId)
-    )) {
-      throw unauthorized('action result credentials do not match authenticated worker');
-    }
-  }
+  const workerIdentity = await requireWorker(request, repository, body, isActionResult);
+
   if (parts[2] === 'testing') {
     return testingWorkerRoute(response, testingAttempts, parts, method, body, workerIdentity);
   }
@@ -449,8 +444,10 @@ const workerRoute = async (
     return send(response, 404, publicErrorEnvelope('not_found', 'route not found', 404));
   }
   const taskId = parts[3];
-  const task = await repository.getTask(taskId);
-  if (task?.machineId !== workerIdentity.machineId) throw unauthorized('task is assigned to another machine');
+  if (!isActionResult) {
+    const task = await repository.getTask(taskId);
+    if (task?.machineId !== workerIdentity.machineId) throw unauthorized('task is assigned to another machine');
+  }
   const worker = workerIdentity.workerId;
   if (method === 'POST' && parts[4] === 'heartbeat') {
     const input = heartbeatSchema.parse(body);
@@ -468,9 +465,10 @@ const workerRoute = async (
     const input = workerActionPollSchema.parse(body);
     return send(response, 200, await sessions.pollWorkerAction(taskId, worker, input.lease_token));
   }
-  if (method === 'POST' && parts[4] === 'actions' && parts[5] !== undefined && parts[6] === 'result') {
-    const input = workerActionResultSchema.parse(body);
-    await sessions.saveWorkerResult(taskId, parts[5], worker, input.lease_token, input.result, workerIdentity.machineId);
+  if (isActionResult && parts[5] !== undefined) {
+    const envelope = workerActionResultEnvelopeSchema.parse(body);
+    const leaseToken = boundedCredential(envelope.lease_token);
+    await sessions.saveWorkerResult(taskId, parts[5], worker, leaseToken, envelope.result, workerIdentity.machineId);
     return send(response, 200, { stored: true });
   }
   if (method === 'GET' && parts[4] === 'input') {
@@ -662,7 +660,8 @@ interface WorkerIdentity {
 const requireWorker = async (
   request: IncomingMessage,
   repository: Repository,
-  body: unknown
+  body: unknown,
+  requireMatchingCarriers = false
 ): Promise<WorkerIdentity> => {
   const auth = request.headers.authorization;
   const headerToken = request.headers['x-talos-worker-token']?.toString();
@@ -672,11 +671,21 @@ const requireWorker = async (
   const bodyCredentials = workerBodyCredentialsSchema.safeParse(body);
   const bodyData = bodyCredentials.success ? bodyCredentials.data : {};
   const headersSelected = headerToken !== undefined || bearerToken !== undefined;
+  const bodySelected = bodyData.worker_token !== undefined || bodyData.machine_id !== undefined || bodyData.worker_id !== undefined;
+  if (requireMatchingCarriers && headersSelected && bodySelected && (
+    headerMachineId === undefined || headerWorkerId === undefined ||
+    bodyData.worker_token === undefined || bodyData.machine_id === undefined || bodyData.worker_id === undefined ||
+    (headerToken ?? bearerToken) !== bodyData.worker_token || headerMachineId !== bodyData.machine_id || headerWorkerId !== bodyData.worker_id
+  )) throw unauthorized('unauthorized');
   const token = headerToken ?? bearerToken ?? bodyData.worker_token;
   const machineId = headersSelected ? headerMachineId : bodyData.machine_id;
   const workerId = headersSelected ? headerWorkerId : bodyData.worker_id;
   if (token === undefined || machineId === undefined || workerId === undefined) {
     throw unauthorized('worker token, machine id, and worker id are required');
+  }
+  if (requireMatchingCarriers) {
+    boundedCredential(token);
+    if (Buffer.byteLength(workerId, 'utf8') > 255 || Buffer.byteLength(machineId, 'utf8') > 255) throw unauthorized('unauthorized');
   }
   const machine = await repository.getMachine(machineId);
   if (machine === undefined) throw unauthorized('invalid worker token');
@@ -726,3 +735,10 @@ const boundedPublicErrorMessage = (message: string): string => message.slice(0, 
 export const parseError = z.object({
   error: z.object({ code: z.string(), message: z.string(), retryable: z.boolean() }).passthrough()
 });
+
+const boundedCredential = (value: unknown): string => {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > 4096) {
+    throw unauthorized('unauthorized');
+  }
+  return value;
+};

@@ -1,7 +1,7 @@
 import { concurrentUpdate, conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, MachineLeaseReservation, PublicTask, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { Lease, MachineLeaseReservation, PublicTask, SessionActionResult, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { Repository, TaskMaintenanceCursor } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -24,6 +24,34 @@ const TASK_MAINTENANCE_CURSOR_ID = 'task-claim-reconciliation' as const;
 const ACTIVE_CLAIM_STATUSES: readonly Task['status'][] = ['claimed', 'running', 'needs_input', 'handoff', 'closing'];
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
 const isValidTimestamp = (value: unknown): value is string => isNonEmptyString(value) && Number.isFinite(Date.parse(value));
+
+
+const requeueInteractiveAction = (task: Task): Task => task.interaction !== 'interactive'
+  ? task
+  : {
+      ...task,
+      sessionActions: task.sessionActions?.map((action) =>
+        action.state === 'dispatched' ? { ...action, state: 'pending' as const } : action
+      )
+    };
+
+const terminalizeInteractiveAction = (task: Task, completedAt: string): Task => {
+  if (task.interaction !== 'interactive') return task;
+  return {
+    ...task,
+    sessionActions: task.sessionActions?.map((action) => {
+      if (action.state === 'completed') return action;
+      const completion: SessionActionResult = {
+        actionId: action.id,
+        taskId: task.id,
+        result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
+        completedAt,
+        ...(action.dispatchBinding === undefined ? { unbound: true as const } : { dispatchBinding: action.dispatchBinding })
+      };
+      return { ...action, state: 'completed' as const, completion };
+    })
+  };
+};
 
 export class TaskService {
   private readonly leaseSeconds: number;
@@ -331,20 +359,12 @@ export class TaskService {
       }
       if (current?.leaseExpiresAt !== undefined && Date.parse(current.leaseExpiresAt) <= now && ['claimed', 'running', 'closing'].includes(current.status)) {
         if (current.status === 'closing') {
-          const pending = await this.repository.getPendingSessionAction(current.id);
-          if (pending !== undefined) {
-            await this.repository.finalizeSessionAction({
-              actionId: pending.id,
-              taskId: current.id,
-              result: { error: { code: 'session_closed', message: 'session closed before the action completed' } },
-              completedAt: new Date(now).toISOString()
-            }, ['pending', 'dispatched']);
-          }
+          const completedAt = new Date(now).toISOString();
           const completed: Task = {
-            ...current,
+            ...terminalizeInteractiveAction(current, completedAt),
             status: 'completed',
             pendingActionId: undefined,
-            updatedAt: new Date(now).toISOString()
+            updatedAt: completedAt
           };
           if (!await this.tryReplaceClaimedTask(current, completed)) return undefined;
           await this.releaseLease(completed);
@@ -353,7 +373,7 @@ export class TaskService {
           return undefined;
         }
         const requeued: Task = {
-          ...current,
+          ...requeueInteractiveAction(current),
           status: 'submitted',
           updatedAt: new Date(now).toISOString(),
           leaseExpiresAt: undefined,
@@ -549,7 +569,7 @@ export class TaskService {
           return;
         }
       }
-      if (recovery.sourceStatus === 'closing') {
+      if (recovery.sourceStatus === 'closing' && task.sessionActions === undefined) {
         const pending = await this.repository.getPendingSessionAction(task.id);
         if (pending !== undefined) {
           await this.repository.finalizeSessionAction({
@@ -566,11 +586,14 @@ export class TaskService {
       if (recovery.sourceProfileId !== undefined) {
         await this.repository.releaseLegacyProfileLease(recovery.sourceProfileId, task.id);
       }
-      if (recovery.sourceStatus !== 'closing' && task.interaction === 'interactive') {
+      if (recovery.sourceStatus !== 'closing' && task.interaction === 'interactive' && task.sessionActions === undefined) {
         await this.repository.requeueSessionAction(task.id);
       }
+      const actionAdjusted = recovery.sourceStatus === 'closing'
+        ? terminalizeInteractiveAction(task, timestamp)
+        : requeueInteractiveAction(task);
       const finalizing: Task = {
-        ...task,
+        ...actionAdjusted,
         status: recovery.sourceStatus === 'closing' ? 'completed' : 'submitted',
         updatedAt: timestamp,
         workerId: undefined,
@@ -717,42 +740,6 @@ export class TaskService {
     ) throw unauthorized('worker does not own active lease');
     if (task.leaseExpiresAt !== undefined && Date.parse(task.leaseExpiresAt) <= this.clock() && !['needs_input', 'handoff'].includes(task.status)) throw unauthorized('lease expired');
     return task;
-  }
-
-  public async getWorkerActionResultTask(
-    taskId: string,
-    actionId: string,
-    workerId: string,
-    machineId: string | undefined,
-    leaseToken: string,
-    hasStoredResult: (taskId: string, actionId: string) => Promise<boolean>
-  ): Promise<Task> {
-    const task = await this.repository.getTask(taskId);
-    if (task === undefined) throw unauthorized('worker does not own action result');
-    if (task.kind === 'testing') throw conflict('testing tasks require the Testing Executor API');
-    if (
-      task.claimRecovery !== undefined ||
-      this.malformedClaimReason(task) !== undefined ||
-      task.workerId !== workerId ||
-      task.machineId === undefined ||
-      task.leaseToken === undefined
-    ) {
-      throw unauthorized('worker does not own action result');
-    }
-    const expected = Buffer.from(task.leaseToken);
-    const actual = Buffer.from(leaseToken);
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
-      throw unauthorized('invalid lease token');
-    }
-    if (machineId !== undefined && task.machineId !== machineId) {
-      throw unauthorized('worker does not own action result');
-    }
-    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
-      if (machineId === undefined) throw unauthorized('authenticated machine is required for terminal action result');
-      if (!await hasStoredResult(taskId, actionId)) throw unauthorized('worker does not own action result');
-      return task;
-    }
-    return this.getWorkerTask(taskId, workerId, leaseToken);
   }
 
   private async replaceClaimedTask(current: Task, updated: Task): Promise<Task> {
@@ -920,7 +907,7 @@ export class TaskService {
       !['claimed', 'running'].includes(previous.status)
     ) return false;
     const requeued: Task = {
-      ...previous,
+      ...requeueInteractiveAction(previous),
       status: 'submitted',
       updatedAt: new Date(this.clock()).toISOString(),
       leaseExpiresAt: undefined,
@@ -1053,6 +1040,7 @@ export class TaskService {
       'requesterGroups',
       'pendingActionId',
       'lastActionId',
+      'sessionActions',
       'claimRecovery',
       'testing'
     ]);

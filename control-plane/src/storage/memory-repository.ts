@@ -1,6 +1,6 @@
-import type { HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
-import type { Repository, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
+import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
 const isFutureTimestamp = (value: string | undefined, observedNow: number): boolean => {
   if (value === undefined) return false;
@@ -412,53 +412,114 @@ export class MemoryRepository implements Repository {
   }
 
   public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {
-    if (this.pendingActions.has(action.taskId)) return false;
-    this.pendingActions.set(action.taskId, action);
+    const task = this.tasks.get(action.taskId);
+    if (task === undefined || task.sessionActions?.some((candidate) => candidate.state !== 'completed') === true) return false;
+    this.tasks.set(task.id, {
+      ...task,
+      sessionActions: [...(task.sessionActions ?? []), action],
+      pendingActionId: action.id,
+      updatedAt: action.createdAt,
+      taskVersion: (task.taskVersion ?? 0) + 1
+    });
     return true;
   }
 
   public async getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
+    const action = this.tasks.get(taskId)?.sessionActions?.find((candidate) => candidate.state !== 'completed');
+    if (action !== undefined) return action;
     return this.pendingActions.get(taskId);
   }
 
-  public async takePendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined> {
-    const action = this.pendingActions.get(taskId);
-    if (action === undefined || action.state !== 'pending') return undefined;
-    const dispatched: PendingSessionAction = { ...action, state: 'dispatched' };
-    this.pendingActions.set(taskId, dispatched);
+  public async takePendingSessionAction(
+    taskId: string,
+    guard: SessionActionDispatchGuard
+  ): Promise<PendingSessionAction | undefined> {
+    const task = this.tasks.get(taskId);
+    const action = task?.sessionActions?.find((candidate) => candidate.state !== 'completed');
+    if (
+      task === undefined || action === undefined || action.state !== 'pending' ||
+      action.schemaVersion !== 'talos.internal-session-action/v1' ||
+      action.dispatchGeneration !== guard.expectedDispatchGeneration ||
+      task.workerId !== guard.workerId || task.machineId !== guard.machineId ||
+      task.leaseToken !== guard.leaseToken || task.claimId !== guard.claimId ||
+      task.claimGeneration !== guard.claimGeneration || task.claimCommitted !== true ||
+      !['claimed', 'running'].includes(task.status) || !isFutureTimestamp(task.leaseExpiresAt, this.clock())
+    ) return undefined;
+    const dispatchGeneration = action.dispatchGeneration + 1;
+    const dispatchBinding: ActionDispatchBinding = {
+      schemaVersion: 'talos.internal-action-dispatch-binding/v1',
+      dispatchId: guard.dispatchId,
+      dispatchGeneration,
+      workerId: guard.workerId,
+      machineId: guard.machineId,
+      leaseTokenDigest: guard.leaseTokenDigest
+    };
+    const dispatched: PendingSessionAction = {
+      ...action, state: 'dispatched', dispatchGeneration, dispatchBinding,
+      dispatchClaimId: guard.claimId, dispatchClaimGeneration: guard.claimGeneration
+    };
+    this.tasks.set(taskId, {
+      ...task,
+      sessionActions: task.sessionActions?.map((candidate) => candidate.id === action.id ? dispatched : candidate),
+      taskVersion: (task.taskVersion ?? 0) + 1
+    });
     return dispatched;
   }
 
   public async requeueSessionAction(taskId: string): Promise<void> {
-    const action = this.pendingActions.get(taskId);
-    if (action?.state === 'dispatched') this.pendingActions.set(taskId, { ...action, state: 'pending' });
+    const task = this.tasks.get(taskId);
+    const action = task?.sessionActions?.find((candidate) => candidate.state === 'dispatched');
+    if (task === undefined || action === undefined || action.state !== 'dispatched') return;
+    this.tasks.set(taskId, {
+      ...task,
+      sessionActions: task.sessionActions?.map((candidate) => candidate.id === action.id ? { ...action, state: 'pending' as const } : candidate),
+      taskVersion: (task.taskVersion ?? 0) + 1
+    });
   }
 
   public async finalizeSessionAction(
     result: SessionActionResult,
-    expectedStates: readonly PendingSessionAction['state'][]
+    expectedStates: readonly PendingSessionAction['state'][],
+    guard?: SessionActionResultGuard
   ): Promise<boolean> {
-    const action = this.pendingActions.get(result.taskId);
-    if (action?.id !== result.actionId || !expectedStates.includes(action.state)) return false;
-    this.actionResults.set(result.actionId, result);
-    this.pendingActions.delete(result.taskId);
+    const task = this.tasks.get(result.taskId);
+    const action = task?.sessionActions?.find((candidate) => candidate.id === result.actionId);
+    if (task === undefined || action === undefined || action.state === 'completed' || !expectedStates.includes(action.state)) return false;
+    if (guard !== undefined && (
+      action.state !== 'dispatched' || !sameDispatchBinding(action.dispatchBinding, guard.binding) ||
+      task.workerId !== guard.binding.workerId || task.machineId !== guard.binding.machineId ||
+      task.leaseToken !== guard.leaseToken || task.claimId !== guard.claimId ||
+      task.claimGeneration !== guard.claimGeneration || action.dispatchClaimId !== guard.claimId ||
+      action.dispatchClaimGeneration !== guard.claimGeneration || task.claimCommitted !== true ||
+      !['claimed', 'running', 'closing'].includes(task.status) || !isFutureTimestamp(task.leaseExpiresAt, this.clock())
+    )) return false;
+    const completion: SessionActionResult = action.dispatchBinding === undefined
+      ? { ...result, unbound: true }
+      : { ...result, dispatchBinding: action.dispatchBinding };
+    this.tasks.set(task.id, {
+      ...task,
+      sessionActions: task.sessionActions?.map((candidate) => candidate.id === action.id
+        ? { ...action, state: 'completed' as const, completion }
+        : candidate),
+      pendingActionId: task.pendingActionId === action.id ? undefined : task.pendingActionId,
+      lastActionId: action.id,
+      updatedAt: result.completedAt,
+      taskVersion: (task.taskVersion ?? 0) + 1
+    });
     return true;
   }
 
   public async getSessionActionResult(actionId: string): Promise<SessionActionResult | undefined> {
+    for (const task of this.tasks.values()) {
+      const action = task.sessionActions?.find((candidate) => candidate.id === actionId);
+      if (action?.state === 'completed') return action.completion;
+    }
     return this.actionResults.get(actionId);
   }
 
-  public async markSessionActionPending(taskId: string, actionId: string, updatedAt: string): Promise<void> {
-    const task = this.tasks.get(taskId);
-    if (task !== undefined) this.tasks.set(taskId, { ...task, pendingActionId: actionId, updatedAt });
-  }
+  public async markSessionActionPending(_taskId: string, _actionId: string, _updatedAt: string): Promise<void> {}
 
-  public async markSessionActionCompleted(taskId: string, actionId: string, completedAt: string): Promise<void> {
-    const task = this.tasks.get(taskId);
-    if (task?.pendingActionId !== actionId) return;
-    this.tasks.set(taskId, { ...task, pendingActionId: undefined, lastActionId: actionId, updatedAt: completedAt });
-  }
+  public async markSessionActionCompleted(_taskId: string, _actionId: string, _completedAt: string): Promise<void> {}
 
   public async createTestingRun(run: TestingRunRecord): Promise<boolean> {
     const idempotencyIndex = `${run.userId}\u0000${run.idempotencyKey}`;
@@ -586,3 +647,11 @@ export class MemoryRepository implements Repository {
     return true;
   }
 }
+
+const sameDispatchBinding = (left: ActionDispatchBinding | undefined, right: ActionDispatchBinding): boolean =>
+  left?.schemaVersion === right.schemaVersion &&
+  left.dispatchId === right.dispatchId &&
+  left.dispatchGeneration === right.dispatchGeneration &&
+  left.workerId === right.workerId &&
+  left.machineId === right.machineId &&
+  left.leaseTokenDigest === right.leaseTokenDigest;
