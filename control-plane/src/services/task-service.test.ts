@@ -477,10 +477,10 @@ describe('task service', () => {
             return target.materializePendingInput(...args);
           };
         }
-        if (property === 'saveHandoff') {
-          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+        if (property === 'materializeHandoff') {
+          return async (...args: Parameters<Repository['materializeHandoff']>): Promise<void> => {
             handoffWrites += 1;
-            return target.saveHandoff(...args);
+            return target.materializeHandoff(...args);
           };
         }
         const value = Reflect.get(target, property);
@@ -527,10 +527,10 @@ describe('task service', () => {
             return claimed;
           };
         }
-        if (property === 'saveHandoff') {
-          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+        if (property === 'materializeHandoff') {
+          return async (...args: Parameters<Repository['materializeHandoff']>): Promise<void> => {
             handoffWrites += 1;
-            return target.saveHandoff(...args);
+            return target.materializeHandoff(...args);
           };
         }
         const value = Reflect.get(target, property);
@@ -610,10 +610,10 @@ describe('task service', () => {
             return target.materializePendingInput(...args);
           };
         }
-        if (property === 'saveHandoff') {
-          return async (...args: Parameters<Repository['saveHandoff']>): Promise<void> => {
+        if (property === 'materializeHandoff') {
+          return async (...args: Parameters<Repository['materializeHandoff']>): Promise<void> => {
             handoffWrites += 1;
-            return target.saveHandoff(...args);
+            return target.materializeHandoff(...args);
           };
         }
         const value = Reflect.get(target, property);

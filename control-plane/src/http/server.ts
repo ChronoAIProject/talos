@@ -183,10 +183,9 @@ const route = async (
     const link = await repository.getHandoff(parts[2]);
     if (link === undefined) throw notFound('handoff not found');
     if (link.userId !== identity.userId) throw unauthorized('handoff belongs to another user');
-    if (link.used || Date.parse(link.expiresAt) <= (options.clock?.() ?? Date.now())) {
+    if (await repository.consumeHandoff(link, options.clock?.() ?? Date.now()) === undefined) {
       throw new TalosError('handoff_expired', 'handoff link is expired or already used', 409);
     }
-    await repository.saveHandoff({ ...link, used: true });
     throw notImplemented('hosted handoff views are planned for Phase 3');
   }
   if (parts[1] === 'admin') return adminRoute(request, response, repository, parts, options);

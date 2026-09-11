@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type Document as MongoDriverDocument, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffRecord, Machine, MachineLeaseReservation, PendingHandoffIntent, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -44,6 +44,32 @@ const samePendingInput = (record: PendingInputRecord, intent: PendingInputIntent
   record.claimGeneration === intent.claimGeneration &&
   record.input.kind === intent.input.kind &&
   record.input.value === intent.input.value;
+
+const sameHandoff = (record: HandoffRecord, intent: Omit<PendingHandoffIntent, 'consumed'>): boolean =>
+  record.schemaVersion === intent.schemaVersion &&
+  record.operationId === intent.operationId &&
+  record.id === intent.id &&
+  record.taskId === intent.taskId &&
+  record.userId === intent.userId &&
+  record.claimId === intent.claimId &&
+  record.claimGeneration === intent.claimGeneration &&
+  record.expiresInSeconds === intent.expiresInSeconds &&
+  record.url === intent.url &&
+  record.expiresAt === intent.expiresAt;
+
+const handoffRecord = (intent: PendingHandoffIntent): HandoffRecord => ({
+  schemaVersion: intent.schemaVersion,
+  operationId: intent.operationId,
+  id: intent.id,
+  taskId: intent.taskId,
+  userId: intent.userId,
+  claimId: intent.claimId,
+  claimGeneration: intent.claimGeneration,
+  expiresInSeconds: intent.expiresInSeconds,
+  url: intent.url,
+  expiresAt: intent.expiresAt,
+  used: false
+});
 
 const assertPositivePageLimit = (limit: number): void => {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
@@ -101,6 +127,7 @@ export class MongoRepository implements Repository {
     await this.client.connect();
     await Promise.all([
       this.tasks.createIndex({ status: 1, queuePriority: 1, createdAt: 1 }),
+      this.handoffs.createIndex({ id: 1 }, { unique: true }),
       this.tasks.createIndex({ kind: 1, claimId: 1, status: 1, updatedAt: 1 }),
       this.tasks.createIndex(
         { kind: 1, status: 1, leaseExpiresAt: 1, _id: 1 },
@@ -533,13 +560,76 @@ export class MongoRepository implements Repository {
     return (await this.profiles.find({ userId }).toArray()).map(profileFromDocument);
   }
 
-  public async saveHandoff(link: HandoffLink): Promise<void> {
-    await this.handoffs.replaceOne({ _id: link.id }, { ...link, _id: link.id }, { upsert: true });
+  public async getHandoff(id: string): Promise<HandoffRecord | undefined> {
+    const document = await this.handoffs.findOne({ id });
+    return document === null ? undefined : handoffFromDocument(document);
   }
 
-  public async getHandoff(id: string): Promise<HandoffLink | undefined> {
-    const document = await this.handoffs.findOne({ _id: id });
-    return document === null ? undefined : handoffFromDocument(document);
+  public async materializeHandoff(intent: PendingHandoffIntent): Promise<void> {
+    const record = handoffRecord(intent);
+    let document: Document | null;
+    try {
+      document = await this.handoffs.findOneAndUpdate(
+        { _id: intent.operationId },
+        { $setOnInsert: record },
+        { upsert: true, returnDocument: 'after' }
+      );
+    } catch (error) {
+      document = await this.handoffs.findOne({ $or: [{ _id: intent.operationId }, { id: intent.id }] });
+      if (document === null) throw error;
+    }
+    const materialized = document === null ? undefined : handoffFromDocument(document);
+    if (materialized === undefined || !sameHandoff(materialized, intent)) {
+      throw new Error('handoff operation integrity failure');
+    }
+  }
+
+  public async consumeHandoff(link: HandoffRecord, now: number): Promise<HandoffRecord | undefined> {
+    if (link.used || Date.parse(link.expiresAt) <= now) return undefined;
+    const materialized = await this.handoffs.findOne({
+      _id: link.operationId,
+      schemaVersion: link.schemaVersion,
+      id: link.id,
+      taskId: link.taskId,
+      userId: link.userId,
+      claimId: link.claimId,
+      claimGeneration: link.claimGeneration,
+      expiresInSeconds: link.expiresInSeconds,
+      url: link.url,
+      expiresAt: link.expiresAt,
+      used: false
+    });
+    if (materialized === null) return undefined;
+    const task = await this.tasks.findOneAndUpdate(
+      {
+        _id: link.taskId,
+        status: 'handoff',
+        userId: link.userId,
+        claimId: link.claimId,
+        claimGeneration: link.claimGeneration,
+        'handoff.url': link.url,
+        'handoff.expiresAt': link.expiresAt,
+        'pendingHandoffIntent.schemaVersion': link.schemaVersion,
+        'pendingHandoffIntent.operationId': link.operationId,
+        'pendingHandoffIntent.id': link.id,
+        'pendingHandoffIntent.taskId': link.taskId,
+        'pendingHandoffIntent.userId': link.userId,
+        'pendingHandoffIntent.claimId': link.claimId,
+        'pendingHandoffIntent.claimGeneration': link.claimGeneration,
+        'pendingHandoffIntent.expiresInSeconds': link.expiresInSeconds,
+        'pendingHandoffIntent.url': link.url,
+        'pendingHandoffIntent.expiresAt': link.expiresAt,
+        'pendingHandoffIntent.consumed': false
+      },
+      { $set: { 'pendingHandoffIntent.consumed': true }, $inc: { taskVersion: 1 } },
+      { returnDocument: 'after' }
+    );
+    if (task === null) return undefined;
+    await this.handoffs.updateOne(
+      { _id: link.operationId, used: false },
+      { $set: { used: true } }
+    );
+    return { ...link, used: true };
   }
 
   public async saveWebhook(event: WebhookEvent): Promise<void> {
@@ -1024,7 +1114,7 @@ const machineFromDocument = ({
     ? machine
     : { ...machine, leaseReservations };
 const profileFromDocument = (document: Document): Profile => withoutId(document) as unknown as Profile;
-const handoffFromDocument = (document: Document): HandoffLink => withoutId(document) as unknown as HandoffLink;
+const handoffFromDocument = (document: Document): HandoffRecord => withoutId(document) as unknown as HandoffRecord;
 const webhookFromDocument = (document: Document): WebhookEvent => withoutId(document) as unknown as WebhookEvent;
 const sessionActionResultFromDocument = (document: Document): SessionActionResult => withoutId(document) as unknown as SessionActionResult;
 const completedSessionActionResultFromDocument = (document: Document): SessionActionResult => ({

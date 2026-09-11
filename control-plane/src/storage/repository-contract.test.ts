@@ -4,7 +4,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository, SessionActionDispatchGuard } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
-import type { BrowserTask, PendingInputIntent, PendingSessionAction, WebhookEvent } from '../domain/types.js';
+import type { BrowserTask, HandoffRecord, PendingHandoffIntent, PendingInputIntent, PendingSessionAction, WebhookEvent } from '../domain/types.js';
 import { TaskService } from '../services/task-service.js';
 import { SessionService } from '../services/session-service.js';
 import { Scheduler } from '../services/scheduler.js';
@@ -392,6 +392,166 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
         input: { kind: 'text', value: 'different' }
       })).rejects.toThrow('pending input operation integrity failure');
       expect(await repository.consumePendingInput({ ...intent, claimGeneration: 2 })).toBeUndefined();
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('materializes and atomically consumes one authoritative generation-bound handoff', async () => {
+    const { repository, close } = await makeHarness();
+    const intent: PendingHandoffIntent = {
+      schemaVersion: 'talos.task-handoff-intent/v1',
+      operationId: 'handoff-operation-1',
+      id: 'handoff-link-1',
+      taskId: 'handoff-task-1',
+      userId: 'user-1',
+      claimId: 'handoff-claim-1',
+      claimGeneration: 1,
+      expiresInSeconds: 900,
+      url: '/v1/handoffs/handoff-link-1',
+      expiresAt: '2025-01-01T00:15:00.000Z',
+      consumed: false
+    };
+    try {
+      await repository.saveTask(baseTask({
+        id: intent.taskId,
+        status: 'handoff',
+        claimId: intent.claimId,
+        claimGeneration: intent.claimGeneration,
+        claimCommitted: true,
+        taskVersion: 1,
+        handoff: { url: intent.url, expiresAt: intent.expiresAt },
+        pendingHandoffIntent: intent
+      }));
+      await repository.materializeHandoff(intent);
+      await repository.materializeHandoff(intent);
+      const link = await repository.getHandoff(intent.id);
+      if (link === undefined || !('operationId' in link)) throw new Error('handoff did not materialize');
+      const results = await Promise.all([
+        repository.consumeHandoff(link, Date.parse('2025-01-01T00:01:00.000Z')),
+        repository.consumeHandoff(link, Date.parse('2025-01-01T00:01:00.000Z'))
+      ]);
+      expect(results.filter((result): result is HandoffRecord => result !== undefined)).toHaveLength(1);
+      expect(await repository.consumeHandoff(link, Date.parse('2025-01-01T00:01:00.000Z'))).toBeUndefined();
+      await repository.materializeHandoff(intent);
+      expect(await repository.consumeHandoff(link, Date.parse('2025-01-01T00:01:00.000Z'))).toBeUndefined();
+      await expect(repository.materializeHandoff({ ...intent, url: '/v1/handoffs/different' }))
+        .rejects.toThrow('handoff operation integrity failure');
+      await expect(repository.materializeHandoff({ ...intent, operationId: 'different-operation' }))
+        .rejects.toThrow('handoff operation integrity failure');
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('reconciles input and handoff intents after repository restart', async () => {
+    const harness = await makeHarness();
+    let repository = harness.repository;
+    const clock = { value: Date.parse('2026-09-11T12:00:00.000Z') };
+    try {
+      await repository.savePool({ id: 'restart-pool', visibility: 'platform', tags: {} });
+      await repository.saveMachine({
+        id: 'restart-machine', poolId: 'restart-pool', tags: {}, capacity: 2, activeLeases: 0, online: true, workerTokenHash: 'hash'
+      });
+      const inputService = taskService(repository, clock);
+      const inputTask = await inputService.createTask('user-1', { kind: 'browse', goal: 'restart input' });
+      const inputClaim = await inputService.claim('restart-input-worker', 'restart-machine');
+      await inputService.needsInput(inputTask.id, 'restart-input-worker', inputClaim.leaseToken);
+      let inputFaulted = false;
+      const inputFaultRepository = new Proxy<Repository>(repository, {
+        get(target, property) {
+          if (property === 'materializePendingInput') {
+            return async (): Promise<void> => {
+              if (!inputFaulted) {
+                inputFaulted = true;
+                throw new Error('injected input materialization failure');
+              }
+              throw new Error('unexpected repeated input fault call');
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      await expect(taskService(inputFaultRepository, clock).provideInput(inputTask.id, 'user-1', { kind: 'text', value: 'restart answer' }))
+        .rejects.toThrow('injected input materialization failure');
+      repository = await harness.restart();
+      const restartedInputService = taskService(repository, clock);
+      await restartedInputService.provideInput(inputTask.id, 'user-1', { kind: 'text', value: 'restart answer' });
+      expect(await restartedInputService.getWorkerInput(inputTask.id, 'restart-input-worker', inputClaim.leaseToken))
+        .toEqual({ kind: 'text', value: 'restart answer' });
+      expect(await restartedInputService.getWorkerInput(inputTask.id, 'restart-input-worker', inputClaim.leaseToken)).toBeUndefined();
+
+      const handoffService = taskService(repository, clock);
+      const handoffTask = await handoffService.createTask('user-1', { kind: 'browse', goal: 'restart handoff' });
+      const handoffClaim = await handoffService.claim('restart-handoff-worker', 'restart-machine');
+      await handoffService.heartbeat(handoffTask.id, 'restart-handoff-worker', handoffClaim.leaseToken, 30);
+      let handoffFaulted = false;
+      const handoffFaultRepository = new Proxy<Repository>(repository, {
+        get(target, property) {
+          if (property === 'materializeHandoff') {
+            return async (): Promise<void> => {
+              if (!handoffFaulted) {
+                handoffFaulted = true;
+                throw new Error('injected handoff materialization failure');
+              }
+              throw new Error('unexpected repeated handoff fault call');
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+      await expect(taskService(handoffFaultRepository, clock).requestHandoff(handoffTask.id, 'user-1', 900))
+        .rejects.toThrow('injected handoff materialization failure');
+      const storedIntent = (await repository.getTask(handoffTask.id))?.pendingHandoffIntent;
+      if (storedIntent === undefined) throw new Error('handoff intent was not persisted');
+      repository = await harness.restart();
+      expect(await taskService(repository, clock).requestHandoff(handoffTask.id, 'user-1', 900)).toEqual({
+        handoff_url: storedIntent.url,
+        expires: storedIntent.expiresAt
+      });
+      const link = await repository.getHandoff(storedIntent.id);
+      if (link === undefined || !('operationId' in link)) throw new Error('handoff did not materialize after restart');
+      expect(await repository.consumeHandoff(link, clock.value)).toMatchObject({ id: storedIntent.id, used: true });
+      expect(await repository.consumeHandoff(link, clock.value)).toBeUndefined();
+    } finally {
+      await harness.close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
+  it('rejects expired and stale-generation handoff consumption', async () => {
+    const { repository, close } = await makeHarness();
+    const intent: PendingHandoffIntent = {
+      schemaVersion: 'talos.task-handoff-intent/v1',
+      operationId: 'handoff-operation-stale',
+      id: 'handoff-link-stale',
+      taskId: 'handoff-task-stale',
+      userId: 'user-1',
+      claimId: 'handoff-claim-1',
+      claimGeneration: 1,
+      expiresInSeconds: 60,
+      url: '/v1/handoffs/handoff-link-stale',
+      expiresAt: '2025-01-01T00:01:00.000Z',
+      consumed: false
+    };
+    try {
+      await repository.saveTask(baseTask({
+        id: intent.taskId,
+        status: 'handoff',
+        claimId: 'handoff-claim-2',
+        claimGeneration: 2,
+        claimCommitted: true,
+        taskVersion: 2,
+        handoff: { url: intent.url, expiresAt: intent.expiresAt },
+        pendingHandoffIntent: intent
+      }));
+      await repository.materializeHandoff(intent);
+      const link = await repository.getHandoff(intent.id);
+      if (link === undefined || !('operationId' in link)) throw new Error('handoff did not materialize');
+      expect(await repository.consumeHandoff(link, Date.parse('2025-01-01T00:00:30.000Z'))).toBeUndefined();
+      expect(await repository.consumeHandoff(link, Date.parse('2025-01-01T00:01:00.000Z'))).toBeUndefined();
+      expect((await repository.getHandoff(intent.id))?.used).toBe(false);
     } finally {
       await close();
     }
@@ -2167,7 +2327,19 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       await repository.createProfile({ id: 'profile-1', userId: 'user-1', machineId: 'machine-1' });
       const task = baseTask({ profileId: 'profile-1', poolId: 'pool-1' });
       await repository.saveTask(task);
-      await repository.saveHandoff({ id: 'handoff-1', taskId: task.id, userId: task.userId, url: '/v1/handoffs/handoff-1', expiresAt: '2025-01-01T00:10:00.000Z', used: false });
+      await repository.materializeHandoff({
+        schemaVersion: 'talos.task-handoff-intent/v1',
+        operationId: 'round-trip-handoff-operation',
+        id: 'handoff-1',
+        taskId: task.id,
+        userId: task.userId,
+        claimId: 'round-trip-claim',
+        claimGeneration: 1,
+        expiresInSeconds: 600,
+        url: '/v1/handoffs/handoff-1',
+        expiresAt: '2025-01-01T00:10:00.000Z',
+        consumed: false
+      });
       const event: WebhookEvent = { id: 'event-1', type: 'task.state_changed', taskId: task.id, userId: task.userId, timestamp: task.createdAt, payload: { status: 'submitted' }, delivery: { status: 'pending', attempts: 0 } };
       await repository.saveWebhook(event);
       const pendingInputIntent: PendingInputIntent = {
