@@ -4,7 +4,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { Repository, SessionActionDispatchGuard } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 import { MongoRepository } from './mongo-repository.js';
-import type { BrowserTask, PendingSessionAction, WebhookEvent } from '../domain/types.js';
+import type { BrowserTask, PendingInputIntent, PendingSessionAction, WebhookEvent } from '../domain/types.js';
 import { TaskService } from '../services/task-service.js';
 import { SessionService } from '../services/session-service.js';
 import { Scheduler } from '../services/scheduler.js';
@@ -370,6 +370,33 @@ const normalizedMongoSort = (value: unknown): Readonly<Record<string, unknown>> 
 };
 
 const contractTests = (makeHarness: () => Promise<Harness>): void => {
+  it('materializes and consumes one generation-bound input without resurrection', async () => {
+    const { repository, close } = await makeHarness();
+    const intent: PendingInputIntent = {
+      schemaVersion: 'talos.task-input-intent/v1',
+      operationId: 'input-operation-1',
+      taskId: 'input-task-1',
+      claimId: 'input-claim-1',
+      claimGeneration: 1,
+      input: { kind: 'text', value: 'answer' }
+    };
+    try {
+      await repository.materializePendingInput(intent);
+      await repository.materializePendingInput(intent);
+      expect(await repository.consumePendingInput(intent)).toEqual(intent.input);
+      expect(await repository.consumePendingInput(intent)).toBeUndefined();
+      await repository.materializePendingInput(intent);
+      expect(await repository.consumePendingInput(intent)).toBeUndefined();
+      await expect(repository.materializePendingInput({
+        ...intent,
+        input: { kind: 'text', value: 'different' }
+      })).rejects.toThrow('pending input operation integrity failure');
+      expect(await repository.consumePendingInput({ ...intent, claimGeneration: 2 })).toBeUndefined();
+    } finally {
+      await close();
+    }
+  }, MONGODB_CONTRACT_TEST_TIMEOUT_MS);
+
   it('returns one stable bounded page across deadline and lease expiry sources', async () => {
     const { repository, close } = await makeHarness();
     try {
@@ -2143,7 +2170,15 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       await repository.saveHandoff({ id: 'handoff-1', taskId: task.id, userId: task.userId, url: '/v1/handoffs/handoff-1', expiresAt: '2025-01-01T00:10:00.000Z', used: false });
       const event: WebhookEvent = { id: 'event-1', type: 'task.state_changed', taskId: task.id, userId: task.userId, timestamp: task.createdAt, payload: { status: 'submitted' }, delivery: { status: 'pending', attempts: 0 } };
       await repository.saveWebhook(event);
-      await repository.savePendingInput(task.id, { kind: 'text', value: 'secret' });
+      const pendingInputIntent: PendingInputIntent = {
+        schemaVersion: 'talos.task-input-intent/v1',
+        operationId: 'round-trip-input-operation',
+        taskId: task.id,
+        claimId: 'round-trip-claim',
+        claimGeneration: 1,
+        input: { kind: 'text', value: 'secret' }
+      };
+      await repository.materializePendingInput(pendingInputIntent);
       expect(await repository.getPool('pool-1')).toMatchObject({ ownerUserId: 'user-1', sharedWithGroups: ['eng'] });
       expect(await repository.listPoolsByOwner('user-1')).toHaveLength(1);
       expect(await repository.getMachine('machine-1')).toMatchObject({ activeLeases: 0 });
@@ -2155,8 +2190,8 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       expect(await repository.getHandoff('handoff-1')).toMatchObject({ used: false });
       expect(await repository.getWebhook('event-1')).toMatchObject({ delivery: { status: 'pending', attempts: 0 } });
       expect(await repository.listWebhooks()).toHaveLength(1);
-      expect(await repository.takePendingInput(task.id)).toEqual({ kind: 'text', value: 'secret' });
-      expect(await repository.takePendingInput(task.id)).toBeUndefined();
+      expect(await repository.consumePendingInput(pendingInputIntent)).toEqual({ kind: 'text', value: 'secret' });
+      expect(await repository.consumePendingInput(pendingInputIntent)).toBeUndefined();
       await repository.ping();
     } finally {
       await close();

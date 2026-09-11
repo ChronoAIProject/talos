@@ -100,7 +100,8 @@ describe('interactive session HTTP API', () => {
       'machineId',
       'leaseExpiresAt',
       'leaseToken',
-      'claimRecovery'
+      'claimRecovery',
+      'pendingInputIntent'
     ]) expect(publicSession).not.toHaveProperty(field);
     expect(JSON.stringify(publicSession)).not.toContain(claim.leaseToken);
     const forbiddenAction = await fetch(`${base}/v1/sessions/${session.id}/actions?wait_seconds=0`, {

@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type Document as MongoDriverDocument, type Filter, type MongoClientOptions, type UpdateFilter } from 'mongodb';
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -36,6 +36,15 @@ const LEGACY_ACTION_RECOVERY_ERROR = {
   }
 } as const;
 
+const samePendingInput = (record: PendingInputRecord, intent: PendingInputIntent): boolean =>
+  record.schemaVersion === intent.schemaVersion &&
+  record.operationId === intent.operationId &&
+  record.taskId === intent.taskId &&
+  record.claimId === intent.claimId &&
+  record.claimGeneration === intent.claimGeneration &&
+  record.input.kind === intent.input.kind &&
+  record.input.value === intent.input.value;
+
 const assertPositivePageLimit = (limit: number): void => {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
 };
@@ -53,6 +62,8 @@ export interface MongoRepositoryOptions {
   clientOptions?: MongoClientOptions;
 }
 
+type PendingInputDocument = PendingInputRecord & { _id: string };
+
 export class MongoRepository implements Repository {
   private readonly client: MongoClient;
   private readonly database: Db;
@@ -62,7 +73,7 @@ export class MongoRepository implements Repository {
   private readonly profiles: Collection<Document>;
   private readonly handoffs: Collection<Document>;
   private readonly webhooks: Collection<Document>;
-  private readonly pendingInputs: Collection<Document>;
+  private readonly pendingInputs: Collection<PendingInputDocument>;
   private readonly pendingActions: Collection<Document>;
   private readonly actionResults: Collection<Document>;
   private readonly testingRuns: Collection<Document>;
@@ -544,13 +555,31 @@ export class MongoRepository implements Repository {
     return (await this.webhooks.find({}).toArray()).map(webhookFromDocument);
   }
 
-  public async savePendingInput(taskId: string, input: TaskInput): Promise<void> {
-    await this.pendingInputs.replaceOne({ _id: taskId }, { _id: taskId, input }, { upsert: true });
+  public async materializePendingInput(intent: PendingInputIntent): Promise<void> {
+    const document = await this.pendingInputs.findOneAndUpdate(
+      { _id: intent.operationId },
+      { $setOnInsert: { ...intent, consumed: false } },
+      { upsert: true, returnDocument: 'after' }
+    );
+    if (document === null || !samePendingInput(document, intent)) {
+      throw new Error('pending input operation integrity failure');
+    }
   }
 
-  public async takePendingInput(taskId: string): Promise<TaskInput | undefined> {
-    const result = await this.pendingInputs.findOneAndDelete({ _id: taskId });
-    const document = result ?? null;
+  public async consumePendingInput(intent: PendingInputIntent): Promise<TaskInput | undefined> {
+    const document = await this.pendingInputs.findOneAndUpdate(
+      {
+        _id: intent.operationId,
+        taskId: intent.taskId,
+        claimId: intent.claimId,
+        claimGeneration: intent.claimGeneration,
+        'input.kind': intent.input.kind,
+        'input.value': intent.input.value,
+        consumed: false
+      },
+      { $set: { consumed: true } },
+      { returnDocument: 'before' }
+    );
     return document === null ? undefined : document.input as TaskInput;
   }
 
