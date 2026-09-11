@@ -131,7 +131,8 @@ describe('WebhookDispatcher', () => {
         'machineId',
         'leaseExpiresAt',
         'leaseToken',
-        'claimRecovery'
+        'claimRecovery',
+        'pendingInputIntent'
       ]) expect(body).not.toContain(`\"${field}\"`);
       expect(body).not.toContain(claim.leaseToken);
       expect(body).not.toContain(stored?.claimId);

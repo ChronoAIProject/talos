@@ -56,6 +56,19 @@ export interface TaskInput {
   value: string;
 }
 
+export interface PendingInputIntent {
+  schemaVersion: 'talos.task-input-intent/v1';
+  operationId: string;
+  taskId: string;
+  claimId: string;
+  claimGeneration: number;
+  input: TaskInput;
+}
+
+export interface PendingInputRecord extends PendingInputIntent {
+  consumed: boolean;
+}
+
 export interface Artifact {
   id: string;
   name: string;
@@ -105,6 +118,7 @@ interface TaskBase {
   lastActionId?: string;
   sessionActions?: readonly SessionActionRecord[];
   claimRecovery?: TaskClaimRecovery;
+  pendingInputIntent?: PendingInputIntent;
 }
 
 export interface BrowserTask extends TaskBase {
