@@ -421,7 +421,8 @@ export class MemoryRepository implements Repository {
   }
 
   public async materializeHandoff(intent: PendingHandoffIntent): Promise<void> {
-    const existing = this.handoffs.get(intent.id);
+    const existing = [...this.handoffs.values()].find((handoff) => handoff.operationId === intent.operationId)
+      ?? this.handoffs.get(intent.id);
     if (existing === undefined) {
       this.handoffs.set(intent.id, handoffRecord(intent));
       return;

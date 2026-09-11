@@ -425,6 +425,8 @@ const contractTests = (makeHarness: () => Promise<Harness>): void => {
       }));
       await repository.materializeHandoff(intent);
       await repository.materializeHandoff(intent);
+      await expect(repository.materializeHandoff({ ...intent, id: 'different-handoff-link' }))
+        .rejects.toThrow('handoff operation integrity failure');
       const link = await repository.getHandoff(intent.id);
       if (link === undefined || !('operationId' in link)) throw new Error('handoff did not materialize');
       const results = await Promise.all([
