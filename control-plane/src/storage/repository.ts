@@ -1,4 +1,4 @@
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -87,8 +87,8 @@ export interface Repository {
   saveWebhook(event: WebhookEvent): Promise<void>;
   getWebhook(id: string): Promise<WebhookEvent | undefined>;
   listWebhooks(): Promise<readonly WebhookEvent[]>;
-  savePendingInput(taskId: string, input: TaskInput): Promise<void>;
-  takePendingInput(taskId: string): Promise<TaskInput | undefined>;
+  materializePendingInput(intent: PendingInputIntent): Promise<void>;
+  consumePendingInput(intent: PendingInputIntent): Promise<TaskInput | undefined>;
   enqueueSessionAction(action: PendingSessionAction): Promise<boolean>;
   getPendingSessionAction(taskId: string): Promise<PendingSessionAction | undefined>;
   takePendingSessionAction(taskId: string, guard: SessionActionDispatchGuard): Promise<PendingSessionAction | undefined>;

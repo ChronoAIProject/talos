@@ -1,4 +1,4 @@
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -29,6 +29,15 @@ const assertPositivePageLimit = (limit: number): void => {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError('page limit must be a positive safe integer');
 };
 
+const samePendingInput = (record: PendingInputRecord, intent: PendingInputIntent): boolean =>
+  record.schemaVersion === intent.schemaVersion &&
+  record.operationId === intent.operationId &&
+  record.taskId === intent.taskId &&
+  record.claimId === intent.claimId &&
+  record.claimGeneration === intent.claimGeneration &&
+  record.input.kind === intent.input.kind &&
+  record.input.value === intent.input.value;
+
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
   private readonly pools = new Map<string, Pool>();
@@ -36,7 +45,7 @@ export class MemoryRepository implements Repository {
   private readonly profiles = new Map<string, Profile>();
   private readonly handoffs = new Map<string, HandoffLink>();
   private readonly webhooks = new Map<string, WebhookEvent>();
-  private readonly pendingInputs = new Map<string, TaskInput>();
+  private readonly pendingInputs = new Map<string, PendingInputRecord>();
   private readonly pendingActions = new Map<string, PendingSessionAction>();
   private readonly actionResults = new Map<string, SessionActionResult>();
   private readonly testingRuns = new Map<string, TestingRunRecord>();
@@ -401,14 +410,20 @@ export class MemoryRepository implements Repository {
     return [...this.webhooks.values()];
   }
 
-  public async savePendingInput(taskId: string, input: TaskInput): Promise<void> {
-    this.pendingInputs.set(taskId, input);
+  public async materializePendingInput(intent: PendingInputIntent): Promise<void> {
+    const existing = this.pendingInputs.get(intent.operationId);
+    if (existing === undefined) {
+      this.pendingInputs.set(intent.operationId, { ...intent, consumed: false });
+      return;
+    }
+    if (!samePendingInput(existing, intent)) throw new Error('pending input operation integrity failure');
   }
 
-  public async takePendingInput(taskId: string): Promise<TaskInput | undefined> {
-    const input = this.pendingInputs.get(taskId);
-    this.pendingInputs.delete(taskId);
-    return input;
+  public async consumePendingInput(intent: PendingInputIntent): Promise<TaskInput | undefined> {
+    const existing = this.pendingInputs.get(intent.operationId);
+    if (existing === undefined || existing.consumed || !samePendingInput(existing, intent)) return undefined;
+    this.pendingInputs.set(intent.operationId, { ...existing, consumed: true });
+    return existing.input;
   }
 
   public async enqueueSessionAction(action: PendingSessionAction): Promise<boolean> {

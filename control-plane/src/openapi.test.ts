@@ -82,7 +82,8 @@ describe('OpenAPI loader', () => {
       'machineId',
       'leaseExpiresAt',
       'leaseToken',
-      'claimRecovery'
+      'claimRecovery',
+      'pendingInputIntent'
     ];
     for (const publicSchema of ['Task', 'Session']) {
       const publicProperties = properties(publicSchema);

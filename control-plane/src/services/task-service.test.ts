@@ -253,7 +253,8 @@ describe('task service', () => {
       'machineId',
       'leaseExpiresAt',
       'leaseToken',
-      'claimRecovery'
+      'claimRecovery',
+      'pendingInputIntent'
     ]) expect(serialized).not.toContain(`\"${field}\"`);
     expect(serialized).not.toContain(claim.leaseToken);
     expect(serialized).not.toContain(stored?.claimId);
@@ -450,17 +451,13 @@ describe('task service', () => {
     let handoffWrites = 0;
     const repository = new Proxy<Repository>(storage, {
       get(target, property) {
-        if (property === 'replaceTaskForClaim') {
-          return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
-            if (args[0].id === inputTask.id && args[0].status === 'running' && args[1].status === 'needs_input') {
-              inputAttempts += 1;
-              return false;
-            }
-            return target.replaceTaskForClaim(...args);
-          };
-        }
         if (property === 'replaceTaskForActiveClaim') {
           return async (...args: Parameters<Repository['replaceTaskForActiveClaim']>): Promise<boolean> => {
+            if (args[0].id === inputTask.id && args[0].status === 'running' && args[1].status === 'needs_input') {
+              inputAttempts += 1;
+              await authority.heartbeat(inputTask.id, 'worker-input', inputClaim.leaseToken, 30 + inputAttempts);
+              return false;
+            }
             if (args[0].id === handoffTask.id && args[0].status === 'handoff') {
               handoffAttempts += 1;
               await authority.heartbeat(
@@ -474,10 +471,10 @@ describe('task service', () => {
             return target.replaceTaskForActiveClaim(...args);
           };
         }
-        if (property === 'savePendingInput') {
-          return async (...args: Parameters<Repository['savePendingInput']>): Promise<void> => {
+        if (property === 'materializePendingInput') {
+          return async (...args: Parameters<Repository['materializePendingInput']>): Promise<void> => {
             pendingInputWrites += 1;
-            return target.savePendingInput(...args);
+            return target.materializePendingInput(...args);
           };
         }
         if (property === 'saveHandoff') {
@@ -506,7 +503,7 @@ describe('task service', () => {
     expect(handoffAttempts).toBe(3);
     expect(pendingInputWrites).toBe(0);
     expect(handoffWrites).toBe(0);
-    expect(await storage.takePendingInput(inputTask.id)).toBeUndefined();
+    expect(pendingInputWrites).toBe(0);
     expect(await storage.getTask(handoffTask.id)).not.toHaveProperty('handoff');
   });
 
@@ -592,18 +589,13 @@ describe('task service', () => {
     let handoffWrites = 0;
     const repository = new Proxy<Repository>(storage, {
       get(target, property) {
-        if (property === 'replaceTaskForClaim') {
-          return async (...args: Parameters<Repository['replaceTaskForClaim']>): Promise<boolean> => {
+        if (property === 'replaceTaskForActiveClaim') {
+          return async (...args: Parameters<Repository['replaceTaskForActiveClaim']>): Promise<boolean> => {
             if (!inputReclaimed && args[0].id === inputTask.id && args[0].status === 'running' && args[1].status === 'needs_input') {
               inputReclaimed = true;
               await advanceClaimGeneration(target, inputTask.id, 'needs_input');
               return false;
             }
-            return target.replaceTaskForClaim(...args);
-          };
-        }
-        if (property === 'replaceTaskForActiveClaim') {
-          return async (...args: Parameters<Repository['replaceTaskForActiveClaim']>): Promise<boolean> => {
             if (!handoffReclaimed && args[0].id === handoffTask.id && args[0].status === 'handoff') {
               handoffReclaimed = true;
               await advanceClaimGeneration(target, handoffTask.id, 'running');
@@ -612,10 +604,10 @@ describe('task service', () => {
             return target.replaceTaskForActiveClaim(...args);
           };
         }
-        if (property === 'savePendingInput') {
-          return async (...args: Parameters<Repository['savePendingInput']>): Promise<void> => {
+        if (property === 'materializePendingInput') {
+          return async (...args: Parameters<Repository['materializePendingInput']>): Promise<void> => {
             pendingInputWrites += 1;
-            return target.savePendingInput(...args);
+            return target.materializePendingInput(...args);
           };
         }
         if (property === 'saveHandoff') {
@@ -649,7 +641,7 @@ describe('task service', () => {
     expect((await storage.getTask(handoffTask.id))?.claimGeneration).toBe((handoffClaim.task.claimGeneration ?? 0) + 1);
     expect(pendingInputWrites).toBe(0);
     expect(handoffWrites).toBe(0);
-    expect(await storage.takePendingInput(inputTask.id)).toBeUndefined();
+    expect(pendingInputWrites).toBe(0);
     expect(await storage.getTask(handoffTask.id)).not.toHaveProperty('handoff');
   });
 

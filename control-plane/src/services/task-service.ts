@@ -1,7 +1,7 @@
 import { concurrentUpdate, conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, MachineLeaseReservation, PublicTask, SessionActionResult, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { Lease, MachineLeaseReservation, PendingInputIntent, PublicTask, SessionActionResult, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { Repository, TaskMaintenanceCursor } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -220,8 +220,21 @@ export class TaskService {
 
   public async provideInput(id: string, userId: string, input: NonNullable<Task['input']>): Promise<Task> {
     const task = await this.authorizedTask(id, userId);
+    if (this.isPendingInputReconciliation(task, input)) {
+      await this.repository.materializePendingInput(task.pendingInputIntent);
+      if (!await this.ensureClaimProjections(task)) throw conflict('lease accounting could not be renewed');
+      return task;
+    }
     this.assertTaskAcceptsInput(task);
     const claimBinding = this.userClaimBinding(task);
+    const pendingInputIntent: PendingInputIntent = {
+      schemaVersion: 'talos.task-input-intent/v1',
+      operationId: newId('task-input'),
+      taskId: task.id,
+      claimId: claimBinding.claimId,
+      claimGeneration: claimBinding.claimGeneration,
+      input
+    };
     const { persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
       this.assertTaskAcceptsInput(current);
       const now = this.clock();
@@ -230,14 +243,15 @@ export class TaskService {
       return {
         ...current,
         status: 'running',
+        pendingInputIntent,
         updatedAt: new Date(now).toISOString(),
         leaseExpiresAt: new Date(Math.max(
           Number.isFinite(currentLeaseExpiry) ? currentLeaseExpiry : 0,
           extendedLeaseExpiry
         )).toISOString()
       };
-    }, { claimBinding });
-    await this.repository.savePendingInput(id, input);
+    }, { claimBinding, requireActiveClaim: true });
+    await this.repository.materializePendingInput(pendingInputIntent);
     if (!await this.ensureClaimProjections(persisted)) throw conflict('lease accounting could not be renewed');
     await this.emit(persisted, 'task.state_changed', { status: persisted.status });
     return persisted;
@@ -259,7 +273,18 @@ export class TaskService {
   public async getWorkerInput(taskId: string, workerId: string, leaseToken: string): Promise<Task['input']> {
     const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
-    return this.repository.takePendingInput(taskId);
+    const intent = task.pendingInputIntent;
+    if (intent === undefined) return undefined;
+    const input = await this.repository.consumePendingInput(intent);
+    if (input !== undefined && task.leaseExpiresAt !== undefined) {
+      const cleared: Task = { ...task };
+      delete cleared.pendingInputIntent;
+      await this.repository.replaceTaskForActiveClaim(cleared, {
+        ...this.claimGuard(task),
+        leaseExpiresAt: task.leaseExpiresAt
+      });
+    }
+    return input;
   }
 
   public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
@@ -832,8 +857,29 @@ export class TaskService {
   }
 
   private assertTaskAcceptsInput(task: Task): void {
+    if (task.kind === 'testing') throw conflict('testing tasks do not accept task input');
     if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
     if (task.status !== 'needs_input') throw conflict('task is not waiting for input');
+    if (task.claimCommitted !== true) throw conflict('task claim is not active');
+  }
+
+  private isPendingInputReconciliation(task: Task, input: TaskInput): task is Task & { pendingInputIntent: PendingInputIntent } {
+    const intent = task.pendingInputIntent;
+    return task.kind !== 'testing' &&
+      task.interaction !== 'interactive' &&
+      task.status === 'running' &&
+      task.claimCommitted === true &&
+      task.claimId !== undefined &&
+      task.claimGeneration !== undefined &&
+      task.claimGeneration > 0 &&
+      task.leaseExpiresAt !== undefined &&
+      Date.parse(task.leaseExpiresAt) > this.clock() &&
+      intent !== undefined &&
+      intent.taskId === task.id &&
+      intent.claimId === task.claimId &&
+      intent.claimGeneration === task.claimGeneration &&
+      intent.input.kind === input.kind &&
+      intent.input.value === input.value;
   }
 
   private assertTaskCanRequestHandoff(task: Task): void {
@@ -1042,6 +1088,7 @@ export class TaskService {
       'lastActionId',
       'sessionActions',
       'claimRecovery',
+      'pendingInputIntent',
       'testing'
     ]);
     return {

@@ -8,6 +8,19 @@ import { MemoryRepository } from '../storage/memory-repository.js';
 import type { Repository } from '../storage/repository.js';
 import { createApiServer } from './server.js';
 import { loadOpenApiDocument } from '../openapi.js';
+import type { PendingInputIntent } from '../domain/types.js';
+
+class FirstMaterializationFailureRepository extends MemoryRepository {
+  public readonly attemptedIntents: PendingInputIntent[] = [];
+  public successfulMaterializations = 0;
+
+  public override async materializePendingInput(intent: PendingInputIntent): Promise<void> {
+    this.attemptedIntents.push(structuredClone(intent));
+    if (this.attemptedIntents.length === 1) throw new Error('injected pending input materialization failure');
+    await super.materializePendingInput(intent);
+    this.successfulMaterializations += 1;
+  }
+}
 
 describe('control-plane HTTP API', () => {
   it('serves cached OpenAPI JSON and YAML without authentication', async () => {
@@ -200,7 +213,8 @@ describe('control-plane HTTP API', () => {
       'machineId',
       'leaseExpiresAt',
       'leaseToken',
-      'claimRecovery'
+      'claimRecovery',
+      'pendingInputIntent'
     ];
     for (const field of internalAuthorityFields) expect(claim.task).not.toHaveProperty(field);
     const publicTaskResponse = await fetch(`${base}/v1/tasks/${created.id}`, {
@@ -462,5 +476,143 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/tasks/${cancelTask}/cancel`, { method: 'POST', headers: publicHeaders })).status).toBe(200);
     expect((await fetch(`${base}/v1/profiles/p/login-link`, { method: 'POST', headers: publicHeaders })).status).toBe(501);
     server.close();
+  });
+
+  it('reconciles one generation-bound input after post-CAS materialization failure', async () => {
+    const now = Date.parse('2026-09-11T12:00:00.000Z');
+    const repository = new FirstMaterializationFailureRepository(() => now);
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({
+      id: 'machine-a',
+      poolId: 'pool',
+      tags: {},
+      capacity: 1,
+      activeLeases: 0,
+      online: true,
+      workerTokenHash: hashWorkerToken('worker-token-123456')
+    });
+    const service = new TaskService(
+      repository,
+      new Scheduler(repository),
+      new ProfileLockService(repository),
+      new WebhookSigner('webhook-secret-1234'),
+      { clock: () => now }
+    );
+    const server = createApiServer(service, repository, { clock: () => now });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const publicHeaders = {
+      'content-type': 'application/json',
+      'x-nyxid-identity-token': 'user:user-a'
+    };
+    const workerHeaders = {
+      authorization: 'Bearer worker-token-123456',
+      'content-type': 'application/json',
+      'x-talos-worker-id': 'worker-a',
+      'x-talos-machine-id': 'machine-a'
+    };
+    const internalFields = [
+      'pendingInputIntent',
+      'operationId',
+      'claimId',
+      'claimGeneration',
+      'leaseToken',
+      'workerId',
+      'machineId'
+    ];
+    const assertPublicTask = (task: Record<string, unknown>): void => {
+      for (const field of internalFields) expect(task).not.toHaveProperty(field);
+    };
+
+    try {
+      const createdResponse = await fetch(`${base}/v1/tasks`, {
+        method: 'POST',
+        headers: publicHeaders,
+        body: JSON.stringify({ kind: 'browse', goal: 'recover input' })
+      });
+      const created = await createdResponse.json() as Record<string, unknown> & { id: string };
+      expect(createdResponse.status).toBe(201);
+      assertPublicTask(created);
+
+      const claimResponse = await fetch(`${base}/v1/worker/claim`, {
+        method: 'POST',
+        headers: workerHeaders,
+        body: JSON.stringify({ worker_id: 'worker-a', machine_id: 'machine-a' })
+      });
+      const claim = await claimResponse.json() as { task: Record<string, unknown>; leaseToken: string };
+      expect(claimResponse.status).toBe(200);
+      assertPublicTask(claim.task);
+
+      const needsInputResponse = await fetch(`${base}/v1/worker/tasks/${created.id}/needs-input`, {
+        method: 'POST',
+        headers: workerHeaders,
+        body: JSON.stringify({ lease_token: claim.leaseToken })
+      });
+      expect(needsInputResponse.status).toBe(200);
+      assertPublicTask(await needsInputResponse.json() as Record<string, unknown>);
+
+      const firstInputResponse = await fetch(`${base}/v1/tasks/${created.id}/input`, {
+        method: 'POST',
+        headers: publicHeaders,
+        body: '{"kind":"text","value":"answer"}'
+      });
+      expect(firstInputResponse.status).toBe(500);
+      expect(await firstInputResponse.json()).toEqual({
+        error: { code: 'internal_error', message: 'internal server error', retryable: true }
+      });
+      const failedTask = await repository.getTask(created.id);
+      expect(failedTask).toMatchObject({
+        status: 'running',
+        pendingInputIntent: {
+          taskId: created.id,
+          claimId: failedTask?.claimId,
+          claimGeneration: failedTask?.claimGeneration,
+          input: { kind: 'text', value: 'answer' }
+        }
+      });
+      expect(failedTask?.pendingInputIntent?.claimGeneration).toBeGreaterThan(0);
+      expect(repository.attemptedIntents).toHaveLength(1);
+      expect(repository.successfulMaterializations).toBe(0);
+
+      const retryResponse = await fetch(`${base}/v1/tasks/${created.id}/input`, {
+        method: 'POST',
+        headers: publicHeaders,
+        body: '{"kind":"text","value":"answer"}'
+      });
+      expect(retryResponse.status).toBe(200);
+      const retriedTask = await retryResponse.json() as Record<string, unknown> & { status: string };
+      expect(retriedTask.status).toBe('running');
+      assertPublicTask(retriedTask);
+      expect(repository.attemptedIntents).toHaveLength(2);
+      expect(repository.attemptedIntents[1]?.operationId).toBe(repository.attemptedIntents[0]?.operationId);
+      expect(repository.successfulMaterializations).toBe(1);
+
+      const pollBody = JSON.stringify({
+        lease_token: claim.leaseToken,
+        worker_token: 'worker-token-123456',
+        worker_id: 'worker-a',
+        machine_id: 'machine-a'
+      });
+      const firstPoll = await fetch(`${base}/v1/worker/tasks/${created.id}/input/poll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: pollBody
+      });
+      expect(firstPoll.status).toBe(200);
+      expect(await firstPoll.json()).toEqual({ input: { kind: 'text', value: 'answer' } });
+
+      const secondPoll = await fetch(`${base}/v1/worker/tasks/${created.id}/input/poll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: pollBody
+      });
+      expect(secondPoll.status).toBe(200);
+      expect(await secondPoll.json()).toEqual({});
+      expect(await repository.getTask(created.id)).not.toHaveProperty('pendingInputIntent');
+    } finally {
+      server.close();
+    }
   });
 });
