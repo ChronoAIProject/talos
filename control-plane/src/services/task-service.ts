@@ -274,7 +274,12 @@ export class TaskService {
     const task = await this.getWorkerTask(taskId, workerId, leaseToken);
     if (task.interaction === 'interactive') throw conflict('interactive sessions do not accept task input');
     const intent = task.pendingInputIntent;
-    if (intent === undefined) return undefined;
+    if (
+      intent === undefined ||
+      intent.taskId !== task.id ||
+      intent.claimId !== task.claimId ||
+      intent.claimGeneration !== task.claimGeneration
+    ) return undefined;
     const input = await this.repository.consumePendingInput(intent);
     if (input !== undefined && task.leaseExpiresAt !== undefined) {
       const cleared: Task = { ...task };

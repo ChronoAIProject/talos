@@ -645,6 +645,23 @@ describe('task service', () => {
     expect(await storage.getTask(handoffTask.id)).not.toHaveProperty('handoff');
   });
 
+  it('does not consume pending input retained from a previous claim generation', async () => {
+    const { repository, service } = setup({ value: 1_000 });
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: 'x' });
+    const task = await service.createTask('user-a', { kind: 'browse', goal: 'generation-bound input consumption' });
+    const claim = await service.claim('worker-a', 'machine');
+    await service.needsInput(task.id, 'worker-a', claim.leaseToken);
+    await service.provideInput(task.id, 'user-a', { kind: 'text', value: 'stale input' });
+    const intent = (await repository.getTask(task.id))?.pendingInputIntent;
+    if (intent === undefined) throw new Error('test task does not have a pending input intent');
+
+    await advanceClaimGeneration(repository, task.id, 'running');
+
+    await expect(service.getWorkerInput(task.id, 'worker-next', 'lease-next')).resolves.toBeUndefined();
+    await expect(repository.consumePendingInput(intent)).resolves.toEqual(intent.input);
+  });
+
   it('lets either eligible machine claim queued work', async () => {
     const { repository, service } = setup();
     await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
