@@ -8,7 +8,7 @@ import { MemoryRepository } from '../storage/memory-repository.js';
 import type { Repository } from '../storage/repository.js';
 import { createApiServer } from './server.js';
 import { loadOpenApiDocument } from '../openapi.js';
-import type { PendingInputIntent } from '../domain/types.js';
+import type { PendingHandoffIntent, PendingInputIntent, Task } from '../domain/types.js';
 
 class FirstMaterializationFailureRepository extends MemoryRepository {
   public readonly attemptedIntents: PendingInputIntent[] = [];
@@ -19,6 +19,26 @@ class FirstMaterializationFailureRepository extends MemoryRepository {
     if (this.attemptedIntents.length === 1) throw new Error('injected pending input materialization failure');
     await super.materializePendingInput(intent);
     this.successfulMaterializations += 1;
+  }
+}
+
+class FirstCommittedInputAcknowledgementFailureRepository extends MemoryRepository {
+  public readonly attemptedIntents: PendingInputIntent[] = [];
+
+  public override async materializePendingInput(intent: PendingInputIntent): Promise<void> {
+    this.attemptedIntents.push(structuredClone(intent));
+    await super.materializePendingInput(intent);
+    if (this.attemptedIntents.length === 1) throw new Error('injected pending input acknowledgement failure');
+  }
+}
+
+class FirstCommittedHandoffAcknowledgementFailureRepository extends MemoryRepository {
+  public readonly attemptedIntents: PendingHandoffIntent[] = [];
+
+  public override async materializeHandoff(intent: PendingHandoffIntent): Promise<void> {
+    this.attemptedIntents.push(structuredClone(intent));
+    await super.materializeHandoff(intent);
+    if (this.attemptedIntents.length === 1) throw new Error('injected handoff acknowledgement failure');
   }
 }
 
@@ -292,11 +312,27 @@ describe('control-plane HTTP API', () => {
     expect((await fetch(`${base}/v1/admin/profiles`, { method: 'POST', headers, body: JSON.stringify({ id: 'profile', user_id: 'other-user' }) })).status).toBe(409);
     expect((await fetch(`${base}/v1/admin/machines/machine/rotate-token`, { method: 'POST', headers, body: JSON.stringify({ worker_token: 'rotated-worker-token-123456' }) })).status).toBe(200);
     expect((await repository.getMachine('machine'))?.workerTokenHash).toBe(hashWorkerToken('rotated-worker-token-123456'));
-    await repository.saveHandoff({ id: 'h', taskId: 't', userId: 'u', url: '/v1/handoffs/h', expiresAt: new Date(2000).toISOString(), used: false });
+    const handoffIntent: PendingHandoffIntent = {
+      schemaVersion: 'talos.task-handoff-intent/v1', operationId: 'handoff-operation-h', id: 'h', taskId: 't', userId: 'u',
+      claimId: 'claim-h', claimGeneration: 1, expiresInSeconds: 1, url: '/v1/handoffs/h', expiresAt: new Date(2000).toISOString(), consumed: false
+    };
+    await repository.saveTask({
+      id: 't', userId: 'u', kind: 'browse', goal: 'handoff', constraints: {}, mode: 'read_only', interaction: 'autonomous',
+      status: 'handoff', createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), findings: [], artifacts: [],
+      claimId: handoffIntent.claimId, claimGeneration: handoffIntent.claimGeneration, claimCommitted: true, taskVersion: 1,
+      handoff: { url: handoffIntent.url, expiresAt: handoffIntent.expiresAt }, pendingHandoffIntent: handoffIntent
+    } satisfies Task);
+    await repository.materializeHandoff(handoffIntent);
     const handoff = await fetch(`${base}/v1/handoffs/h`, { headers: { 'x-nyxid-identity-token': 'user:u' } });
     expect(handoff.status).toBe(501);
     expect((await fetch(`${base}/v1/handoffs/h`, { headers: { 'x-nyxid-identity-token': 'user:u' } })).status).toBe(409);
-    await repository.saveHandoff({ id: 'expired', taskId: 't', userId: 'u', url: '/v1/handoffs/expired', expiresAt: new Date(500).toISOString(), used: false });
+    await repository.materializeHandoff({
+      ...handoffIntent,
+      operationId: 'handoff-operation-expired',
+      id: 'expired',
+      url: '/v1/handoffs/expired',
+      expiresAt: new Date(500).toISOString()
+    });
     expect((await fetch(`${base}/v1/handoffs/expired`, { headers: { 'x-nyxid-identity-token': 'user:u' } })).status).toBe(409);
     server.close();
   });
@@ -615,4 +651,87 @@ describe('control-plane HTTP API', () => {
       server.close();
     }
   });
+
+  it('reconciles committed input materialization after a lost acknowledgement', async () => {
+    const now = Date.parse('2026-09-11T12:00:00.000Z');
+    const repository = new FirstCommittedInputAcknowledgementFailureRepository(() => now);
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'), { clock: () => now });
+    const server = createApiServer(service, repository, { clock: () => now });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const publicHeaders = { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' };
+    const workerHeaders = { authorization: 'Bearer worker-token-123456', 'content-type': 'application/json', 'x-talos-worker-id': 'worker-a', 'x-talos-machine-id': 'machine' };
+    try {
+      const created = await (await fetch(`${base}/v1/tasks`, { method: 'POST', headers: publicHeaders, body: JSON.stringify({ kind: 'browse', goal: 'recover committed input' }) })).json() as { id: string };
+      const claim = await (await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ worker_id: 'worker-a', machine_id: 'machine' }) })).json() as { leaseToken: string };
+      await fetch(`${base}/v1/worker/tasks/${created.id}/needs-input`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ lease_token: claim.leaseToken }) });
+      const body = '{"kind":"text","value":" answer "}';
+      const first = await fetch(`${base}/v1/tasks/${created.id}/input`, { method: 'POST', headers: publicHeaders, body });
+      expect(first.status).toBe(500);
+      expect(await first.json()).toEqual({ error: { code: 'internal_error', message: 'internal server error', retryable: true } });
+      const retry = await fetch(`${base}/v1/tasks/${created.id}/input`, { method: 'POST', headers: publicHeaders, body });
+      expect(retry.status).toBe(200);
+      expect(repository.attemptedIntents).toHaveLength(2);
+      expect(repository.attemptedIntents[1]).toEqual(repository.attemptedIntents[0]);
+      const pollBody = JSON.stringify({ lease_token: claim.leaseToken, worker_token: 'worker-token-123456', worker_id: 'worker-a', machine_id: 'machine' });
+      const firstPoll = await fetch(`${base}/v1/worker/tasks/${created.id}/input/poll`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: pollBody });
+      expect(await firstPoll.json()).toEqual({ input: { kind: 'text', value: ' answer ' } });
+      const secondPoll = await fetch(`${base}/v1/worker/tasks/${created.id}/input/poll`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: pollBody });
+      expect(await secondPoll.json()).toEqual({});
+    } finally {
+      server.close();
+    }
+  });
+
+  it('reconciles one handoff after a committed materialization loses acknowledgement', async () => {
+    const now = Date.parse('2026-09-11T12:00:00.000Z');
+    const repository = new FirstCommittedHandoffAcknowledgementFailureRepository(() => now);
+    await repository.savePool({ id: 'pool', visibility: 'platform', tags: {} });
+    await repository.saveMachine({ id: 'machine', poolId: 'pool', tags: {}, capacity: 1, activeLeases: 0, online: true, workerTokenHash: hashWorkerToken('worker-token-123456') });
+    const service = new TaskService(repository, new Scheduler(repository), new ProfileLockService(repository), new WebhookSigner('webhook-secret-1234'), { clock: () => now });
+    const server = createApiServer(service, repository, { clock: () => now });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('server did not bind');
+    const base = `http://127.0.0.1:${address.port}`;
+    const publicHeaders = { 'content-type': 'application/json', 'x-nyxid-identity-token': 'user:user-a' };
+    const workerHeaders = { authorization: 'Bearer worker-token-123456', 'content-type': 'application/json', 'x-talos-worker-id': 'worker-a', 'x-talos-machine-id': 'machine' };
+    try {
+      const created = await (await fetch(`${base}/v1/tasks`, { method: 'POST', headers: publicHeaders, body: JSON.stringify({ kind: 'browse', goal: 'recover committed handoff' }) })).json() as { id: string };
+      const claim = await (await fetch(`${base}/v1/worker/claim`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ worker_id: 'worker-a', machine_id: 'machine' }) })).json() as { leaseToken: string };
+      await fetch(`${base}/v1/worker/tasks/${created.id}/heartbeat`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ lease_token: claim.leaseToken }) });
+      const first = await fetch(`${base}/v1/tasks/${created.id}/handoff`, { method: 'POST', headers: publicHeaders, body: '{"expires_in_seconds":900}' });
+      expect(first.status).toBe(500);
+      expect(await first.json()).toEqual({ error: { code: 'internal_error', message: 'internal server error', retryable: true } });
+      const retry = await fetch(`${base}/v1/tasks/${created.id}/handoff`, { method: 'POST', headers: publicHeaders, body: '{"expires_in_seconds":900}' });
+      expect(retry.status).toBe(200);
+      const response = await retry.json() as { handoff_url: string; expires: string };
+      expect(response).toEqual({ handoff_url: repository.attemptedIntents[0]?.url, expires: repository.attemptedIntents[0]?.expiresAt });
+      expect(repository.attemptedIntents).toHaveLength(2);
+      expect(repository.attemptedIntents[1]).toEqual(repository.attemptedIntents[0]);
+      const task = await (await fetch(`${base}/v1/tasks/${created.id}`, { headers: publicHeaders })).json() as Record<string, unknown>;
+      expect(task).not.toHaveProperty('pendingHandoffIntent');
+      expect(task).not.toHaveProperty('operationId');
+      const concurrent = await Promise.all([
+        fetch(`${base}${response.handoff_url}`, { headers: { 'x-nyxid-identity-token': 'user:user-a' } }),
+        fetch(`${base}${response.handoff_url}`, { headers: { 'x-nyxid-identity-token': 'user:user-a' } })
+      ]);
+      expect(concurrent.map((candidate) => candidate.status).sort()).toEqual([409, 501]);
+      for (const candidate of concurrent) {
+        expect(await candidate.json()).toEqual(candidate.status === 501
+          ? { error: { code: 'not_implemented', message: 'hosted handoff views are planned for Phase 3', retryable: false } }
+          : { error: { code: 'handoff_expired', message: 'handoff link is expired or already used', retryable: false } });
+      }
+      const repeated = await fetch(`${base}${response.handoff_url}`, { headers: { 'x-nyxid-identity-token': 'user:user-a' } });
+      expect(repeated.status).toBe(409);
+      expect(await repeated.json()).toEqual({ error: { code: 'handoff_expired', message: 'handoff link is expired or already used', retryable: false } });
+    } finally {
+      server.close();
+    }
+  });
+
 });
