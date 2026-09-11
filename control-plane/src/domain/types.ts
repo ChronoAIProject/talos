@@ -69,6 +69,20 @@ export interface PendingInputRecord extends PendingInputIntent {
   consumed: boolean;
 }
 
+export interface PendingHandoffIntent {
+  schemaVersion: 'talos.task-handoff-intent/v1';
+  operationId: string;
+  id: string;
+  taskId: string;
+  userId: string;
+  claimId: string;
+  claimGeneration: number;
+  expiresInSeconds: number;
+  url: string;
+  expiresAt: string;
+  consumed: boolean;
+}
+
 export interface Artifact {
   id: string;
   name: string;
@@ -119,6 +133,7 @@ interface TaskBase {
   sessionActions?: readonly SessionActionRecord[];
   claimRecovery?: TaskClaimRecovery;
   pendingInputIntent?: PendingInputIntent;
+  pendingHandoffIntent?: PendingHandoffIntent;
 }
 
 export interface BrowserTask extends TaskBase {
@@ -251,12 +266,7 @@ export interface MachineLeaseReservation {
   expiresAt: string;
 }
 
-export interface HandoffLink {
-  id: string;
-  taskId: string;
-  userId: string;
-  url: string;
-  expiresAt: string;
+export interface HandoffRecord extends Omit<PendingHandoffIntent, 'consumed'> {
   used: boolean;
 }
 

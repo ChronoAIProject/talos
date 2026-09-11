@@ -1,7 +1,7 @@
 import { concurrentUpdate, conflict, deadlineExceeded, forbidden, notFound, taskCancelled, unauthorized, TalosError } from '../domain/errors.js';
 import { timingSafeEqual } from 'node:crypto';
 import { taskCreateSchema } from '../domain/schemas.js';
-import type { Lease, MachineLeaseReservation, PendingInputIntent, PublicTask, SessionActionResult, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { Lease, MachineLeaseReservation, PendingHandoffIntent, PendingInputIntent, PublicTask, SessionActionResult, Task, TaskClaimRecoveryReason, TaskClaimGuard, TaskFinding, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { Repository, TaskMaintenanceCursor } from '../storage/repository.js';
 import { newId } from '../util/id.js';
 import type { ProfileLockService } from './profile-lock.js';
@@ -294,21 +294,39 @@ export class TaskService {
 
   public async requestHandoff(id: string, userId: string, expiresInSeconds: number): Promise<{ handoff_url: string; expires: string }> {
     const task = await this.authorizedTask(id, userId);
+    if (this.isPendingHandoffReconciliation(task, userId, expiresInSeconds)) {
+      await this.repository.materializeHandoff(task.pendingHandoffIntent);
+      return { handoff_url: task.pendingHandoffIntent.url, expires: task.pendingHandoffIntent.expiresAt };
+    }
     this.assertTaskCanRequestHandoff(task);
     const claimBinding = this.userClaimBinding(task);
     const expires = new Date(this.clock() + expiresInSeconds * 1000).toISOString();
     const linkId = newId('handoff');
     const url = `/v1/handoffs/${linkId}`;
+    const pendingHandoffIntent: PendingHandoffIntent = {
+      schemaVersion: 'talos.task-handoff-intent/v1',
+      operationId: newId('task-handoff'),
+      id: linkId,
+      taskId: id,
+      userId,
+      claimId: claimBinding.claimId,
+      claimGeneration: claimBinding.claimGeneration,
+      expiresInSeconds,
+      url,
+      expiresAt: expires,
+      consumed: false
+    };
     const { persisted } = await this.replaceAuthorizedTask(id, userId, task, (current) => {
       this.assertTaskCanRequestHandoff(current);
       return {
         ...current,
         status: 'handoff',
         updatedAt: new Date(this.clock()).toISOString(),
-        handoff: { url, expiresAt: expires }
+        handoff: { url, expiresAt: expires },
+        pendingHandoffIntent
       };
     }, { claimBinding, requireActiveClaim: true });
-    await this.repository.saveHandoff({ id: linkId, taskId: id, userId, url, expiresAt: expires, used: false });
+    await this.repository.materializeHandoff(pendingHandoffIntent);
     await this.emit(persisted, 'task.handoff_requested', { handoff_url: url, expires });
     return { handoff_url: url, expires };
   }
@@ -893,6 +911,30 @@ export class TaskService {
     if (task.claimCommitted !== true) throw conflict('task claim is not active');
   }
 
+  private isPendingHandoffReconciliation(
+    task: Task,
+    userId: string,
+    expiresInSeconds: number
+  ): task is Task & { pendingHandoffIntent: PendingHandoffIntent } {
+    const intent = task.pendingHandoffIntent;
+    return task.kind !== 'testing' &&
+      task.interaction !== 'interactive' &&
+      task.status === 'handoff' &&
+      task.userId === userId &&
+      task.claimCommitted === true &&
+      task.claimId !== undefined &&
+      task.claimGeneration !== undefined &&
+      task.claimGeneration > 0 &&
+      task.leaseExpiresAt !== undefined &&
+      Date.parse(task.leaseExpiresAt) > this.clock() &&
+      intent !== undefined &&
+      intent.taskId === task.id &&
+      intent.userId === userId &&
+      intent.claimId === task.claimId &&
+      intent.claimGeneration === task.claimGeneration &&
+      intent.expiresInSeconds === expiresInSeconds;
+  }
+
   private claimGuard(task: Task): TaskClaimGuard {
     if (task.claimId === undefined || task.claimGeneration === undefined || task.claimGeneration <= 0) {
       throw unauthorized('lease generation is no longer active');
@@ -1094,6 +1136,7 @@ export class TaskService {
       'sessionActions',
       'claimRecovery',
       'pendingInputIntent',
+      'pendingHandoffIntent',
       'testing'
     ]);
     return {

@@ -1,4 +1,4 @@
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffRecord, Machine, MachineLeaseReservation, PendingHandoffIntent, PendingInputIntent, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingAttemptStatus, TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 
 export interface TestingAttemptMutationGuard {
@@ -82,8 +82,9 @@ export interface Repository {
   releaseLegacyProfileLease(profileId: string, taskId: string): Promise<boolean>;
   listProfiles(): Promise<readonly Profile[]>;
   listProfilesByUser(userId: string): Promise<readonly Profile[]>;
-  saveHandoff(link: HandoffLink): Promise<void>;
-  getHandoff(id: string): Promise<HandoffLink | undefined>;
+  getHandoff(id: string): Promise<HandoffRecord | undefined>;
+  materializeHandoff(intent: PendingHandoffIntent): Promise<void>;
+  consumeHandoff(link: HandoffRecord, now: number): Promise<HandoffRecord | undefined>;
   saveWebhook(event: WebhookEvent): Promise<void>;
   getWebhook(id: string): Promise<WebhookEvent | undefined>;
   listWebhooks(): Promise<readonly WebhookEvent[]>;

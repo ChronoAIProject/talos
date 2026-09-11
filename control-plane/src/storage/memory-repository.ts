@@ -1,4 +1,4 @@
-import type { ActionDispatchBinding, HandoffLink, Machine, MachineLeaseReservation, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
+import type { ActionDispatchBinding, HandoffRecord, Machine, MachineLeaseReservation, PendingHandoffIntent, PendingInputIntent, PendingInputRecord, PendingSessionAction, Pool, Profile, SessionActionResult, Task, TaskActiveClaimGuard, TaskClaimGuard, TaskInput, TaskRecoveryGuard, WebhookEvent } from '../domain/types.js';
 import type { TestingMachineReservationRecord, TestingRunRecord } from '../domain/testing-types.js';
 import type { Repository, SessionActionDispatchGuard, SessionActionResultGuard, TaskMaintenanceCursor, TestingAttemptDispatchGuard, TestingAttemptMutationGuard } from './repository.js';
 
@@ -38,12 +38,38 @@ const samePendingInput = (record: PendingInputRecord, intent: PendingInputIntent
   record.input.kind === intent.input.kind &&
   record.input.value === intent.input.value;
 
+const sameHandoff = (record: HandoffRecord, intent: Omit<PendingHandoffIntent, 'consumed'>): boolean =>
+  record.schemaVersion === intent.schemaVersion &&
+  record.operationId === intent.operationId &&
+  record.id === intent.id &&
+  record.taskId === intent.taskId &&
+  record.userId === intent.userId &&
+  record.claimId === intent.claimId &&
+  record.claimGeneration === intent.claimGeneration &&
+  record.expiresInSeconds === intent.expiresInSeconds &&
+  record.url === intent.url &&
+  record.expiresAt === intent.expiresAt;
+
+const handoffRecord = (intent: PendingHandoffIntent): HandoffRecord => ({
+  schemaVersion: intent.schemaVersion,
+  operationId: intent.operationId,
+  id: intent.id,
+  taskId: intent.taskId,
+  userId: intent.userId,
+  claimId: intent.claimId,
+  claimGeneration: intent.claimGeneration,
+  expiresInSeconds: intent.expiresInSeconds,
+  url: intent.url,
+  expiresAt: intent.expiresAt,
+  used: false
+});
+
 export class MemoryRepository implements Repository {
   private readonly tasks = new Map<string, Task>();
   private readonly pools = new Map<string, Pool>();
   private readonly machines = new Map<string, Machine>();
   private readonly profiles = new Map<string, Profile>();
-  private readonly handoffs = new Map<string, HandoffLink>();
+  private readonly handoffs = new Map<string, HandoffRecord>();
   private readonly webhooks = new Map<string, WebhookEvent>();
   private readonly pendingInputs = new Map<string, PendingInputRecord>();
   private readonly pendingActions = new Map<string, PendingSessionAction>();
@@ -390,12 +416,43 @@ export class MemoryRepository implements Repository {
     return [...this.profiles.values()].filter((profile) => profile.userId === userId);
   }
 
-  public async saveHandoff(link: HandoffLink): Promise<void> {
-    this.handoffs.set(link.id, link);
+  public async getHandoff(id: string): Promise<HandoffRecord | undefined> {
+    return this.handoffs.get(id);
   }
 
-  public async getHandoff(id: string): Promise<HandoffLink | undefined> {
-    return this.handoffs.get(id);
+  public async materializeHandoff(intent: PendingHandoffIntent): Promise<void> {
+    const existing = [...this.handoffs.values()].find((handoff) => handoff.operationId === intent.operationId)
+      ?? this.handoffs.get(intent.id);
+    if (existing === undefined) {
+      this.handoffs.set(intent.id, handoffRecord(intent));
+      return;
+    }
+    if (!sameHandoff(existing, intent)) throw new Error('handoff operation integrity failure');
+  }
+
+  public async consumeHandoff(link: HandoffRecord, now: number): Promise<HandoffRecord | undefined> {
+    const existing = this.handoffs.get(link.id);
+    if (existing === undefined || existing.used || Date.parse(existing.expiresAt) <= now || !sameHandoff(existing, link)) return undefined;
+    const task = this.tasks.get(existing.taskId);
+    const intent = task?.pendingHandoffIntent;
+    if (
+      task === undefined ||
+      intent === undefined ||
+      task.status !== 'handoff' ||
+      task.userId !== existing.userId ||
+      task.claimId !== existing.claimId ||
+      task.claimGeneration !== existing.claimGeneration ||
+      intent.consumed ||
+      !sameHandoff(existing, intent)
+    ) return undefined;
+    this.tasks.set(task.id, {
+      ...task,
+      taskVersion: (task.taskVersion ?? 0) + 1,
+      pendingHandoffIntent: { ...intent, consumed: true }
+    });
+    const consumed = { ...existing, used: true };
+    this.handoffs.set(existing.id, consumed);
+    return consumed;
   }
 
   public async saveWebhook(event: WebhookEvent): Promise<void> {
