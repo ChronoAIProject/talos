@@ -62,6 +62,8 @@ export interface MongoRepositoryOptions {
   clientOptions?: MongoClientOptions;
 }
 
+type PendingInputDocument = PendingInputRecord & { _id: string };
+
 export class MongoRepository implements Repository {
   private readonly client: MongoClient;
   private readonly database: Db;
@@ -71,7 +73,7 @@ export class MongoRepository implements Repository {
   private readonly profiles: Collection<Document>;
   private readonly handoffs: Collection<Document>;
   private readonly webhooks: Collection<Document>;
-  private readonly pendingInputs: Collection<Document>;
+  private readonly pendingInputs: Collection<PendingInputDocument>;
   private readonly pendingActions: Collection<Document>;
   private readonly actionResults: Collection<Document>;
   private readonly testingRuns: Collection<Document>;
@@ -559,7 +561,7 @@ export class MongoRepository implements Repository {
       { $setOnInsert: { ...intent, consumed: false } },
       { upsert: true, returnDocument: 'after' }
     );
-    if (document === null || !samePendingInput(document as PendingInputRecord, intent)) {
+    if (document === null || !samePendingInput(document, intent)) {
       throw new Error('pending input operation integrity failure');
     }
   }
